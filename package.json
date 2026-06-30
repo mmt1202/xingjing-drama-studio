@@ -1,0 +1,10 @@
+{
+  "name": "xingjing-drama-studio-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "High-fidelity product prototype for Xingjing Drama Studio.",
+  "scripts": {
+    "dev": "python3 -m http.server 4173",
+    "check": "python3 scripts/check_prototype.py"
+  }
+}
