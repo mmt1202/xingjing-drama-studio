@@ -12,6 +12,8 @@ const context = {
     "admin.operations.view", "admin.operations.manage",
     "admin.finance.view", "admin.finance.manage",
     "admin.business.view", "admin.business.manage",
+    "admin.compliance.view", "admin.compliance.manage",
+    "admin.support.view", "admin.support.manage",
   ],
   dataScope: "assigned" as const,
 };
@@ -70,7 +72,7 @@ describe("管理后台页面闭环", () => {
     render(<AdminPlatform routeId="AD-018" api={actionApi} />);
     await screen.findByText("高风险视频");
 
-    fireEvent.click(screen.getByRole("button", { name: "执行审批" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "执行审批" }).at(-1)!);
     expect(screen.getByText("正在提交审批…")).toBeInTheDocument();
     rejectAction?.(Object.assign(new Error("conflict"), { status: 409, code: "VERSION_CONFLICT" }));
     expect(await screen.findByText("数据已被其他管理员更新")).toBeInTheDocument();

@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -458,6 +458,7 @@ class ProductionComplianceRuntime:
             source="xingjing_compliance_http",
             occurred_at=datetime.now(UTC),
         )
+        await self._assert_content_not_blocked(context, formal_request.project_version)
         await self._synchronize_billing_settlement(context, formal_request.project_version)
         evidence = await store.load_export_evidence(formal_request, audit)
         decision = await ComplianceRuntime(authority_store=store).authorize_export(formal_request, audit)
@@ -561,6 +562,34 @@ class ProductionComplianceRuntime:
             raise ComplianceRuntimeUnavailable("COMPLIANCE_PROJECT_SCOPE_UNAVAILABLE") from error
         if project_id is None:
             raise ComplianceProjectScopeDenied("PROJECT_SCOPE_DENIED")
+
+    async def _assert_content_not_blocked(self, context: ComplianceRequestContext, version_id: str) -> None:
+        """Make AD-011 governance an export-side server gate, not an admin-only label."""
+        try:
+            async with self._session_factory() as session:
+                blocked = await session.scalar(text("""
+                    SELECT EXISTS(
+                      SELECT 1
+                        FROM xingjing_admin_business_governance governance
+                        JOIN xingjing_editing_final_video_versions video
+                          ON governance.resource='content'
+                         AND governance.tenant_id=video.tenant_id
+                         AND governance.workspace_id=video.workspace_id
+                         AND governance.object_id=(video.final_video_id || ':' || video.version_id)
+                       WHERE governance.status='blocked'
+                         AND video.tenant_id=:tenant_id AND video.workspace_id=:workspace_id
+                         AND video.project_id=:project_id AND video.version_id=:version_id
+                    )
+                """), {
+                    "tenant_id": context.trusted.tenant_id,
+                    "workspace_id": context.trusted.workspace_id,
+                    "project_id": context.project_id,
+                    "version_id": version_id,
+                })
+        except SQLAlchemyError as error:
+            raise ComplianceRuntimeUnavailable("CONTENT_GOVERNANCE_GATE_UNAVAILABLE") from error
+        if blocked:
+            raise ValueError("FORMAL_EXPORT_BLOCKED:content_governance_blocked")
 
 
 def create_production_compliance_runtime(

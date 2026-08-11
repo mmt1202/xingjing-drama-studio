@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,8 +17,11 @@ from server.xingjing_admin_business import (
     StatusChangeCommand,
     VersionConflict,
 )
+from server.xingjing_admin_business.runtime import _resolve_data_scope
+from server.xingjing_identity_context import TrustedWorkspaceContext
 
 NOW = datetime(2026, 7, 15, tzinfo=UTC)
+pytestmark = pytest.mark.unit
 
 
 def obj(identifier: str, tenant_id: str, *, email: str = "owner@example.com") -> BusinessObject:
@@ -191,3 +195,34 @@ def test_dashboard_aggregates_visible_records_instead_of_static_values() -> None
 
     assert (dashboard.total_users, dashboard.active_projects, dashboard.running_tasks) == (1, 1, 1)
     assert dashboard.content_by_status == {"blocked": 1}
+
+
+def test_runtime_cross_scope_requires_live_actor_bound_approval() -> None:
+    trusted = TrustedWorkspaceContext("tenant-a", "workspace-a", "actor-a", "request-a",
+                                      frozenset({VIEW_PERMISSION}), "admin")
+    approval = SimpleNamespace(
+        status="approved", action="admin.business.cross_scope", tenant_id="tenant-a",
+        workspace_id="workspace-a", requested_by="actor-a", target_type="workspace",
+        target_id="workspace-b", request_payload={
+            "targetTenantId": "tenant-b", "expiresAt": "2099-07-16T00:00:00+00:00",
+        },
+    )
+
+    class Session:
+        def __init__(self) -> None:
+            self.audit: list[object] = []
+
+        def get(self, _model: object, key: str) -> object | None:
+            return approval if key == "approval-1" else None
+
+        def add(self, value: object) -> None:
+            self.audit.append(value)
+
+    session = Session()
+    resolved = _resolve_data_scope(
+        session, trusted, target_tenant_id="tenant-b", target_workspace_id="workspace-b",
+        approval_id="approval-1", access_reason="support investigation",
+    )
+
+    assert resolved == ("tenant-b", "workspace-b")
+    assert len(session.audit) == 1
