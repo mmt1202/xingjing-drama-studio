@@ -41,12 +41,13 @@ export interface AdminAction {
   reason?: string;
   payload?: Record<string, unknown>;
 }
-export interface AdminActionResult { requestId: string; status: "processing" | "succeeded" | "failed"; objectId?: string; oneTimeSecret?: string; oneTimeSecretKind?: "api_key" | "webhook_signing_secret" }
+export interface AdminActionResult { requestId: string; status: "processing" | "succeeded" | "failed"; objectId?: string; object?: Record<string, unknown>; oneTimeSecret?: string; oneTimeSecretKind?: "api_key" | "webhook_signing_secret" }
 
 export interface AdminApi {
   getContext(): Promise<AdminContext>;
   list(domain: AdminDomain, query: { page: number; pageSize: number; resource?: string; projectId?: string; search?: string; status?: string; targetTenantId?: string; targetWorkspaceId?: string; approvalId?: string; accessReason?: string }): Promise<PageResult<AdminRecord>>;
   act(domain: AdminDomain, action: AdminAction, options?: { retryNetworkOnce?: boolean }): Promise<AdminActionResult>;
+  download?(path: string): Promise<Blob>;
 }
 
 export interface AdminRouteDefinition {

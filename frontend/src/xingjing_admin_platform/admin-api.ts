@@ -56,5 +56,10 @@ export function createAdminApiClient(options: ClientOptions): AdminApi {
         throw error;
       }
     },
+    async download(path) {
+      const response = await fetcher(path, { method: "GET", credentials: "include", headers: headers() });
+      if (!response.ok) await parse<never>(response);
+      return response.blob();
+    },
   };
 }

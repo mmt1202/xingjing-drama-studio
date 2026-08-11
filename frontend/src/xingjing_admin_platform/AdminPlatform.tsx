@@ -51,6 +51,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
   const [accessReason, setAccessReason] = useState("");
   const [appliedScope, setAppliedScope] = useState<{ targetTenantId?: string; targetWorkspaceId?: string; approvalId?: string; accessReason?: string }>({});
   const [approvalNotice, setApprovalNotice] = useState("");
+  const [downloadUrl, setDownloadUrl] = useState("");
 
   const load = useCallback(async () => {
     if (!route) return;
@@ -85,7 +86,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
   const runAction = async (item: AdminRecord) => {
     setActionState("processing");
     try {
-      await api.act(route.domain, {
+      const result = await api.act(route.domain, {
         action: route.primaryAction,
         objectId: item.id,
         version: item.version,
@@ -93,6 +94,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
         reason: actionReason.trim() || undefined,
         payload: Object.keys(appliedScope).length ? appliedScope : undefined,
       });
+      setDownloadUrl(typeof result.object?.downloadUrl === "string" ? result.object.downloadUrl : "");
       setActionState("success"); await load();
     } catch (error) { setActionState(statusOf(error) === 409 ? "conflict" : "failed"); }
   };
@@ -102,7 +104,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
     try {
       const parsed = JSON.parse(draftPayload) as unknown;
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("payload");
-      await api.act(route.domain, {
+      const result = await api.act(route.domain, {
         action: route.primaryAction,
         objectId: draftObjectId.trim(),
         version: draftVersion,
@@ -110,6 +112,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
         reason: draftReason.trim() || undefined,
         payload: parsed as Record<string, unknown>,
       });
+      setDownloadUrl(typeof result.object?.downloadUrl === "string" ? result.object.downloadUrl : "");
       setActionState("success");
       await load();
     } catch (error) {
@@ -126,6 +129,18 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
       });
       setApprovalNotice(result.objectId ? `审批单 ${result.objectId} 已创建，请由两名不同管理员审批。` : "跨域审批已创建。");
     } catch { setApprovalNotice("跨域审批创建失败，未扩大数据范围。"); }
+  };
+  const downloadExport = async () => {
+    if (!downloadUrl || !api.download) return;
+    try {
+      const blob = await api.download(downloadUrl);
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = downloadUrl.split("/").at(-1) ? `${downloadUrl.split("/").at(-1)}.csv` : "finance-export.csv";
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch { setActionState("failed"); }
   };
 
   return <main className="xj-admin-shell">
@@ -156,6 +171,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
       {actionState === "failed" && "操作未完成，服务端未确认写入。请重新读取后再试。"}
       {actionState === "conflict" && <><strong>数据已被其他管理员更新</strong><button onClick={() => { setActionState("idle"); void load(); }}>读取最新版本</button></>}
     </section>}
+    {downloadUrl && <section className="xj-admin-notice"><strong>财务导出已生成并持久化</strong><button onClick={() => void downloadExport()}>下载 CSV</button></section>}
     {route.resource === "dashboard" && visibleItems.length ? <section className="xj-admin-metrics" aria-label="实时运营指标">{visibleItems.map((item) => <article key={item.id}><p>{item.name}</p><strong>{metricValue(item)}</strong><span>{item.status} · {item.updatedAt}</span></article>)}</section> : !visibleItems.length ? <section className="xj-admin-empty"><h2>{items?.length ? "没有符合筛选条件的对象" : `当前数据范围内没有${route.emptyLabel}`}</h2><p>{items?.length ? "清除搜索词后可恢复完整列表。" : "可以调整服务端筛选条件或稍后重新读取，不展示演示数据。"}</p></section> :
       <section className="xj-admin-table-wrap"><table><thead><tr><th>对象</th><th>状态</th><th>业务明细</th><th>敏感信息</th><th>版本</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => <tr key={item.id}>
         <td><strong>{item.name}</strong><small>{item.id}</small></td><td><span className={`xj-admin-status is-${item.status}`}>{item.status}</span></td>

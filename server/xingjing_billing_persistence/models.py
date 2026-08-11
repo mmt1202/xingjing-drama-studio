@@ -49,7 +49,9 @@ class InvoiceRequestRow(BillingPersistenceBase):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(128))
     request_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

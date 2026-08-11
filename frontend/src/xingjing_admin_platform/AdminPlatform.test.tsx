@@ -79,4 +79,29 @@ describe("管理后台页面闭环", () => {
     fireEvent.click(screen.getByRole("button", { name: "读取最新版本" }));
     await waitFor(() => expect(actionApi.list).toHaveBeenCalledTimes(2));
   });
+
+  it("财务导出成功后只从服务端持久化地址下载", async () => {
+    const download = vi.fn().mockResolvedValue(new Blob(["id,status\n1,paid\n"], { type: "text/csv" }));
+    const exportApi = api({
+      act: vi.fn().mockResolvedValue({
+        requestId: "req-export", status: "succeeded",
+        object: { downloadUrl: "/api/v1/admin/finance/exports/export-1" },
+      }),
+      download,
+    });
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:export-1");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    render(<AdminPlatform routeId="AD-035" api={exportApi} />);
+    await screen.findByText("高风险视频");
+
+    fireEvent.change(screen.getByLabelText("业务对象 ID"), { target: { value: "revenue-2026-08" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "导出收入" })[0]!);
+    fireEvent.click(await screen.findByRole("button", { name: "下载 CSV" }));
+
+    await waitFor(() => expect(download).toHaveBeenCalledWith("/api/v1/admin/finance/exports/export-1"));
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:export-1");
+  });
 });

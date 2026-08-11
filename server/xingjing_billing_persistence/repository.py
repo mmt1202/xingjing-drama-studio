@@ -509,7 +509,9 @@ def _invoice(row: InvoiceRequestRow) -> dict[str, object]:
         "currency": row.currency,
         "status": row.status,
         "requested_by": row.requested_by,
+        "approved_by": row.approved_by,
         "request_id": row.request_id,
+        "version": row.version,
         "occurred_at": _utc(row.created_at).isoformat(),
         "updated_at": _utc(row.updated_at).isoformat(),
     }
