@@ -153,12 +153,16 @@ class OpenPlatformCommandRow(Base):
     __tablename__ = "xingjing_open_platform_commands"
     __table_args__ = (
         UniqueConstraint(
+            "tenant_id",
+            "workspace_id",
             "actor_id",
             "idempotency_key",
             name="uq_xj_open_platform_command",
         ),
     )
     command_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(71), nullable=False)
@@ -254,6 +258,9 @@ def create_production_open_platform_runtime(
                 "xingjing_open_platform_audit",
             ):
                 session.execute(text(f"SELECT 1 FROM {table_name} LIMIT 1"))
+            session.execute(text(
+                "SELECT tenant_id,workspace_id FROM xingjing_open_platform_commands LIMIT 1"
+            ))
     except SQLAlchemyError as error:
         engine.dispose()
         raise RuntimeError("XINGJING_OPEN_PLATFORM_MIGRATION_REQUIRED") from error
@@ -359,6 +366,8 @@ def _router(
             with sessions.begin() as session:
                 previous = session.scalar(
                     select(OpenPlatformCommandRow).where(
+                        OpenPlatformCommandRow.tenant_id == trusted.tenant_id,
+                        OpenPlatformCommandRow.workspace_id == trusted.workspace_id,
                         OpenPlatformCommandRow.actor_id == trusted.actor_id,
                         OpenPlatformCommandRow.idempotency_key == idempotency_key,
                     )
@@ -371,6 +380,8 @@ def _router(
                 session.add(
                     OpenPlatformCommandRow(
                         command_id=str(uuid4()),
+                        tenant_id=trusted.tenant_id,
+                        workspace_id=trusted.workspace_id,
                         actor_id=trusted.actor_id,
                         idempotency_key=idempotency_key,
                         fingerprint=fingerprint,

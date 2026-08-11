@@ -5,8 +5,26 @@ import pytest
 from server.xingjing_open_platform.api_keys import ApiKeyService, SecretHasher
 from server.xingjing_open_platform.memory import InMemoryOpenPlatformStore
 from server.xingjing_open_platform.models import ApiKeyStatus, RequestContext
+from server.xingjing_open_platform.runtime import OpenPlatformCommandRow
 
 NOW = datetime(2026, 7, 15, tzinfo=UTC)
+
+
+def test_runtime_idempotency_is_scoped_to_tenant_and_workspace() -> None:
+    columns = OpenPlatformCommandRow.__table__.columns
+    assert "tenant_id" in columns
+    assert "workspace_id" in columns
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in OpenPlatformCommandRow.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert (
+        "tenant_id",
+        "workspace_id",
+        "actor_id",
+        "idempotency_key",
+    ) in unique_columns
 
 
 def test_created_secret_is_returned_once_and_only_a_digest_is_persisted() -> None:

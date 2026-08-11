@@ -12,6 +12,7 @@ export function OpenPlatform({ api }: { api: AdminApi }) {
   const [items, setItems] = useState<AdminRecord[]>([]);
   const [secret, setSecret] = useState<{ value: string; kind: "api_key" | "webhook_signing_secret" }>();
   const [error, setError] = useState<"denied"|"failed"|"conflict">();
+  const [loaded, setLoaded] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [selected, setSelected] = useState<AdminRecord>();
   const [name, setName] = useState("新 API 客户端");
@@ -26,13 +27,14 @@ export function OpenPlatform({ api }: { api: AdminApi }) {
       if (!next.permissions.includes("admin.api.view")) { setError("denied"); return; }
       setContext(next);
       setItems((await api.list("api", { page: 1, pageSize: 20, resource: "api-clients" })).items);
+      setLoaded(true);
       setError(undefined);
     } catch { setError("failed"); }
   }, [api]);
   // The request-backed state machine intentionally starts when its injected API changes.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
-  if (error === "denied" || error === "failed") return <section className="xj-admin-state"><h1>{error === "denied" ? "无权访问此后台能力" : "开放平台服务暂时不可用"}</h1><button onClick={() => void load()}>重新读取</button></section>;
+  if (error === "denied" || (error === "failed" && !loaded)) return <section className="xj-admin-state"><h1>{error === "denied" ? "无权访问此后台能力" : "开放平台服务暂时不可用"}</h1><button onClick={() => void load()}>重新读取</button></section>;
 
   const action = async (actionName: string, item?: AdminRecord, payload?: Record<string, unknown>) => {
     setProcessing(true);
@@ -80,6 +82,7 @@ export function OpenPlatform({ api }: { api: AdminApi }) {
     <header className="xj-admin-header"><div><p className="xj-admin-kicker">AD-002 · OPEN PLATFORM</p><h1>开放 API</h1><p>{context?.workspace.name ?? "正在验证独立后台会话…"}</p></div><button onClick={() => void load()}>重新读取</button></header>
     {secret && <section className="xj-admin-secret" role="dialog" aria-label={secret.kind === "api_key" ? "一次性 API Key" : "一次性 Webhook 签名密钥"}><p>{secret.kind === "api_key" ? "API Key" : "Webhook 签名密钥"}仅展示一次。关闭后无法再次查看。</p><code>{secret.value}</code><button onClick={() => setSecret(undefined)}>我已安全保存</button></section>}
     {error === "conflict" && <section className="xj-admin-notice is-conflict" role="status"><strong>数据已被其他管理员更新</strong><button onClick={() => { setError(undefined); void load(); }}>读取最新版本</button></section>}
+    {error === "failed" && loaded && <section className="xj-admin-notice is-failed" role="status"><strong>本次操作未完成，已保存数据不会丢失</strong><button onClick={() => { setError(undefined); void load(); }}>重新读取服务端状态</button></section>}
     {context?.permissions.includes("admin.api.manage") && <section className="xj-admin-toolbar" aria-label="开放平台配置">
       <input aria-label="客户端名称" value={name} onChange={(event) => setName(event.target.value)} />
       <input aria-label="权限范围" value={scopes} onChange={(event) => setScopes(event.target.value)} placeholder="projects:read, tasks:read" />

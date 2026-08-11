@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
 import { OpenPlatform } from "./OpenPlatform";
@@ -21,13 +21,37 @@ it("API Key 只在创建响应后展示一次，关闭后仅保留遮罩值，�
 
   render(<OpenPlatform api={api} />);
   expect(await screen.findByText("xj_live_••••7M2Q")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "创建 API Key" }));
+  fireEvent.click(screen.getByRole("button", { name: "创建客户端和 API Key" }));
   expect(await screen.findByText("xj_live_once_secret")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "我已安全保存" }));
   expect(screen.queryByText("xj_live_once_secret")).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "轮换制作系统" }));
-  fireEvent.click(screen.getByRole("button", { name: "撤销制作系统" }));
-  expect(api.act).toHaveBeenCalledWith("api", expect.objectContaining({ action: "rotate_key", objectId: "key-1", version: 1 }));
-  expect(api.act).toHaveBeenCalledWith("api", expect.objectContaining({ action: "revoke_key", objectId: "key-1", version: 1 }));
+  await waitFor(() => expect(api.act).toHaveBeenCalledWith("api", expect.objectContaining({ action: "rotate_key", objectId: "key-1", version: 1 })));
+  const revoke = screen.getByRole("button", { name: "撤销制作系统" });
+  await waitFor(() => expect(revoke).not.toBeDisabled());
+  fireEvent.click(revoke);
+  await waitFor(() => expect(api.act).toHaveBeenCalledWith("api", expect.objectContaining({ action: "revoke_key", objectId: "key-1", version: 1 })));
+});
+
+it("写操作失败时保留已加载客户端并提供重新读取", async () => {
+  const api: AdminApi = {
+    getContext: vi.fn().mockResolvedValue({
+      actor: { id: "staff-1", displayName: "技术运维", role: "api_admin" },
+      workspace: { id: "ws-1", name: "平台空间" },
+      permissions: ["admin.api.view", "admin.api.manage"], dataScope: "global",
+    }),
+    list: vi.fn().mockResolvedValue({
+      items: [{ id: "client-1", name: "制作系统", status: "active", version: 1, updatedAt: "2026-07-15", maskedSecret: "xj_live_••••", scopes: ["projects:read"], webhooks: [] }],
+      page: 1, pageSize: 20, total: 1,
+    }),
+    act: vi.fn().mockRejectedValue(new Error("network")),
+  };
+
+  render(<OpenPlatform api={api} />);
+  fireEvent.click(await screen.findByRole("button", { name: "轮换制作系统" }));
+
+  expect(await screen.findByText("本次操作未完成，已保存数据不会丢失")).toBeInTheDocument();
+  expect(screen.getByText("制作系统")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重新读取服务端状态" })).toBeInTheDocument();
 });
