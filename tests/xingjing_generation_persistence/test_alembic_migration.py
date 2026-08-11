@@ -14,6 +14,7 @@ M06_TABLES = {
     "xingjing_generation_audit",
 }
 M03_REVISION = "b5c3d1e7f209"
+M06_CORE_REVISION = "c6d4e2f8a310"
 
 
 def _config(database: Path, monkeypatch) -> Config:
@@ -23,12 +24,12 @@ def _config(database: Path, monkeypatch) -> Config:
     return config
 
 
-def test_m06_upgrade_from_current_head_creates_generation_schema_with_constraints(tmp_path: Path, monkeypatch) -> None:
+def test_m06_core_migration_creates_generation_schema_with_constraints(tmp_path: Path, monkeypatch) -> None:
     database = tmp_path / "m06-migration.db"
     config = _config(database, monkeypatch)
 
     command.upgrade(config, "a4b7c2d8e910")
-    command.upgrade(config, "head")
+    command.upgrade(config, M06_CORE_REVISION)
 
     engine = create_engine(f"sqlite:///{database.as_posix()}")
     inspector = inspect(engine)
@@ -56,7 +57,7 @@ def test_m06_downgrade_removes_only_generation_tables(tmp_path: Path, monkeypatc
     database = tmp_path / "m06-downgrade.db"
     config = _config(database, monkeypatch)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, M06_CORE_REVISION)
     engine = create_engine(f"sqlite:///{database.as_posix()}")
     assert M06_TABLES <= set(inspect(engine).get_table_names())
     command.downgrade(config, M03_REVISION)

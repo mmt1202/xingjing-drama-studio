@@ -641,8 +641,11 @@ class GenerationRuntime:
             try:
                 if self._model_route_resolver is None:
                     raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
+                tenant_id = await self._tenant_for_project(
+                    queued.request.workspace_id, queued.request.project_id
+                )
                 route = await self._model_route_resolver.resolve(
-                    tenant_id=queued.request.workspace_id,
+                    tenant_id=tenant_id,
                     workspace_id=queued.request.workspace_id,
                     capability=queued.request.capability,
                     media_type=queued.request.media_type.value,
@@ -1115,6 +1118,24 @@ class GenerationRuntime:
                 ) is not None
         except SQLAlchemyError as error:
             raise GenerationRuntimeUnavailable("GENERATION_RUNTIME_UNAVAILABLE") from error
+
+    async def _tenant_for_project(self, workspace_id: str, project_id: str) -> str:
+        if self._session_factory is None:
+            raise GenerationRuntimeUnavailable(self.unavailable_code or "GENERATION_RUNTIME_UNAVAILABLE")
+        try:
+            async with self._session_factory() as session:
+                tenant_id = await session.scalar(
+                    select(ProjectRow.tenant_id).where(
+                        ProjectRow.id == project_id,
+                        ProjectRow.workspace_id == workspace_id,
+                        ProjectRow.deleted_at.is_(None),
+                    )
+                )
+        except SQLAlchemyError as error:
+            raise GenerationRuntimeUnavailable("GENERATION_RUNTIME_UNAVAILABLE") from error
+        if tenant_id is None:
+            raise TaskScopeNotFound()
+        return str(tenant_id)
 
     async def _validate_input_assets(
         self, context: TrustedWorkspaceContext, project_id: str, request: GenerationRequest
