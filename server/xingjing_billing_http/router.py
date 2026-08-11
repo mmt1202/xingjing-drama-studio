@@ -119,11 +119,30 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
         page_size: int = Query(25, alias="pageSize", ge=1, le=100),
         page_token: str | None = Query(None, alias="pageToken"),
         query: str | None = None,
+        project_id: str | None = Query(None, alias="projectId"),
+        source: str | None = None,
+        model_id: str | None = Query(None, alias="modelId"),
+        actor_id: str | None = Query(None, alias="actorId"),
+        episode_id: str | None = Query(None, alias="episodeId"),
+        shot_id: str | None = Query(None, alias="shotId"),
     ) -> JSONResponse:
         context = await runtime.resolve(request, workspace_id, "billing.view")
         return _paged_success(
             context.request_id,
-            await runtime.costs(context, BillingPageQuery(page_size, page_token, query)),
+            await runtime.costs(
+                context,
+                BillingPageQuery(
+                    page_size,
+                    page_token,
+                    query,
+                    project_id,
+                    source,
+                    model_id,
+                    actor_id,
+                    episode_id,
+                    shot_id,
+                ),
+            ),
         )
 
     @router.get("/{workspace_id}/billing/audit-events")
@@ -155,9 +174,12 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
         workspace_id: str,
         dataset: str = Query("documents"),
         query: str | None = None,
+        project_id: str | None = Query(None, alias="projectId"),
     ) -> Response:
         context = await runtime.resolve(request, workspace_id, "billing.manage")
-        filename, content = await runtime.export_csv(context, dataset=dataset, query=query)
+        filename, content = await runtime.export_csv(
+            context, dataset=dataset, query=query, project_id=project_id
+        )
         return Response(
             content=content,
             media_type="text/csv; charset=utf-8",

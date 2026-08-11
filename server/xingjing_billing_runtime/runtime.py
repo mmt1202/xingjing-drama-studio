@@ -62,6 +62,12 @@ class BillingPageQuery:
     page_size: int = 25
     page_token: str | None = None
     query: str | None = None
+    project_id: str | None = None
+    source: str | None = None
+    model_id: str | None = None
+    actor_id: str | None = None
+    episode_id: str | None = None
+    shot_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.page_size < 1 or self.page_size > 100:
@@ -272,6 +278,19 @@ class BillingRuntime:
     async def costs(self, context: TrustedWorkspaceContext, page: BillingPageQuery) -> dict[str, object]:
         account, holds, _ = await self._billing_records(context)
         items = _cost_items(holds, str(account["currency"]))
+        filters = {
+            "project_id": page.project_id,
+            "source": page.source,
+            "model_id": page.model_id,
+            "actor_id": page.actor_id,
+            "episode_id": page.episode_id,
+            "shot_id": page.shot_id,
+        }
+        items = [
+            item
+            for item in items
+            if all(expected is None or item.get(key) == expected for key, expected in filters.items())
+        ]
         paged_items, next_token = _page_records(items, page)
         return {
             "items": paged_items,
@@ -325,6 +344,7 @@ class BillingRuntime:
         *,
         dataset: str,
         query: str | None,
+        project_id: str | None = None,
     ) -> tuple[str, bytes]:
         account, holds, journals = await self._billing_records(context)
         repository = self._finance_repository(context)
@@ -336,6 +356,8 @@ class BillingRuntime:
             records = journals
         elif dataset == "costs":
             records = _cost_items(holds, str(account["currency"]))
+            if project_id is not None:
+                records = [record for record in records if record.get("project_id") == project_id]
         else:
             raise ValueError("BILLING_EXPORT_DATASET_INVALID")
         BillingPageQuery(page_size=100, query=query)
