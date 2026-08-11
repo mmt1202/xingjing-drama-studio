@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, update
@@ -595,6 +596,27 @@ class SqlAlchemyRenderRepository(_TimelineReader):
             ).scalars()
             return tuple(RenderTask.model_validate(row.snapshot) for row in rows)
 
+    async def list_overdue_render_tasks(
+        self,
+        *,
+        at: datetime,
+        limit: int = 100,
+    ) -> tuple[RenderTask, ...]:
+        """Return active render tasks whose authoritative deadline has elapsed."""
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(RenderTaskRow)
+                    .where(
+                        RenderTaskRow.status.in_(("queued", "running", "retrying", "cancelling")),
+                        RenderTaskRow.deadline_at <= at,
+                    )
+                    .order_by(RenderTaskRow.deadline_at, RenderTaskRow.task_id)
+                    .limit(limit)
+                )
+            ).scalars()
+            return tuple(RenderTask.model_validate(row.snapshot) for row in rows)
+
     async def list_final_video_versions(
         self,
         *,
@@ -1040,6 +1062,7 @@ class SqlAlchemyRenderRepository(_TimelineReader):
             status=task.status.value,
             attempt=task.attempt,
             output_version_id=task.output_version_id,
+            deadline_at=task.deadline_at,
             snapshot=task.model_dump(mode="json"),
             created_at=task.created_at,
             updated_at=task.updated_at,

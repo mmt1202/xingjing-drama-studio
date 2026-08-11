@@ -475,6 +475,9 @@ async def lifespan(app: FastAPI):
     # 启动共享 httpx 客户端（用于版本检查等外部 API 调用）
     await startup_http_client()
 
+    if _editing_runtime is not None:
+        await _editing_runtime.start()
+
     # Initialize async services
     await assistant.assistant_service.startup(in_docker=is_docker, sandbox_enabled=sandbox_enabled)
     assistant.assistant_service.session_manager.start_patrol()

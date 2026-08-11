@@ -154,6 +154,7 @@ class RenderTaskRow(EditingPersistenceBase):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     output_version_id: Mapped[str | None] = mapped_column(String(128))
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -192,6 +193,12 @@ class RenderTaskRow(EditingPersistenceBase):
         ),
         CheckConstraint("task_revision >= 1", name="ck_xj_editing_render_task_revision"),
         CheckConstraint("attempt >= 0", name="ck_xj_editing_render_task_attempt"),
+        Index(
+            "ix_xj_editing_render_deadline",
+            "status",
+            "deadline_at",
+            "task_id",
+        ),
         CheckConstraint(
             "status IN ('queued', 'running', 'retrying', 'cancelling', 'cancelled', 'failed', 'succeeded')",
             name="ck_xj_editing_render_task_status",

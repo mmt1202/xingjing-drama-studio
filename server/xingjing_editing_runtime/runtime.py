@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from inspect import isawaitable
 from pathlib import Path
 from typing import cast
@@ -50,6 +52,7 @@ from server.xingjing_identity_context import (
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 TrustedContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
+logger = logging.getLogger(__name__)
 
 
 class EditingRuntimeConfigurationError(RuntimeError):
@@ -407,6 +410,7 @@ class EditingRuntime:
         object_storage_root: Path,
         callback_secret: str,
         billing_policy: EditingRenderBillingPolicy,
+        timeout_sweep_interval_seconds: int = 30,
     ) -> None:
         self._session_factory = session_factory
         self._context_resolver = context_resolver
@@ -418,6 +422,19 @@ class EditingRuntime:
         self._media_catalog = GeneratedAssetMediaVersionCatalog(session_factory)
         storage = LocalRenderObjectStorage(root=object_storage_root, media_probe=FFprobeRenderMediaProbe())
         renderer = HttpRendererGateway(base_url=renderer_url, service_token=renderer_token)
+        render_service = RenderService(
+            repository=render_repository,
+            renderer=renderer,
+            object_storage=storage,
+            audit=audit,
+            ids=ids,
+            clock=_UtcClock(),
+            billing_policy=billing_policy,
+        )
+        self._render_repository = render_repository
+        self._render_service = render_service
+        self._timeout_sweep_interval_seconds = timeout_sweep_interval_seconds
+        self._timeout_sweeper: asyncio.Task[None] | None = None
         self._dependencies = create_editing_dependencies(
             timeline_service=TimelineService(
                 repository=timeline_repository,
@@ -426,15 +443,7 @@ class EditingRuntime:
                 ids=ids,
                 clock=_UtcClock(),
             ),
-            render_service=RenderService(
-                repository=render_repository,
-                renderer=renderer,
-                object_storage=storage,
-                audit=audit,
-                ids=ids,
-                clock=_UtcClock(),
-                billing_policy=billing_policy,
-            ),
+            render_service=render_service,
             render_repository=render_repository,
             audit_reader=audit,
             access_context_resolver=self.access_context,
@@ -446,7 +455,43 @@ class EditingRuntime:
     def router(self) -> APIRouter:
         return create_editing_router(self._dependencies)
 
+    async def start(self) -> None:
+        if self._timeout_sweeper is None:
+            self._timeout_sweeper = asyncio.create_task(
+                self._run_timeout_sweeper(), name="xingjing-m08-timeout-sweeper"
+            )
+
+    async def expire_overdue_tasks(self) -> int:
+        tasks = await self._render_repository.list_overdue_render_tasks(at=datetime.now(UTC))
+        expired = 0
+        for task in tasks:
+            context = AccessContext(
+                tenant_id=task.tenant_id,
+                workspace_id=task.workspace_id,
+                actor_id="system:m08-timeout-sweeper",
+                request_id=f"timeout-sweep:{task.task_id}:{task.attempt}",
+                permissions=frozenset({Permission.FINAL_MANAGE}),
+            )
+            try:
+                result = await self._render_service.reconcile_timeout(context, task_id=task.task_id)
+                expired += int(result.status.value == "failed")
+            except (EditingError, SQLAlchemyError):
+                logger.exception("M08 render timeout reconciliation failed task_id=%s", task.task_id)
+        return expired
+
+    async def _run_timeout_sweeper(self) -> None:
+        try:
+            while True:
+                await self.expire_overdue_tasks()
+                await asyncio.sleep(self._timeout_sweep_interval_seconds)
+        except asyncio.CancelledError:
+            raise
+
     async def close(self) -> None:
+        if self._timeout_sweeper is not None:
+            self._timeout_sweeper.cancel()
+            await asyncio.gather(self._timeout_sweeper, return_exceptions=True)
+            self._timeout_sweeper = None
         await self._engine.dispose()
 
     async def _trusted_context(self, request: Request) -> TrustedWorkspaceContext:
@@ -534,6 +579,7 @@ def create_production_editing_runtime(
     billing_currency: str | None = None,
     billing_pricing_version: str | None = None,
     billing_minor_per_megapixel_second: int | None = None,
+    timeout_sweep_interval_seconds: int | None = None,
 ) -> EditingRuntime:
     """Build M08 exclusively from real database, renderer, storage, and identity dependencies."""
 
@@ -555,6 +601,16 @@ def create_production_editing_runtime(
         callback_secret or os.environ.get("XINGJING_EDITING_CALLBACK_SECRET"),
         "XINGJING_EDITING_CALLBACK_SECRET_REQUIRED",
     )
+    if len(configured_callback_secret) < 32:
+        raise EditingRuntimeConfigurationError("XINGJING_EDITING_CALLBACK_SECRET_MINIMUM_32_REQUIRED")
+    configured_sweep_interval = timeout_sweep_interval_seconds
+    if configured_sweep_interval is None:
+        try:
+            configured_sweep_interval = int(os.environ.get("XINGJING_EDITING_TIMEOUT_SWEEP_SECONDS", "30"))
+        except ValueError as error:
+            raise EditingRuntimeConfigurationError("XINGJING_EDITING_TIMEOUT_SWEEP_SECONDS_INVALID") from error
+    if not 5 <= configured_sweep_interval <= 3600:
+        raise EditingRuntimeConfigurationError("XINGJING_EDITING_TIMEOUT_SWEEP_SECONDS_INVALID")
     configured_currency = _required(
         billing_currency or os.environ.get("XINGJING_EDITING_BILLING_CURRENCY"),
         "XINGJING_EDITING_BILLING_CURRENCY_REQUIRED",
@@ -598,6 +654,7 @@ def create_production_editing_runtime(
             pricing_version=configured_pricing_version,
             minor_per_megapixel_second=raw_rate,
         ),
+        timeout_sweep_interval_seconds=configured_sweep_interval,
     )
 
 
