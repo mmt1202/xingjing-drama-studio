@@ -30,9 +30,9 @@ export function createMarketplaceApi({ accessToken, baseUrl = "/api/v1", fetcher
     withdrawTemplate: (template: TemplateRecord, reason: string) => write(`/templates/${encodeURIComponent(template.id)}/withdraw`, { reason }, "POST", template.revision),
     market: (query = "", cursor?: string) => request<Page<MarketItem>>(`/market/items?search=${encodeURIComponent(query)}&page_size=24${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
     marketItem: (id: string) => request<MarketItem>(`/market/items/${encodeURIComponent(id)}`),
-    createFork: (item: MarketItem, projectName: string) => write<{ resource_type: string; resource_id: string }>("/forks", {
+    createFork: (item: MarketItem, projectName: string, options: { commercialUse: boolean; scopes: string[] }) => write<{ resource_type: string; resource_id: string }>("/forks", {
       market_item_id: item.id, expected_market_revision: item.revision, expected_source_version_id: item.source_version_id,
-      project_name: projectName, intended_commercial_use: false, requested_inheritable_scopes: item.rights.inheritable_scopes,
+      project_name: projectName, intended_commercial_use: options.commercialUse, requested_inheritable_scopes: options.scopes,
     }),
     listForks: async () => (await request<{ items: ForkRecord[] }>("/forks")).items,
     lineage: (id: string) => request<ForkRecord["lineage"]>(`/forks/${encodeURIComponent(id)}/lineage`),

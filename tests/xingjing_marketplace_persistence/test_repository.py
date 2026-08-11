@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateTable
 
+from server.xingjing_generation_persistence.repository import GenerationBillingAccountRow
 from server.xingjing_marketplace import (
     ADMIN_BUSINESS_MANAGE,
     ADMIN_BUSINESS_VIEW,
@@ -42,6 +43,7 @@ from server.xingjing_marketplace import (
     WithdrawTemplate,
 )
 from server.xingjing_marketplace_persistence import Base, SqlAlchemyMarketplaceRepository
+from server.xingjing_platform_persistence.persistence import ProjectRow
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 
@@ -53,6 +55,16 @@ def database(tmp_path) -> Iterator[DatabaseHarness]:
     async def create_schema() -> None:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(GenerationBillingAccountRow.metadata.create_all)
+            await connection.run_sync(ProjectRow.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions.begin() as session:
+            session.add_all([
+                GenerationBillingAccountRow(workspace_id="workspace-b", currency="CNY", available_minor=100_000,
+                    held_minor=0, spent_minor=0, version=1, updated_at=NOW),
+                GenerationBillingAccountRow(workspace_id="workspace-c", currency="CNY", available_minor=100_000,
+                    held_minor=0, spent_minor=0, version=1, updated_at=NOW),
+            ])
 
     asyncio.run(create_schema())
     repository = SqlAlchemyMarketplaceRepository(async_sessionmaker(engine, expire_on_commit=False))
@@ -73,7 +85,7 @@ class DatabaseHarness:
 
 
 def context(actor_id: str, workspace_id: str, *permissions: str) -> RequestContext:
-    return RequestContext(actor_id, workspace_id, frozenset(permissions), f"request-{actor_id}")
+    return RequestContext(actor_id, workspace_id, frozenset(permissions), f"request-{actor_id}", "tenant-test")
 
 
 def publish_template(

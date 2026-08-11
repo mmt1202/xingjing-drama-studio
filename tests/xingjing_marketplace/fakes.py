@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TypeVar
 
 from server.xingjing_marketplace import AuditEvent, MarketplaceTransaction, Template, VersionConflict
@@ -31,6 +32,7 @@ class _State:
     fork_projects: dict[tuple[str, str], ForkProjectSnapshot] = field(default_factory=dict)
     idempotency: dict[IdempotencyScope, IdempotencyRecord] = field(default_factory=dict)
     audits: list[AuditEvent] = field(default_factory=list)
+    purchases: set[tuple[str, str]] = field(default_factory=set)
 
     def clone(self) -> _State:
         return _State(
@@ -40,6 +42,7 @@ class _State:
             dict(self.fork_projects),
             dict(self.idempotency),
             list(self.audits),
+            set(self.purchases),
         )
 
 
@@ -102,6 +105,22 @@ class _Transaction:
         if key in self.state.fork_projects:
             raise VersionConflict(project.id)
         self.state.fork_projects[key] = project
+
+    def settle_market_purchase(
+        self, *, buyer_workspace_id: str, tenant_id: str, item: MarketItem,
+        target_project_id: str, fork_id: str, request_id: str, occurred_at: datetime,
+    ) -> None:
+        del tenant_id, item, target_project_id, request_id, occurred_at
+        self._fail("settle_market_purchase")
+        self.state.purchases.add((buyer_workspace_id, fork_id))
+
+    def refund_market_purchase(
+        self, *, purchase_id: str, tenant_id: str, request_id: str,
+        reason: str, occurred_at: datetime,
+    ) -> None:
+        del tenant_id, request_id, reason, occurred_at
+        self._fail("refund_market_purchase")
+        self.state.purchases = {item for item in self.state.purchases if item[1] != purchase_id}
 
     def find_idempotency(self, scope: IdempotencyScope) -> IdempotencyRecord | None:
         return self.state.idempotency.get(scope)

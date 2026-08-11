@@ -39,7 +39,7 @@ NOW = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
 
 
 def context(actor: str, workspace: str, *permissions: str) -> RequestContext:
-    return RequestContext(actor, workspace, frozenset(permissions), f"request-{actor}")
+    return RequestContext(actor, workspace, frozenset(permissions), f"request-{actor}", "tenant-test")
 
 
 def published_template(
