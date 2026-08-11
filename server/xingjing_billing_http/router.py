@@ -197,6 +197,13 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
                 idempotency_key=_idempotency_key(request),
                 expires_at=datetime.now(UTC) + timedelta(seconds=expires_in),
             )
+        elif action_name == "refundPaymentOrder":
+            result = await runtime.refund_payment_order(
+                context,
+                order_id=_text(payload, "orderId"),
+                amount_minor=_positive_integer(payload, "amountMinor"),
+                idempotency_key=_idempotency_key(request),
+            )
         else:
             raise ValueError("BILLING_ACTION_UNSUPPORTED")
         return _success(context.request_id, {"object": result, "status": "succeeded"})
