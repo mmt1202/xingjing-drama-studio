@@ -30,7 +30,7 @@ from .models import (
     Settlement,
     SettlementStatus,
 )
-from .ports import AccountingPort, CommercialRepository, CommercialUnitOfWork
+from .ports import AccountingPort, CommercialRepository, CommercialUnitOfWork, DeliveryArtifactPort
 from .service import CommercialService
 
 __all__ = [
@@ -53,6 +53,7 @@ __all__ = [
     "CommercialUnitOfWork",
     "ContractVersion",
     "DeliveryStatus",
+    "DeliveryArtifactPort",
     "DisputeStatus",
     "IdempotencyConflict",
     "InvalidTransition",

@@ -216,7 +216,31 @@ export interface CommercialClientOptions {
   readonly fetcher?: typeof fetch;
 }
 
+export interface CommercialCreateOptions {
+  readonly idempotencyKey: string;
+  readonly requestId?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface PublishOrderInput {
+  readonly owner_workspace_id?: string | null;
+  readonly title: string;
+  readonly requirements: string;
+  readonly budget_minor: number;
+  readonly currency: string;
+  readonly milestones: readonly {
+    readonly title: string;
+    readonly amount_minor: number;
+    readonly acceptance_criteria: string;
+    readonly due_at?: string | null;
+  }[];
+}
+
 export interface CommercialClient {
+  publishOrder(
+    input: PublishOrderInput,
+    options: CommercialCreateOptions,
+  ): Promise<VersionedCommercialOrder>;
   listOrders(query?: CommercialOrderListQuery, signal?: AbortSignal): Promise<CommercialOrderPage>;
   getOrder(orderId: string, signal?: AbortSignal): Promise<VersionedCommercialOrder>;
   listMilestones(orderId: string, signal?: AbortSignal): Promise<CommercialMilestonePage>;

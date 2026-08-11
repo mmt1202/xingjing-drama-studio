@@ -22,9 +22,14 @@ from server.xingjing_commercial import (
     QuoteStatus,
     SettlementBlocked,
     SettlementStatus,
+    ValidationError,
     VersionConflict,
 )
-from tests.xingjing_commercial.support import FakeAccountingPort, InMemoryCommercialRepository
+from tests.xingjing_commercial.support import (
+    FakeAccountingPort,
+    FakeDeliveryArtifactVerifier,
+    InMemoryCommercialRepository,
+)
 
 NOW = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
 
@@ -32,7 +37,12 @@ NOW = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
 def make_contracted_order():
     repository = InMemoryCommercialRepository()
     accounting = FakeAccountingPort()
-    service = CommercialService(repository, accounting, now=lambda: NOW)
+    service = CommercialService(
+        repository,
+        accounting,
+        delivery_artifacts=FakeDeliveryArtifactVerifier(),
+        now=lambda: NOW,
+    )
     owner = Actor.member("owner", "workspace-owner", {"commercial.manage", "commercial.view"})
     contractor = Actor.member("contractor", "workspace-contractor", {"commercial.manage", "commercial.view"})
     order = service.publish_order(
@@ -108,6 +118,28 @@ def make_accepted_order():
         idempotency_key="accept",
     )
     return repository, accounting, service, owner, contractor, accepted
+
+
+def test_delivery_rejects_an_artifact_not_confirmed_by_the_authoritative_catalog() -> None:
+    _, _, service, _, contractor, contracted = make_contracted_order()
+    verifier = FakeDeliveryArtifactVerifier(valid=False)
+    service.delivery_artifacts = verifier
+
+    with pytest.raises(ValidationError, match="artifact"):
+        service.submit_delivery(
+            actor=contractor,
+            owner_workspace_id=contracted.owner_workspace_id,
+            order_id=contracted.id,
+            milestone_id=contracted.milestones[0].id,
+            artifact_version_id="forged-version",
+            artifact_digest="sha256:forged",
+            note=None,
+            expected_version=contracted.version,
+            request_id="delivery-controlled",
+            idempotency_key="delivery-controlled",
+        )
+
+    assert verifier.calls == [("workspace-contractor", "forged-version", "sha256:forged")]
 
 
 def test_publish_order_has_stable_ids_idempotency_serialization_and_audit() -> None:

@@ -12,7 +12,7 @@ from server.xingjing_commercial_persistence import (
     CommercialPersistenceBase,
     FailClosedAccountingPort,
 )
-from tests.xingjing_commercial.support import FakeAccountingPort
+from tests.xingjing_commercial.support import FakeAccountingPort, FakeDeliveryArtifactVerifier
 
 
 @pytest.fixture
@@ -30,19 +30,34 @@ def test_runtime_requires_all_authoritative_ports(session_factory: sessionmaker[
 
     with pytest.raises(CommercialRuntimeConfigurationError, match="session_factory"):
         create_commercial_runtime(
-            session_factory=None, accounting_port=FakeAccountingPort(), actor_provider=lambda: _owner()
+            session_factory=None,
+            accounting_port=FakeAccountingPort(),
+            delivery_artifact_port=FakeDeliveryArtifactVerifier(),
+            actor_provider=lambda: _owner(),
         )
 
     with pytest.raises(CommercialRuntimeConfigurationError, match="accounting_port"):
         create_commercial_runtime(
-            session_factory=session_factory, accounting_port=None, actor_provider=lambda: _owner()
+            session_factory=session_factory,
+            accounting_port=None,
+            delivery_artifact_port=FakeDeliveryArtifactVerifier(),
+            actor_provider=lambda: _owner(),
         )
 
     with pytest.raises(CommercialRuntimeConfigurationError, match="actor_provider"):
         create_commercial_runtime(
             session_factory=session_factory,
             accounting_port=FakeAccountingPort(),
+            delivery_artifact_port=FakeDeliveryArtifactVerifier(),
             actor_provider=None,
+        )
+
+    with pytest.raises(CommercialRuntimeConfigurationError, match="delivery_artifact_port"):
+        create_commercial_runtime(
+            session_factory=session_factory,
+            accounting_port=FakeAccountingPort(),
+            delivery_artifact_port=None,
+            actor_provider=lambda: _owner(),
         )
 
 
@@ -53,6 +68,7 @@ def test_runtime_composes_sql_persistence_and_explicit_ports(session_factory: se
     runtime = create_commercial_runtime(
         session_factory=session_factory,
         accounting_port=accounting,
+        delivery_artifact_port=FakeDeliveryArtifactVerifier(),
         actor_provider=lambda: _owner(),
     )
 
@@ -81,6 +97,7 @@ def test_runtime_keeps_unconfigured_accounting_fail_closed(session_factory: sess
     runtime = create_commercial_runtime(
         session_factory=session_factory,
         accounting_port=FailClosedAccountingPort(now=lambda: datetime(2026, 7, 16, tzinfo=UTC)),
+        delivery_artifact_port=FakeDeliveryArtifactVerifier(),
         actor_provider=lambda: _owner(),
     )
 

@@ -16,6 +16,7 @@ from server.xingjing_commercial import (
     CommercialService,
     IdempotencyConflict,
     InvalidTransition,
+    MilestoneInput,
     OrderNotFound,
     PermissionDenied,
     SettlementBlocked,
@@ -34,6 +35,7 @@ from .schemas import (
     ContractRequest,
     DeliveryRequest,
     OpenDisputeRequest,
+    PublishOrderRequest,
     QuoteRequest,
     ResolveDisputeRequest,
     ReturnDeliveryRequest,
@@ -48,6 +50,22 @@ class CommandContext:
     expected_version: int
     idempotency_key: str
     request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CreationContext:
+    idempotency_key: str
+    request_id: str
+
+
+def _creation_context(
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+) -> CreationContext:
+    if idempotency_key is None or not idempotency_key.strip():
+        raise _error(status.HTTP_400_BAD_REQUEST, "IDEMPOTENCY_KEY_REQUIRED")
+    normalized_request_id = request_id.strip() if request_id is not None else ""
+    return CreationContext(idempotency_key.strip(), normalized_request_id or str(uuid4()))
 
 
 def _error(status_code: int, code: str) -> HTTPException:
@@ -175,6 +193,31 @@ def _build_surface(prefix: str, dependencies: CommercialHttpDependencies) -> API
             "offset": offset,
             "limit": limit,
         }
+
+    @surface.post("")
+    def publish_order(
+        request: PublishOrderRequest,
+        command: CreationContext = Depends(_creation_context),
+        service: CommercialService = Depends(dependencies.service),
+        actor: Actor = Depends(dependencies.actor),
+    ) -> JSONResponse:
+        order = _domain_call(
+            lambda: service.publish_order(
+                actor=actor,
+                owner_workspace_id=request.owner_workspace_id,
+                title=request.title,
+                requirements=request.requirements,
+                budget_minor=request.budget_minor,
+                currency=request.currency,
+                milestones=tuple(
+                    MilestoneInput(item.title, item.amount_minor, item.acceptance_criteria, item.due_at)
+                    for item in request.milestones
+                ),
+                request_id=command.request_id,
+                idempotency_key=command.idempotency_key,
+            )
+        )
+        return _order_response(order)
 
     @surface.get("/{order_id}")
     def get_order(

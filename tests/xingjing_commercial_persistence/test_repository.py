@@ -27,7 +27,7 @@ from server.xingjing_commercial_persistence import (
     FailClosedAccountingPort,
     SqlAlchemyCommercialRepository,
 )
-from tests.xingjing_commercial.support import FakeAccountingPort
+from tests.xingjing_commercial.support import FakeAccountingPort, FakeDeliveryArtifactVerifier
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 pytestmark = pytest.mark.uses_db
@@ -235,7 +235,12 @@ def test_full_commercial_lifecycle_round_trips_all_status_and_evidence(tmp_path)
     factory = sessionmaker(engine, expire_on_commit=False)
     repository = SqlAlchemyCommercialRepository(factory)
     accounting = FakeAccountingPort()
-    service = CommercialService(repository, accounting, now=lambda: NOW)
+    service = CommercialService(
+        repository,
+        accounting,
+        delivery_artifacts=FakeDeliveryArtifactVerifier(),
+        now=lambda: NOW,
+    )
     owner = Actor.member("owner", "workspace-owner", {"commercial.manage", "commercial.view"})
     contractor = Actor.member("contractor", "workspace-contractor", {"commercial.manage", "commercial.view"})
 

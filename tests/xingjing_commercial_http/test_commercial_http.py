@@ -7,6 +7,40 @@ from server.xingjing_commercial import Actor
 from .support import NOW, command_headers, make_harness
 
 
+def test_admin_can_publish_a_real_order_through_the_http_surface() -> None:
+    admin = Actor.admin(
+        "commercial-admin",
+        {"admin.commercial.view", "admin.commercial.manage"},
+        {"workspace-owner"},
+    )
+    harness = make_harness(admin)
+
+    response = harness.client.post(
+        "/api/v1/admin/commercial-orders",
+        json={
+            "owner_workspace_id": "workspace-owner",
+            "title": "品牌短剧",
+            "requirements": "交付可验收的正式成片",
+            "budget_minor": 20_000,
+            "currency": "CNY",
+            "milestones": [
+                {
+                    "title": "成片交付",
+                    "amount_minor": 20_000,
+                    "acceptance_criteria": "客户书面确认",
+                    "due_at": (NOW + timedelta(days=7)).isoformat(),
+                }
+            ],
+        },
+        headers={"Idempotency-Key": "publish-http", "X-Request-ID": "publish-http"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["etag"] == '"1"'
+    assert response.json()["owner_workspace_id"] == "workspace-owner"
+    assert response.json()["milestones"][0]["acceptance_criteria"] == "客户书面确认"
+
+
 def test_list_detail_and_milestones_filter_tenant_scope_without_leaking_objects() -> None:
     owner = Actor.member("owner", "workspace-owner", {"commercial.manage", "commercial.view"})
     harness = make_harness(owner)

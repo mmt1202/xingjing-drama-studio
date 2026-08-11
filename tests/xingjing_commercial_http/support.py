@@ -13,7 +13,11 @@ from server.xingjing_commercial_http import (
     create_commercial_dependencies,
     create_commercial_router,
 )
-from tests.xingjing_commercial.support import FakeAccountingPort, InMemoryCommercialRepository
+from tests.xingjing_commercial.support import (
+    FakeAccountingPort,
+    FakeDeliveryArtifactVerifier,
+    InMemoryCommercialRepository,
+)
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 
@@ -134,7 +138,12 @@ class HttpHarness:
 def make_harness(actor: Actor) -> HttpHarness:
     repository = InMemoryCommercialRepository()
     accounting = FakeAccountingPort()
-    service = CommercialService(repository, accounting, now=lambda: NOW)
+    service = CommercialService(
+        repository,
+        accounting,
+        delivery_artifacts=FakeDeliveryArtifactVerifier(),
+        now=lambda: NOW,
+    )
     actors = MutableActorProvider(actor)
     index = InMemoryOrderIndex()
     dependencies = create_commercial_dependencies(

@@ -16,7 +16,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from server.xingjing_commercial import AccountingPort, Actor, CommercialService
+from server.xingjing_commercial import AccountingPort, Actor, CommercialService, DeliveryArtifactPort
 from server.xingjing_commercial_http import (
     CommercialOrderRef,
     create_commercial_dependencies,
@@ -26,6 +26,7 @@ from server.xingjing_commercial_persistence import (
     CommercialOrderRow,
     SqlAlchemyCommercialAccountingPort,
     SqlAlchemyCommercialRepository,
+    SqlAlchemyDeliveryArtifactPort,
 )
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
@@ -111,6 +112,7 @@ class CommercialRuntime:
 
     router: APIRouter
     accounting_port: AccountingPort
+    delivery_artifact_port: DeliveryArtifactPort
     actor: ActorProvider
     _service: CommercialService
     _order_index: SqlAlchemyCommercialOrderIndex
@@ -131,6 +133,7 @@ def create_commercial_runtime(
     *,
     session_factory: SessionFactory | None,
     accounting_port: AccountingPort | None,
+    delivery_artifact_port: DeliveryArtifactPort | None,
     actor_provider: ActorProvider | None,
     now: Callable[[], datetime] | None = None,
 ) -> CommercialRuntime:
@@ -142,9 +145,16 @@ def create_commercial_runtime(
         raise CommercialRuntimeConfigurationError("accounting_port must be configured")
     if actor_provider is None:
         raise CommercialRuntimeConfigurationError("actor_provider must be configured")
+    if delivery_artifact_port is None:
+        raise CommercialRuntimeConfigurationError("delivery_artifact_port must be configured")
 
     repository = SqlAlchemyCommercialRepository(session_factory)
-    service = CommercialService(repository, accounting_port, now=now)
+    service = CommercialService(
+        repository,
+        accounting_port,
+        delivery_artifacts=delivery_artifact_port,
+        now=now,
+    )
     order_index = SqlAlchemyCommercialOrderIndex(session_factory)
     dependencies = create_commercial_dependencies(
         service=lambda: service,
@@ -154,6 +164,7 @@ def create_commercial_runtime(
     return CommercialRuntime(
         router=create_commercial_router(dependencies),
         accounting_port=accounting_port,
+        delivery_artifact_port=delivery_artifact_port,
         actor=actor_provider,
         _service=service,
         _order_index=order_index,
@@ -167,9 +178,8 @@ def create_production_commercial_runtime(
 ) -> CommercialRuntime:
     """Compose M14 only with PostgreSQL and a trusted request-scoped identity.
 
-    Financial actions deliberately receive a fail-closed port until an external
-    accounting adapter is deployed. It returns a rejected receipt, so the domain
-    cannot persist a frozen, resumed, or paid settlement by accident.
+    Financial actions and deliverables are both checked against authoritative
+    PostgreSQL records inside the same commercial transaction.
     """
 
     url = (database_url or os.environ.get("XINGJING_COMMERCIAL_DATABASE_URL", "")).strip()
@@ -188,6 +198,7 @@ def create_production_commercial_runtime(
     runtime = create_commercial_runtime(
         session_factory=sessionmaker(engine, expire_on_commit=False),
         accounting_port=SqlAlchemyCommercialAccountingPort(),
+        delivery_artifact_port=SqlAlchemyDeliveryArtifactPort(),
         actor_provider=TrustedCommercialActorProvider(
             context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway())
         ),
@@ -195,6 +206,7 @@ def create_production_commercial_runtime(
     return CommercialRuntime(
         router=runtime.router,
         accounting_port=runtime.accounting_port,
+        delivery_artifact_port=runtime.delivery_artifact_port,
         actor=runtime.actor,
         _service=runtime.service(),
         _order_index=runtime.order_index(),

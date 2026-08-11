@@ -9,6 +9,7 @@ import type {
   CommercialClient,
   CommercialClientOptions,
   CommercialCommandOptions,
+  CommercialCreateOptions,
   CommercialOrderListQuery,
   OpenDisputeInput,
   RecordContractInput,
@@ -201,11 +202,30 @@ export function createCommercialClient(options: CommercialClientOptions): Commer
     return parseVersionedCommercialOrder(payload, response.headers.get("etag"));
   }
 
+  async function createOrder(
+    body: unknown,
+    createOptions: CommercialCreateOptions,
+  ): Promise<VersionedCommercialOrder> {
+    const headers = commonHeaders();
+    headers.set("Content-Type", "application/json");
+    headers.set("Idempotency-Key", requiredOption(createOptions.idempotencyKey, "idempotencyKey"));
+    if (createOptions.requestId?.trim()) headers.set("X-Request-ID", createOptions.requestId.trim());
+    const { response, payload } = await send("", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    }, createOptions.signal);
+    return parseVersionedCommercialOrder(payload, response.headers.get("etag"));
+  }
+
   function orderPath(orderId: string): string {
     return `/${encodePath(orderId, "orderId")}`;
   }
 
   return {
+    publishOrder(input, createOptions) {
+      return createOrder(input, createOptions);
+    },
     async listOrders(query: CommercialOrderListQuery = {}, signal?: AbortSignal) {
       const search = new URLSearchParams();
       if (query.ownerWorkspaceId?.trim()) search.set("owner_workspace_id", query.ownerWorkspaceId.trim());

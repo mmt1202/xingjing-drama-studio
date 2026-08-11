@@ -39,3 +39,11 @@ class AccountingPort(Protocol):
     def resume_settlement(self, request: AccountingRequest) -> AccountingReceipt: ...
 
     def pay_settlement(self, request: AccountingRequest) -> AccountingReceipt: ...
+
+
+class DeliveryArtifactPort(Protocol):
+    """Authoritative catalog boundary for immutable commercial deliverables."""
+
+    def verify_selected_artifact(
+        self, *, workspace_id: str, artifact_version_id: str, artifact_digest: str
+    ) -> bool: ...

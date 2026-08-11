@@ -56,6 +56,18 @@ class FakeAccountingPort:
         return receipt
 
 
+class FakeDeliveryArtifactVerifier:
+    def __init__(self, *, valid: bool = True) -> None:
+        self.valid = valid
+        self.calls: list[tuple[str, str, str]] = []
+
+    def verify_selected_artifact(
+        self, *, workspace_id: str, artifact_version_id: str, artifact_digest: str
+    ) -> bool:
+        self.calls.append((workspace_id, artifact_version_id, artifact_digest))
+        return self.valid
+
+
 class _MemoryUnitOfWork:
     def __init__(self, state: dict[str, object]) -> None:
         self.state = state

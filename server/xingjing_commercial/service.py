@@ -42,7 +42,7 @@ from .models import (
     Settlement,
     SettlementStatus,
 )
-from .ports import AccountingPort, CommercialRepository, CommercialUnitOfWork
+from .ports import AccountingPort, CommercialRepository, CommercialUnitOfWork, DeliveryArtifactPort
 
 
 class CommercialService:
@@ -51,11 +51,13 @@ class CommercialService:
         repository: CommercialRepository,
         accounting: AccountingPort,
         *,
+        delivery_artifacts: DeliveryArtifactPort | None = None,
         now: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.repository = repository
         self.accounting = accounting
+        self.delivery_artifacts = delivery_artifacts
         self.now = now or (lambda: datetime.now(UTC))
         self.id_factory = id_factory or new_uuid7
 
@@ -170,8 +172,16 @@ class CommercialService:
         milestones: Sequence[MilestoneInput],
         request_id: str,
         idempotency_key: str,
+        owner_workspace_id: str | None = None,
     ) -> CommercialOrder:
-        self._require_permission(actor, "commercial.manage")
+        target_workspace_id = (owner_workspace_id or actor.workspace_id).strip()
+        member_access = "commercial.manage" in actor.permissions and target_workspace_id == actor.workspace_id
+        admin_access = (
+            "admin.commercial.manage" in actor.permissions
+            and target_workspace_id in actor.data_scope_workspace_ids
+        )
+        if not (member_access or admin_access):
+            raise PermissionDenied()
         title = self._required_text(title, "title")
         requirements = self._required_text(requirements, "requirements")
         budget_minor = self._positive_minor(budget_minor, "budget_minor")
@@ -192,6 +202,7 @@ class CommercialService:
             raise ValidationError("milestone amounts must equal the order budget")
         payload: JsonObject = {
             "actor_id": actor.actor_id,
+            "owner_workspace_id": target_workspace_id,
             "title": title,
             "requirements": requirements,
             "budget_minor": budget_minor,
@@ -201,7 +212,7 @@ class CommercialService:
         fingerprint = self._fingerprint(payload)
         scope = "commercial.order.publish"
         with self.repository.atomic() as uow:
-            cached = uow.get_command(actor.workspace_id, scope, idempotency_key)
+            cached = uow.get_command(target_workspace_id, scope, idempotency_key)
             if cached is not None:
                 if cached.fingerprint != fingerprint:
                     raise IdempotencyConflict()
@@ -212,7 +223,7 @@ class CommercialService:
             timestamp = self.now()
             order = CommercialOrder(
                 id=self.id_factory(),
-                owner_workspace_id=actor.workspace_id,
+                owner_workspace_id=target_workspace_id,
                 title=title,
                 requirements=requirements,
                 budget_minor=budget_minor,
@@ -236,7 +247,7 @@ class CommercialService:
             uow.put_order(order, expected_version=None)
             uow.put_command(
                 CommandRecord(
-                    actor.workspace_id,
+                    target_workspace_id,
                     scope,
                     idempotency_key,
                     fingerprint,
@@ -585,6 +596,14 @@ class CommercialService:
             )
             if replay is not None:
                 return replay
+            if self.delivery_artifacts is None:
+                raise ValidationError("delivery artifact catalog is not configured")
+            if not self.delivery_artifacts.verify_selected_artifact(
+                workspace_id=actor.workspace_id,
+                artifact_version_id=artifact_version_id,
+                artifact_digest=artifact_digest,
+            ):
+                raise ValidationError("delivery artifact is unavailable, unselected, or has a mismatched digest")
             if order.status not in (OrderStatus.CONTRACTED, OrderStatus.IN_DELIVERY):
                 raise InvalidTransition("the order has no active delivery contract")
             if order.active_contract_version_id is None:
