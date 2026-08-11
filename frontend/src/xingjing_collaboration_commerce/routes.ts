@@ -51,6 +51,17 @@ const memberColumns: readonly CommerceColumnDefinition[] = [
   { key: "memberId", labelKey: "columns.dataScope" },
   { key: "active", labelKey: "columns.status", format: "status" },
 ];
+const memberPerformanceColumns: readonly CommerceColumnDefinition[] = [
+  { key: "email", labelKey: "columns.member" },
+  { key: "roleId", labelKey: "columns.role" },
+  { key: "taskCount", labelKey: "columns.task", format: "integer" },
+  { key: "succeededTaskCount", labelKey: "columns.completed", format: "integer" },
+  { key: "failedTaskCount", labelKey: "columns.failure", format: "integer" },
+  { key: "successRateMilli", labelKey: "columns.passRate", format: "integer" },
+  { key: "reworkRateMilli", labelKey: "columns.reworkRate", format: "integer" },
+  { key: "costAttributionStatus", labelKey: "columns.cost" },
+  { key: "reviewEfficiencyStatus", labelKey: "columns.reviewEfficiency" },
+];
 const invitationColumns: readonly CommerceColumnDefinition[] = [
   { key: "email", labelKey: "columns.member" },
   { key: "roleId", labelKey: "columns.role" },
@@ -190,7 +201,7 @@ const seeds: readonly RouteSeed[] = [
   { id: "TM-006", module: "M10", path: "/team/team-enterprise-auth", loadEndpoint: enterpriseEndpoint, responseKind: "object", requiredContext: ["workspaceId"], viewPermission: "workspace.enterprise.view", managePermission: "workspace.enterprise.manage", columns: enterpriseColumns, actions: [action("saveEnterpriseProfile", "workspace.enterprise.manage", enterpriseEndpoint, { method: "PUT", bodyKind: "entity", scope: "page", confirmation: "approval", fields: [field("legalName", "text"), field("invoiceTitle", "text")] })] },
   { id: "TM-007", module: "M10", path: "/team/team-enterprise", loadEndpoint: enterpriseEndpoint, responseKind: "object", requiredContext: ["workspaceId"], viewPermission: "workspace.enterprise.view", managePermission: "workspace.enterprise.manage", columns: enterpriseColumns, actions: [action("saveEnterpriseProfile", "workspace.enterprise.manage", enterpriseEndpoint, { method: "PUT", bodyKind: "entity", scope: "page", confirmation: "approval", fields: [field("legalName", "text"), field("invoiceTitle", "text"), field("dataRetentionDays", "number", true, 1)] })] },
   { id: "TM-008", module: "M10", path: "/team/team-invite-records", loadEndpoint: "/workspaces/{workspaceId}/invitations", responseKind: "list", requiredContext: ["workspaceId"], viewPermission: "workspace.member.view", managePermission: "workspace.member.manage", columns: invitationColumns, actions: [action("revokeInvitation", "workspace.member.manage", "/workspaces/{workspaceId}/invitations/{targetId}/revoke", { bodyKind: "entity", confirmation: "danger" })] },
-  { id: "TM-009", module: "M10", path: "/team/team-member-performance", loadEndpoint: "/workspaces/{workspaceId}/members", responseKind: "list", requiredContext: ["workspaceId"], viewPermission: "workspace.member.view", managePermission: "workspace.member.manage", columns: memberColumns },
+  { id: "TM-009", module: "M10", path: "/team/team-member-performance", loadEndpoint: "/workspaces/{workspaceId}/member-performance?days=30", responseKind: "list", requiredContext: ["workspaceId"], viewPermission: "workspace.member.view", managePermission: "workspace.member.manage", columns: memberPerformanceColumns },
   { id: "TM-010", module: "M10", path: "/team/team-members", loadEndpoint: "/workspaces/{workspaceId}/members", relatedEndpoints: ["/workspaces/{workspaceId}/roles", "/workspaces/{workspaceId}/overview"], responseKind: "list", requiredContext: ["workspaceId"], viewPermission: "workspace.member.view", managePermission: "workspace.member.manage", columns: memberColumns, actions: [action("inviteMember", "workspace.member.manage", "/workspaces/{workspaceId}/invitations", { bodyKind: "entity", scope: "page", fields: [field("email", "email"), field("roleId", "text"), field("expiresAt", "text")] })] },
   { id: "TM-011", module: "M10", path: "/team/team-operation-logs", loadEndpoint: "/workspaces/{workspaceId}/audit-events", responseKind: "list", requiredContext: ["workspaceId"], viewPermission: "workspace.audit.view", managePermission: "workspace.audit.manage", columns: auditColumns },
   { id: "TM-012", module: "M10", path: "/team/team-overview", loadEndpoint: "/workspaces/{workspaceId}/overview", relatedEndpoints: ["/workspaces/{workspaceId}/members", "/workspaces/{workspaceId}/roles"], responseKind: "object", requiredContext: ["workspaceId"], viewPermission: "workspace.view", managePermission: "workspace.manage", columns: overviewColumns },

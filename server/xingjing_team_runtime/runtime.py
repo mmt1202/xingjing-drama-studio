@@ -13,12 +13,12 @@ import inspect
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from fastapi import Request
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import case, create_engine, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
@@ -206,6 +206,18 @@ class TeamRuntime:
     async def overview(self, request: Request, *, context: TeamRequestContext | None = None) -> dict[str, object]:
         context = await self._request_context(request, "workspace.view", context)
         return await asyncio.to_thread(self._overview_sync, context)
+
+    async def member_performance(
+        self,
+        request: Request,
+        *,
+        days: int = 30,
+        context: TeamRequestContext | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        context = await self._request_context(request, "workspace.member.view", context)
+        if not 1 <= days <= 366:
+            raise ValueError("INVALID_PERFORMANCE_WINDOW")
+        return await asyncio.to_thread(self._member_performance_sync, context, days)
 
     async def project_members(
         self,
@@ -748,6 +760,75 @@ class TeamRuntime:
                 }
         except SQLAlchemyError as error:
             raise TeamRuntimeConfigurationError("TEAM_OVERVIEW_READ_UNAVAILABLE") from error
+
+    def _member_performance_sync(
+        self, context: TeamRequestContext, days: int
+    ) -> tuple[dict[str, object], ...]:
+        """Aggregate attributable workflow work without inventing unavailable cost/review facts."""
+        since = datetime.now(UTC) - timedelta(days=days)
+        terminal = ("succeeded", "completed", "failed", "cancelled", "timed_out")
+        successful = ("succeeded", "completed")
+        try:
+            with self._session_factory() as session:
+                members = session.scalars(
+                    select(MemberRow)
+                    .where(
+                        MemberRow.tenant_id == context.trusted.tenant_id,
+                        MemberRow.workspace_id == context.trusted.workspace_id,
+                    )
+                    .order_by(MemberRow.member_id)
+                ).all()
+                task_rows = session.execute(
+                    select(
+                        TaskRow.created_by,
+                        func.count(TaskRow.id),
+                        func.sum(case((TaskRow.status.in_(terminal), 1), else_=0)),
+                        func.sum(case((TaskRow.status.in_(successful), 1), else_=0)),
+                        func.sum(case((TaskRow.status == "failed", 1), else_=0)),
+                        func.sum(case((TaskRow.attempt_count > 1, 1), else_=0)),
+                        func.coalesce(func.sum(TaskRow.attempt_count), 0),
+                    )
+                    .where(
+                        TaskRow.tenant_id == context.trusted.tenant_id,
+                        TaskRow.workspace_id == context.trusted.workspace_id,
+                        TaskRow.created_at >= since,
+                    )
+                    .group_by(TaskRow.created_by)
+                ).all()
+                by_actor = {str(row[0]): row[1:] for row in task_rows}
+                result: list[dict[str, object]] = []
+                for member in members:
+                    total, terminal_count, success_count, failed_count, reworked_count, attempts = by_actor.get(
+                        member.member_id, (0, 0, 0, 0, 0, 0)
+                    )
+                    terminal_count = int(terminal_count or 0)
+                    result.append(
+                        {
+                            "id": member.member_id,
+                            "member_id": member.member_id,
+                            "email": member.email,
+                            "role_id": member.role_id,
+                            "active": member.active,
+                            "window_days": days,
+                            "task_count": int(total or 0),
+                            "terminal_task_count": terminal_count,
+                            "succeeded_task_count": int(success_count or 0),
+                            "failed_task_count": int(failed_count or 0),
+                            "reworked_task_count": int(reworked_count or 0),
+                            "attempt_count": int(attempts or 0),
+                            "success_rate_milli": (
+                                round(int(success_count or 0) * 1000 / terminal_count) if terminal_count else None
+                            ),
+                            "rework_rate_milli": (
+                                round(int(reworked_count or 0) * 1000 / int(total)) if int(total or 0) else None
+                            ),
+                            "cost_attribution_status": "not_attributable",
+                            "review_efficiency_status": "not_attributable",
+                        }
+                    )
+                return tuple(result)
+        except SQLAlchemyError as error:
+            raise TeamRuntimeConfigurationError("TEAM_MEMBER_PERFORMANCE_UNAVAILABLE") from error
 
     def _service(self, context: TeamRequestContext) -> TeamService:
         return TeamService(

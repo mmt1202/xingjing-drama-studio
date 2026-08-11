@@ -208,7 +208,7 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
   async function get<T>(endpoint: string, context: CommercePageContext, query: CommercePageQuery = {}, signal?: AbortSignal): Promise<ApiEnvelope<T>> {
     const search = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => { if (value !== undefined && value !== "") search.set(key, String(value)); });
-    const suffix = search.size ? `?${search.toString()}` : "";
+    const suffix = search.size ? `${endpoint.includes("?") ? "&" : "?"}${search.toString()}` : "";
     try {
       return await parse<T>(await fetcher(`${baseUrl}${resolveEndpoint(endpoint, context)}${suffix}`, {
         method: "GET",

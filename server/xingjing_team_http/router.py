@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, cast
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -148,6 +148,16 @@ def create_team_router(runtime: TeamRuntime) -> APIRouter:
         context = await _context_for_workspace(runtime, request, workspace_id, "workspace.view")
         result = await runtime.overview(request, context=context)
         return _success(context.trusted.request_id, result)
+
+    @router.get("/{workspace_id}/member-performance")
+    async def member_performance(
+        request: Request,
+        workspace_id: str,
+        days: int = Query(default=30, ge=1, le=366),
+    ) -> JSONResponse:
+        context = await _context_for_workspace(runtime, request, workspace_id, "workspace.member.view")
+        rows = await runtime.member_performance(request, days=days, context=context)
+        return _success(context.trusted.request_id, {"items": jsonable_encoder(rows)})
 
     @router.get("/{workspace_id}/projects/{project_id}/members")
     async def project_members(
