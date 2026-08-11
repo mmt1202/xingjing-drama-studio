@@ -326,7 +326,35 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
           const credential = normalizedPayload.credential;
           if (typeof credential === "string" && credential.trim()) reviewAccessSecrets.set(context.reviewToken, credential.trim());
         } else if (action.id === "comment") {
-          body = { action: "comment", timecodeMs: normalizedPayload.timecodeMs, body: normalizedPayload.comment, severity: "normal" };
+          let screenshotAssetId: string | undefined;
+          const screenshot = normalizedPayload.screenshot;
+          if (typeof File !== "undefined" && screenshot instanceof File) {
+            if (!session) throw new CollaborationCommerceApiError("审片会话已失效", "unauthenticated", 401, "REVIEW_SESSION_REQUIRED", null, false);
+            const timecodeMs = Number(normalizedPayload.timecodeMs);
+            const upload = await parse<unknown>(await fetcher(
+              `${baseUrl}/review-links/${encodeURIComponent(context.reviewToken)}/screenshots?timecodeMs=${encodeURIComponent(String(timecodeMs))}`,
+              {
+                method: "POST",
+                credentials: "include",
+                headers: { ...headers(context), "Content-Type": screenshot.type },
+                body: screenshot,
+                signal: requestOptions.signal,
+              },
+            ));
+            const uploadData = isRecord(upload.data) && isRecord(upload.data.screenshot) ? upload.data.screenshot : null;
+            if (!uploadData || typeof uploadData.id !== "string") {
+              throw new CollaborationCommerceApiError("截图上传响应无效", "contract", 200, "INVALID_SCREENSHOT_RESPONSE", upload.meta.requestId ?? null, false);
+            }
+            screenshotAssetId = uploadData.id;
+          }
+          body = {
+            action: "comment",
+            timecodeMs: normalizedPayload.timecodeMs,
+            body: normalizedPayload.comment,
+            severity: typeof normalizedPayload.severity === "string" && normalizedPayload.severity.trim() ? normalizedPayload.severity.trim() : "normal",
+            parentCommentId: normalizedPayload.parentCommentId || undefined,
+            screenshotAssetId,
+          };
         } else if (action.id === "approve" || action.id === "reject") {
           body = {
             action: "decision",

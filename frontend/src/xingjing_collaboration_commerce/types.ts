@@ -4,7 +4,7 @@ export type CommerceResponseKind = "list" | "object";
 export type CommerceActionMethod = "POST" | "PUT";
 export type CommerceActionBodyKind = "action" | "entity";
 export type CommerceConfirmationKind = "standard" | "approval" | "financial" | "danger" | "none";
-export type CommerceFieldType = "text" | "email" | "number" | "textarea" | "password" | "datetime-local" | "checkbox";
+export type CommerceFieldType = "text" | "email" | "number" | "textarea" | "password" | "datetime-local" | "checkbox" | "file";
 export type CommerceContextKey = "workspaceId" | "projectId" | "reviewToken";
 
 export interface CommercePageContext {

@@ -107,7 +107,7 @@ function formatValue(value: unknown, format: string | undefined, language: strin
   return "—";
 }
 
-function textFieldValue(values: Readonly<Record<string, string | boolean>>, name: string): string {
+function textFieldValue(values: Readonly<Record<string, string | boolean | File>>, name: string): string {
   const value = values[name];
   return typeof value === "string" ? value : "";
 }
@@ -119,7 +119,7 @@ function ActionDialog({ action, context, onCancel, onConfirm }: {
   readonly onConfirm: (payload: Readonly<Record<string, unknown>>) => void;
 }) {
   const { t } = useTranslation(collaborationCommerceNamespace);
-  const [values, setValues] = useState<Record<string, string | boolean>>({
+  const [values, setValues] = useState<Record<string, string | boolean | File>>({
     active: true,
     ...(context.projectId ? { projectId: context.projectId } : {}),
   });
@@ -130,7 +130,7 @@ function ActionDialog({ action, context, onCancel, onConfirm }: {
   const valid = action.fields.every((entry) => {
     if (!entry.required) return true;
     const value = values[entry.name];
-    return typeof value === "boolean" ? value : Boolean(value?.trim());
+    return typeof value === "boolean" ? value : value instanceof File ? value.size > 0 : Boolean(value?.trim());
   });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -159,6 +159,8 @@ function ActionDialog({ action, context, onCancel, onConfirm }: {
                 <textarea required={entry.required} value={textFieldValue(values, entry.name)} onChange={(event) => setValues((current) => ({ ...current, [entry.name]: event.target.value }))} />
               ) : entry.type === "checkbox" ? (
                 <input type="checkbox" checked={values[entry.name] === true} onChange={(event) => setValues((current) => ({ ...current, [entry.name]: event.target.checked }))} />
+              ) : entry.type === "file" ? (
+                <input type="file" accept="image/png,image/jpeg,image/webp" required={entry.required} onChange={(event) => setValues((current) => ({ ...current, [entry.name]: event.target.files?.[0] ?? "" }))} />
               ) : (
                 <input type={entry.type} min={entry.min} required={entry.required} value={textFieldValue(values, entry.name)} onChange={(event) => setValues((current) => ({ ...current, [entry.name]: event.target.value }))} />
               )}
