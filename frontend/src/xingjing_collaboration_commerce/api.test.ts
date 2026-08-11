@@ -7,7 +7,7 @@ const meta = { requestId: "9f1f7f7e-6ccd-4c29-8d39-05a09f32a77f", serverTime: "2
 
 describe("协作与商业 typed API", () => {
   it("读取页面时携带工作区/项目上下文并解析标准列表信封", async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
       data: [{ id: "member-1", name: "成员甲", status: "active", version: 3, updatedAt: "2026-07-16T07:00:00Z" }],
       meta: { ...meta, page: { size: 20, nextToken: "next-1" } },
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -91,5 +91,31 @@ describe("协作与商业 typed API", () => {
       payload: {},
     })).rejects.toMatchObject({ code: "CLIENT_ACTION_FORBIDDEN" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("客户通过验收后使用服务端新版本确认交付", async () => {
+    const response = (data: unknown) => new Response(JSON.stringify({ data, meta }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({
+        session: { id: "session-1", ticket: "ticket-1" },
+        review: { delivery: { version: 4, status: "pending" } },
+      }))
+      .mockResolvedValueOnce(response({ delivery: { version: 5, status: "approved" } }))
+      .mockResolvedValueOnce(response({ delivery: { version: 6, status: "confirmed" } }));
+    const api = createCollaborationCommerceApi({ fetcher, createId: () => "review-action-key" });
+    const route = collaborationCommerceRouteMap.get("CL-001")!;
+    const context = { reviewToken: "review-token-abcdefghijklmnopqrstuvwxyz" };
+
+    await api.loadPage(route, context);
+    await api.executeAction(route, route.actions.find((action) => action.id === "approve")!, context, { payload: {} });
+    await api.executeAction(route, route.actions.find((action) => action.id === "confirmDelivery")!, context, { payload: {} });
+
+    expect(JSON.parse(String((fetcher.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      action: "confirm_delivery",
+      version: 5,
+    });
   });
 });

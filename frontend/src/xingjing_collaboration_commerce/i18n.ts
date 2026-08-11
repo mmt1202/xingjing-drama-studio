@@ -79,7 +79,7 @@ const actionsZh: Record<string, string> = {
   updateRole: "更新角色", disableMember: "停用成员", removeMember: "移除成员", previewPermissionImpact: "预览权限影响", savePermissionMatrix: "保存权限矩阵",
   assignProjectMember: "保存项目成员权限",
   assignSeat: "分配席位", reclaimSeat: "回收席位", requestInvoice: "申请开票", createPaymentOrder: "创建充值订单", refundPaymentOrder: "发起退款", requestReconciliation: "发起对账",
-  approve: "通过验收", reject: "打回修改", comment: "提交批注", verify: "验证访问", createReviewLink: "创建审片链接",
+  approve: "通过验收", reject: "打回修改", confirmDelivery: "确认交付", comment: "提交批注", verify: "验证访问", logout: "退出审片", createReviewLink: "创建审片链接",
   revokeReviewLink: "撤销审片链接", publishTemplate: "发布模板", approveTemplate: "通过模板审核", unpublishTemplate: "下架模板",
   submitTemplateReview: "提交模板审核", createTemplate: "创建模板", applyTemplate: "使用模板", createFork: "创建 Fork",
   saveForkAuthorization: "保存 Fork 授权", saveRevenueShare: "保存收益分成", viewCommercialOrder: "查看商单详情",

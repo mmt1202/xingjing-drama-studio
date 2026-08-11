@@ -7,10 +7,10 @@ import {
 } from "./routes";
 
 describe("M10-M14 页面信息架构", () => {
-  it("完整导出 46 个稳定页面 ID 与不含 html 后缀的主线路由", () => {
-    expect(collaborationCommerceRoutes).toHaveLength(46);
-    expect(new Set(collaborationCommerceRoutes.map((route) => route.id)).size).toBe(46);
-    expect(collaborationCommerceRouteMounts).toHaveLength(46);
+  it("完整导出 54 个稳定页面 ID 与不含 html 后缀的主线路由", () => {
+    expect(collaborationCommerceRoutes).toHaveLength(54);
+    expect(new Set(collaborationCommerceRoutes.map((route) => route.id)).size).toBe(54);
+    expect(collaborationCommerceRouteMounts).toHaveLength(54);
     expect(collaborationCommerceRoutes.every((route) => route.path.startsWith("/") && !route.path.endsWith(".html"))).toBe(true);
   });
 
@@ -50,7 +50,9 @@ describe("M10-M14 页面信息架构", () => {
     const clientActions = clientRoutes.flatMap((route) => route.actions.map((action) => action.id));
 
     expect(clientRoutes.map((route) => route.id)).toEqual(["CL-001", "CL-002", "CL-003", "CL-004", "CL-005"]);
-    expect(clientActions.every((action) => ["verify", "comment", "approve", "reject"].includes(action))).toBe(true);
+    expect(clientActions.every((action) => ["verify", "comment", "approve", "reject", "confirmDelivery", "logout"].includes(action))).toBe(true);
+    expect(clientActions).toContain("confirmDelivery");
+    expect(clientActions).toContain("logout");
     expect(clientRoutes.every((route) => route.actions.every((action) => action.clientSafe))).toBe(true);
   });
 });

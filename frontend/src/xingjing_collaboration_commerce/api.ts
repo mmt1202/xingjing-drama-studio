@@ -46,7 +46,7 @@ interface ClientOptions {
   readonly createId?: () => string;
 }
 
-const clientSafeActions = new Set(["verify", "comment", "approve", "reject"]);
+const clientSafeActions = new Set(["verify", "comment", "approve", "reject", "confirmDelivery", "logout"]);
 
 function fallbackId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -362,6 +362,13 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
             note: normalizedPayload.reason,
             version: session?.deliveryVersion ?? 1,
           };
+        } else if (action.id === "confirmDelivery") {
+          body = {
+            action: "confirm_delivery",
+            version: session?.deliveryVersion ?? 1,
+          };
+        } else if (action.id === "logout") {
+          body = {};
         }
       }
       const init: RequestInit = {
@@ -374,6 +381,17 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
       const send = async () => parse<unknown>(await fetcher(`${baseUrl}${endpoint}`, init));
       try {
         const envelope = await send();
+        if (route.audience === "client" && context.reviewToken && isRecord(envelope.data)) {
+          const delivery = isRecord(envelope.data.delivery) ? envelope.data.delivery : null;
+          const current = reviewSessions.get(context.reviewToken);
+          if (current && typeof delivery?.version === "number") {
+            reviewSessions.set(context.reviewToken, { ...current, deliveryVersion: delivery.version });
+          }
+        }
+        if (route.audience === "client" && action.id === "logout" && context.reviewToken) {
+          reviewSessions.delete(context.reviewToken);
+          reviewAccessSecrets.delete(context.reviewToken);
+        }
         return normalizeActionResult(envelope.data, envelope.meta);
       } catch (cause) {
         if (route.audience === "client" && action.id === "verify" && context.reviewToken) {
