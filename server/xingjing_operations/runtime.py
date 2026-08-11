@@ -3,11 +3,14 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+from pathlib import Path
 from typing import cast
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -30,7 +33,12 @@ from server.xingjing_identity_context import (
     TrustedWorkspaceContext,
     TrustedWorkspaceContextResolver,
 )
-from server.xingjing_platform_persistence.persistence import OutboxRow
+from server.xingjing_platform_persistence.persistence import (
+    NotificationDeliveryRow,
+    NotificationPreferenceRow,
+    NotificationRow,
+    OutboxRow,
+)
 
 type ContextResolver = Callable[
     [Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]
@@ -111,6 +119,9 @@ def create_production_operations_runtime(
                 "xingjing_admin_governance_objects",
                 "xingjing_admin_finance_operations",
                 "xingjing_outbox",
+                "xingjing_notifications",
+                "xingjing_notification_preferences",
+                "xingjing_notification_deliveries",
                 "xingjing_projects",
                 "xingjing_generation_tasks",
                 "xingjing_generated_assets",
@@ -137,6 +148,9 @@ def create_production_operations_runtime(
                     "XINGJING_OPERATIONS_MIGRATION_REQUIRED:"
                     + ",".join(str(item) for item in missing)
                 )
+            session.execute(text(
+                "SELECT tenant_id,workspace_id FROM xingjing_admin_governance_commands LIMIT 1"
+            ))
     except (RuntimeError, SQLAlchemyError) as error:
         engine.dispose()
         raise RuntimeError("XINGJING_OPERATIONS_MIGRATION_REQUIRED") from error
@@ -177,6 +191,8 @@ def _admin_router(
         page: int,
         page_size: int,
         trusted: TrustedWorkspaceContext,
+        search: str,
+        status: str | None,
     ) -> dict[str, object]:
         permissions = {
             "operations": "admin.ops.view",
@@ -187,43 +203,51 @@ def _admin_router(
         _require(trusted, permissions[domain])
         with sessions() as session:
             records = _records(session, domain, resource, trusted)
-        return _page(records, page, page_size)
+        return _page(_filter_records(records, search=search, status=status), page, page_size)
 
     @router.get("/operations")
     def operations(
         resource: str = Query("services"),
         page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
-        return listing("operations", resource, page, page_size, trusted)
+        return listing("operations", resource, page, page_size, trusted, search, status)
 
     @router.get("/operations-config")
     def operations_config(
         resource: str = Query("ops-config"),
         page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
-        return listing("operations-config", resource, page, page_size, trusted)
+        return listing("operations-config", resource, page, page_size, trusted, search, status)
 
     @router.get("/notifications")
     def notifications(
         resource: str = Query("notifications"),
         page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
-        return listing("notifications", resource, page, page_size, trusted)
+        return listing("notifications", resource, page, page_size, trusted, search, status)
 
     @router.get("/support-tickets")
     def support(
         resource: str = Query("tickets"),
         page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
-        return listing("support", resource, page, page_size, trusted)
+        return listing("support", resource, page, page_size, trusted, search, status)
 
     def action(
         domain: str,
@@ -261,6 +285,8 @@ def _admin_router(
         with sessions.begin() as session:
             replay = session.scalar(
                 select(CommandRow).where(
+                    CommandRow.tenant_id == trusted.tenant_id,
+                    CommandRow.workspace_id == trusted.workspace_id,
                     CommandRow.actor_id == trusted.actor_id,
                     CommandRow.idempotency_key == idempotency_key,
                 )
@@ -282,6 +308,8 @@ def _admin_router(
             session.add(
                 CommandRow(
                     command_id=str(uuid4()),
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
                     actor_id=trusted.actor_id,
                     idempotency_key=idempotency_key,
                     fingerprint=fingerprint,
@@ -468,6 +496,8 @@ def _preferences_router(
         with sessions.begin() as session:
             replay = session.scalar(
                 select(CommandRow).where(
+                    CommandRow.tenant_id == trusted.tenant_id,
+                    CommandRow.workspace_id == trusted.workspace_id,
                     CommandRow.actor_id == trusted.actor_id,
                     CommandRow.idempotency_key == idempotency_key,
                 )
@@ -490,6 +520,8 @@ def _preferences_router(
             session.add(
                 CommandRow(
                     command_id=str(uuid4()),
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
                     actor_id=trusted.actor_id,
                     idempotency_key=idempotency_key,
                     fingerprint=fingerprint,
@@ -522,6 +554,60 @@ def _page(
         "pageSize": page_size,
         "total": len(records),
     }
+
+
+def _filter_records(
+    records: list[dict[str, object]], *, search: str, status: str | None,
+) -> list[dict[str, object]]:
+    needle = search.strip().casefold()
+    statuses = {
+        item.strip().casefold() for item in (status or "").split(",") if item.strip()
+    }
+    return [
+        record for record in records
+        if (
+            not needle
+            or needle in str(record.get("id", "")).casefold()
+            or needle in str(record.get("name", "")).casefold()
+            or needle in json.dumps(record.get("details", {}), ensure_ascii=False).casefold()
+        )
+        and (not statuses or str(record.get("status", "")).casefold() in statuses)
+    ]
+
+
+def _probe_dependency(
+    component: str, label: str, source: str, configured_value: str, observed_at: datetime,
+) -> dict[str, object]:
+    details: dict[str, object] = {"configured": bool(configured_value), "source": source}
+    status = "unknown"
+    if not configured_value:
+        details["reason"] = "部署配置缺失"
+    elif component == "object-storage":
+        path = Path(configured_value)
+        exists = path.is_dir()
+        writable = exists and os.access(path, os.R_OK | os.W_OK)
+        status = "healthy" if writable else "degraded"
+        details.update({"path": str(path), "exists": exists, "writable": writable})
+    else:
+        parsed = urlparse(configured_value)
+        host = parsed.hostname
+        defaults = {"https": 443, "rediss": 6380, "amqps": 5671,
+                    "http": 80, "redis": 6379, "amqp": 5672}
+        port = parsed.port or defaults.get(parsed.scheme)
+        if not host or port is None:
+            status = "degraded"
+            details["reason"] = "连接地址无效"
+        else:
+            try:
+                with socket.create_connection((host, port), timeout=0.35):
+                    status = "healthy"
+                details.update({"host": host, "port": port, "probe": "tcp"})
+            except OSError as error:
+                status = "degraded"
+                details.update({"host": host, "port": port, "probe": "tcp",
+                                "reason": str(error)[:160]})
+    return {"id": component, "name": label, "status": status, "version": 1,
+            "updatedAt": observed_at.isoformat(), "details": details}
 
 
 def _object_records(
@@ -584,18 +670,9 @@ def _records(
             ),
         }
         records.extend(
-            {
-                "id": component,
-                "name": label,
-                "status": "unknown",
-                "version": 1,
-                "updatedAt": now.isoformat(),
-                "details": {
-                    "configured": bool(os.environ.get(variable, "").strip()),
-                    "reason": "未部署主动探针" if os.environ.get(variable, "").strip()
-                    else "部署配置缺失",
-                },
-            }
+            _probe_dependency(
+                component, label, variable, os.environ.get(variable, "").strip(), now,
+            )
             for component, (label, variable) in dependencies.items()
         )
         return records
@@ -723,6 +800,30 @@ def _records(
                 "details": {key: int(value) for key, value in row.items()},
             }
         ]
+    if domain == "notifications" and resource == "notifications":
+        rows = session.scalars(
+            select(NotificationRow).where(
+                NotificationRow.tenant_id == trusted.tenant_id,
+                NotificationRow.workspace_id == trusted.workspace_id,
+            ).order_by(NotificationRow.created_at.desc(), NotificationRow.id.desc()).limit(500)
+        ).all()
+        return [
+            {
+                "id": row.id,
+                "name": row.title,
+                "status": "read" if row.read_at else "queued",
+                "version": 1,
+                "updatedAt": row.created_at.isoformat(),
+                "details": {
+                    "recipientId": row.recipient_id,
+                    "category": row.category,
+                    "body": row.body,
+                    "resourceType": row.resource_type,
+                    "resourceId": row.resource_id,
+                },
+            }
+            for row in rows
+        ]
     allowed = {
         "operations": {"alert-rules"},
         "operations-config": {
@@ -748,7 +849,9 @@ def _write_object(
     assert payload.resource is not None
     stored_resource = payload.resource
     live_resources = {"services", "error-logs", "queues", "storage"}
-    if domain == "operations" and payload.resource in live_resources:
+    if domain == "operations" and payload.resource == "error-logs" and payload.action == "创建工单":
+        stored_resource = "tickets"
+    elif domain == "operations" and payload.resource in live_resources:
         stored_resource = f"operation-command:{payload.resource}"
     key = (
         trusted.tenant_id,
@@ -776,6 +879,15 @@ def _write_object(
     )
     next_payload = payload.payload or (current.payload if current else {})
     status = _status_for(domain, payload.action)
+    if domain == "operations" and stored_resource == "tickets":
+        next_payload = {
+            **next_payload,
+            "source": "error-log",
+            "sourceObjectId": payload.objectId,
+            "createdBy": trusted.actor_id,
+            "reason": payload.reason or "异常日志转客服工单",
+        }
+        status = "open"
     if domain == "notifications" and payload.action == "发送通知":
         recipients = next_payload.get("recipientIds")
         body = next_payload.get("body")
@@ -792,6 +904,69 @@ def _write_object(
             )
         ):
             raise HTTPException(422, detail={"code": "INVALID_NOTIFICATION"})
+        if not isinstance(body, str) or not body.strip():
+            template = session.get(
+                GovernanceObjectRow,
+                (trusted.tenant_id, trusted.workspace_id, "task-notices", str(template_id)),
+            )
+            template_body = template.payload.get("body") if template else None
+            if not isinstance(template_body, str) or not template_body.strip():
+                raise HTTPException(422, detail={"code": "NOTIFICATION_TEMPLATE_NOT_FOUND"})
+            body = template_body
+        title = next_payload.get("title")
+        category = next_payload.get("category", "platform")
+        if not isinstance(title, str) or not title.strip():
+            title = "平台通知"
+        if not isinstance(category, str) or not category.strip():
+            raise HTTPException(422, detail={"code": "INVALID_NOTIFICATION_CATEGORY"})
+        notification_values = _notification_records(
+            tenant_id=trusted.tenant_id,
+            workspace_id=trusted.workspace_id,
+            broadcast_id=payload.objectId,
+            recipients=cast(list[str], recipients),
+            category=category.strip(),
+            title=title.strip(),
+            body=body.strip(),
+            created_at=now,
+        )
+        preferences = session.scalars(
+            select(NotificationPreferenceRow).where(
+                NotificationPreferenceRow.tenant_id == trusted.tenant_id,
+                NotificationPreferenceRow.workspace_id == trusted.workspace_id,
+                NotificationPreferenceRow.recipient_id.in_(cast(list[str], recipients)),
+                NotificationPreferenceRow.enabled.is_(True),
+                NotificationPreferenceRow.destination.is_not(None),
+            )
+        ).all()
+        notification_by_recipient: dict[str, str] = {}
+        for value in notification_values:
+            session.add(NotificationRow(**value))
+            notification_by_recipient[str(value["recipient_id"])] = str(value["id"])
+        for preference in preferences:
+            notification_id = notification_by_recipient.get(preference.recipient_id)
+            if notification_id is None or preference.destination is None:
+                continue
+            session.add(NotificationDeliveryRow(
+                id=str(uuid4()), tenant_id=trusted.tenant_id,
+                workspace_id=trusted.workspace_id, notification_id=notification_id,
+                recipient_id=preference.recipient_id, channel=preference.channel,
+                destination=preference.destination,
+                template_key=str(template_id or "admin-broadcast"),
+                payload={"title": title, "body": body, "broadcastId": payload.objectId},
+                status="queued", attempt_count=0, next_attempt_at=now,
+                provider_receipt=None, last_error=None, created_at=now, updated_at=now,
+            ))
+        next_payload = {**next_payload, "recipientCount": len(notification_values)}
+    if domain == "support":
+        if current is None:
+            raise HTTPException(404, detail={"code": "SUPPORT_TICKET_NOT_FOUND"})
+        next_payload, status = _next_ticket_payload(
+            current=current.payload,
+            command=next_payload,
+            actor_id=trusted.actor_id,
+            reason=payload.reason or "",
+            occurred_at=now,
+        )
     if domain == "support" and "compensation" in next_payload:
         compensation = next_payload["compensation"]
         if not isinstance(compensation, dict):
@@ -811,6 +986,7 @@ def _write_object(
         session.add(
             FinanceOperationRow(
                 operation_id=operation_id,
+                tenant_id=trusted.tenant_id,
                 workspace_id=trusted.workspace_id,
                 operation_type="support_compensation",
                 object_id=payload.objectId,
@@ -876,6 +1052,72 @@ def _status_for(domain: str, action: str) -> str:
     if action == "创建工单":
         return "open"
     return "active"
+
+
+def _notification_records(
+    *, tenant_id: str, workspace_id: str, broadcast_id: str,
+    recipients: list[str], category: str, title: str, body: str,
+    created_at: datetime,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "id": str(uuid4()),
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "recipient_id": recipient,
+            "category": category,
+            "title": title,
+            "body": body,
+            "resource_type": "admin_broadcast",
+            "resource_id": broadcast_id,
+            "dedupe_key": f"admin:{broadcast_id}:{recipient}",
+            "metadata_json": {"broadcastId": broadcast_id},
+            "read_at": None,
+            "created_at": created_at,
+        }
+        for recipient in recipients
+    ]
+
+
+def _next_ticket_payload(
+    *, current: dict[str, object], command: dict[str, object], actor_id: str,
+    reason: str, occurred_at: datetime,
+) -> tuple[dict[str, object], str]:
+    operation = command.get("operation", "reply")
+    if operation not in {"reply", "assign", "escalate", "close"}:
+        raise HTTPException(422, detail={"code": "SUPPORT_OPERATION_INVALID"})
+    result = dict(current)
+    if "compensation" in command:
+        result["compensation"] = command["compensation"]
+    if operation == "reply":
+        body = command.get("message") or reason
+        if not isinstance(body, str) or not body.strip():
+            raise HTTPException(422, detail={"code": "SUPPORT_REPLY_REQUIRED"})
+        existing = result.get("messages", [])
+        if not isinstance(existing, list):
+            raise HTTPException(409, detail={"code": "SUPPORT_MESSAGES_INVALID"})
+        result["messages"] = [*existing, {
+            "actorId": actor_id, "body": body.strip(), "occurredAt": occurred_at.isoformat(),
+        }]
+        return result, "processing"
+    if operation == "assign":
+        assignee = command.get("assigneeId")
+        if not isinstance(assignee, str) or not assignee.strip():
+            raise HTTPException(422, detail={"code": "SUPPORT_ASSIGNEE_REQUIRED"})
+        result["assigneeId"] = assignee.strip()
+        return result, "assigned"
+    if operation == "escalate":
+        target = command.get("escalationTarget")
+        if not isinstance(target, str) or not target.strip():
+            raise HTTPException(422, detail={"code": "SUPPORT_ESCALATION_TARGET_REQUIRED"})
+        result["escalationTarget"] = target.strip()
+        return result, "escalated"
+    close_reason = command.get("closeReason") or reason
+    if not isinstance(close_reason, str) or not close_reason.strip():
+        raise HTTPException(422, detail={"code": "SUPPORT_CLOSE_REASON_REQUIRED"})
+    result["closeReason"] = close_reason.strip()
+    result["closedBy"] = actor_id
+    return result, "closed"
 
 
 def _append_evidence(

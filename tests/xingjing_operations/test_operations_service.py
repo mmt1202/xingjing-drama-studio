@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from server.xingjing_admin_governance.runtime import CommandRow
 from server.xingjing_operations import (
     Actor,
     InMemoryOperationsRepository,
@@ -9,6 +10,7 @@ from server.xingjing_operations import (
     ProbeReading,
     VersionConflict,
 )
+from server.xingjing_operations.runtime import _filter_records, _probe_dependency
 
 NOW = datetime(2026, 7, 15, tzinfo=UTC)
 ACTOR = Actor("tenant-a", "ops-1", "req-1")
@@ -59,3 +61,42 @@ def test_incident_lifecycle_uses_idempotency_and_optimistic_versioning():
     resolved = service.resolve_incident(ACTOR, "idem-3", first.id, acknowledged.version, "recovered")
     assert resolved.status == "resolved"
     assert service.audit.query(request_id="req-1")[-1].result == "success"
+
+
+def test_shared_admin_idempotency_is_scoped_to_tenant_and_workspace():
+    columns = CommandRow.__table__.columns
+    assert "tenant_id" in columns
+    assert "workspace_id" in columns
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in CommandRow.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("tenant_id", "workspace_id", "actor_id", "idempotency_key") in unique_columns
+
+
+def test_admin_listing_combines_search_and_multiple_status_filters():
+    records = [
+        {"id": "queue-1", "name": "视频生成队列", "status": "backlog"},
+        {"id": "queue-2", "name": "图片生成队列", "status": "healthy"},
+        {"id": "service-1", "name": "视频服务", "status": "healthy"},
+    ]
+
+    filtered = _filter_records(records, search="视频", status="healthy,backlog")
+
+    assert [item["id"] for item in filtered] == ["queue-1", "service-1"]
+
+
+def test_storage_dependency_probe_reports_real_path_state(tmp_path):
+    observed = datetime(2026, 8, 11, tzinfo=UTC)
+
+    healthy = _probe_dependency(
+        "object-storage", "对象存储", "storage", str(tmp_path), observed
+    )
+    missing = _probe_dependency(
+        "object-storage", "对象存储", "storage", str(tmp_path / "missing"), observed
+    )
+
+    assert healthy["status"] == "healthy"
+    assert healthy["details"]["writable"] is True
+    assert missing["status"] == "degraded"

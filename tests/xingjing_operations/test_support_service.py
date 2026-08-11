@@ -8,6 +8,7 @@ from server.xingjing_operations import (
     InMemorySupportRepository,
     SupportService,
 )
+from server.xingjing_operations.runtime import _next_ticket_payload
 
 NOW = datetime(2026, 7, 15, tzinfo=UTC)
 AGENT = Actor("tenant-a", "agent-1", "req-support")
@@ -77,3 +78,17 @@ def test_stale_compensation_version_never_reaches_external_port():
     with pytest.raises(VersionConflict):
         service.execute_compensation(AGENT, "c-3", approved.id, request.version)
     assert executed == []
+
+
+def test_admin_ticket_command_preserves_history_and_applies_explicit_transition():
+    payload, status = _next_ticket_payload(
+        current={"messages": [{"actorId": "user-1", "body": "重复扣费"}]},
+        command={"operation": "assign", "assigneeId": "agent-2"},
+        actor_id="supervisor-1",
+        reason="转交账务专员",
+        occurred_at=NOW,
+    )
+
+    assert status == "assigned"
+    assert payload["assigneeId"] == "agent-2"
+    assert payload["messages"] == [{"actorId": "user-1", "body": "重复扣费"}]

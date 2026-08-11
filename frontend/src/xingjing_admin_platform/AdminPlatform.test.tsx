@@ -94,6 +94,7 @@ describe("管理后台页面闭环", () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     render(<AdminPlatform routeId="AD-035" api={exportApi} />);
     await screen.findByText("高风险视频");
+    expect(screen.getAllByRole("button", { name: "导出收入" })).toHaveLength(1);
 
     fireEvent.change(screen.getByLabelText("业务对象 ID"), { target: { value: "revenue-2026-08" } });
     fireEvent.click(screen.getAllByRole("button", { name: "导出收入" })[0]!);

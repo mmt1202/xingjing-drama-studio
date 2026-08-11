@@ -28,6 +28,13 @@ function metricValue(item: AdminRecord): string {
   return typeof value === "number" || typeof value === "string" ? String(value) : "已保存";
 }
 
+const structuredFormResources = new Set([
+  "dashboard", "billing", "costs", "entitlements", "plans", "plan-detail", "revenue",
+  "alert-rules", "growth", "ops-config", "platform-profiles", "publish-rules",
+  "notifications", "task-notices", "word-rules", "roles", "announcements",
+  "system-config", "tickets", "api-clients",
+]);
+
 export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi }) {
   const route = adminRouteMap.get(routeId);
   const [context, setContext] = useState<AdminContext>();
@@ -83,6 +90,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
 
   const canManage = context?.permissions.includes(route.managePermission) ?? false;
   const visibleItems = items ?? [];
+  const usesStructuredForm = structuredFormResources.has(route.resource);
   const runAction = async (item: AdminRecord) => {
     setActionState("processing");
     try {
@@ -155,10 +163,10 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
       <div className="xj-admin-actions"><button disabled={!targetTenantId.trim() || !targetWorkspaceId.trim() || !accessReason.trim()} onClick={() => void requestCrossScope()}>申请跨域访问</button><button disabled={!approvalId.trim() || !targetTenantId.trim() || !targetWorkspaceId.trim() || !accessReason.trim()} onClick={() => { setPageNumber(1); setAppliedScope({ targetTenantId: targetTenantId.trim(), targetWorkspaceId: targetWorkspaceId.trim(), approvalId: approvalId.trim(), accessReason: accessReason.trim() }); }}>读取审批范围</button><button onClick={() => { setAppliedScope({}); setApprovalNotice(""); }}>返回当前工作区</button></div>
       {approvalNotice && <p role="status">{approvalNotice}</p>}
     </section>}
-    {canManage && route.domain === "business" && route.resource !== "dashboard" && <section className="xj-admin-toolbar" aria-label="治理操作说明">
-      <input aria-label="治理原因" value={actionReason} onChange={(event) => setActionReason(event.target.value)} placeholder="填写治理原因（内容阻断必填）" />
+    {canManage && !usesStructuredForm && <section className="xj-admin-toolbar" aria-label="对象操作说明">
+      <input aria-label="操作原因" value={actionReason} onChange={(event) => setActionReason(event.target.value)} placeholder="填写本次处理原因；高风险操作必须填写" />
     </section>}
-    {canManage && (route.domain !== "business" || route.resource === "dashboard") && <section className="xj-admin-toolbar" aria-label={`${route.primaryAction}提交区`}>
+    {canManage && usesStructuredForm && <section className="xj-admin-toolbar" aria-label={`${route.primaryAction}提交区`}>
       <input aria-label="业务对象 ID" value={draftObjectId} onChange={(event) => setDraftObjectId(event.target.value)} placeholder="业务对象 ID（新建时自定义稳定 ID）" />
       <input aria-label="预期版本" type="number" min={0} value={draftVersion} onChange={(event) => setDraftVersion(Number(event.target.value))} />
       <input aria-label="操作原因" value={draftReason} onChange={(event) => setDraftReason(event.target.value)} placeholder="操作原因或审批说明" />
@@ -176,7 +184,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
       <section className="xj-admin-table-wrap"><table><thead><tr><th>对象</th><th>状态</th><th>业务明细</th><th>敏感信息</th><th>版本</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => <tr key={item.id}>
         <td><strong>{item.name}</strong><small>{item.id}</small></td><td><span className={`xj-admin-status is-${item.status}`}>{item.status}</span></td>
         <td>{detailText(item.details)}</td><td>{Object.values(item.sensitive ?? {}).map(mask).join(" · ") || "—"}</td><td>v{item.version}</td><td>{item.updatedAt}</td>
-        <td><button disabled={!canManage || actionState === "processing" || (route.resource === "content" && !actionReason.trim())} onClick={() => void runAction(item)}>{route.primaryAction}</button></td>
+        <td>{usesStructuredForm ? "—" : <button disabled={!canManage || actionState === "processing" || (route.resource === "content" && !actionReason.trim())} onClick={() => void runAction(item)}>{route.primaryAction}</button>}</td>
       </tr>)}</tbody></table><footer className="xj-admin-toolbar" aria-label="分页"><span>共 {total} 条 · 第 {pageNumber} 页</span><button disabled={pageNumber <= 1} onClick={() => setPageNumber((value) => value - 1)}>上一页</button><button disabled={pageNumber * 20 >= total} onClick={() => setPageNumber((value) => value + 1)}>下一页</button></footer></section>}
   </main>;
 }

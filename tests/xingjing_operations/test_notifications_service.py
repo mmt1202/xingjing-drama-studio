@@ -6,6 +6,7 @@ from server.xingjing_operations import (
     InMemoryNotificationRepository,
     NotificationService,
 )
+from server.xingjing_operations.runtime import _notification_records
 
 NOW = datetime(2026, 7, 15, tzinfo=UTC)
 ACTOR = Actor("tenant-a", "operator-1", "req-notify")
@@ -55,3 +56,23 @@ def test_missing_provider_records_pending_not_delivered():
 
     assert delivery.status == "pending"
     assert delivery.provider_reference is None
+
+
+def test_admin_broadcast_creates_scoped_deduplicated_inbox_records():
+    records = _notification_records(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        broadcast_id="broadcast-1",
+        recipients=["user-1", "user-2"],
+        category="operations",
+        title="维护通知",
+        body="今晚 23:00 维护",
+        created_at=NOW,
+    )
+
+    assert [record["recipient_id"] for record in records] == ["user-1", "user-2"]
+    assert {record["dedupe_key"] for record in records} == {
+        "admin:broadcast-1:user-1",
+        "admin:broadcast-1:user-2",
+    }
+    assert all(record["tenant_id"] == "tenant-a" for record in records)

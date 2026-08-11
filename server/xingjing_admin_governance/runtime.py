@@ -75,9 +75,12 @@ class SensitiveApprovalRow(Base):
 class CommandRow(Base):
     __tablename__ = "xingjing_admin_governance_commands"
     __table_args__ = (
-        UniqueConstraint("actor_id", "idempotency_key", name="uq_xj_admin_governance_command"),
+        UniqueConstraint("tenant_id", "workspace_id", "actor_id", "idempotency_key",
+                         name="uq_xj_admin_governance_command_scope"),
     )
     command_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(71), nullable=False)
@@ -154,6 +157,9 @@ def create_production_admin_governance_runtime(
         with sessions() as session:
             session.execute(text("SELECT 1 FROM xingjing_admin_governance_objects LIMIT 1"))
             session.execute(text("SELECT 1 FROM xingjing_admin_sensitive_approvals LIMIT 1"))
+            session.execute(text(
+                "SELECT tenant_id,workspace_id FROM xingjing_admin_governance_commands LIMIT 1"
+            ))
     except SQLAlchemyError as error:
         engine.dispose()
         raise RuntimeError("XINGJING_GOVERNANCE_MIGRATION_REQUIRED") from error
@@ -213,6 +219,8 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
         now = datetime.now(UTC)
         with sessions.begin() as session:
             previous = session.scalar(select(CommandRow).where(
+                CommandRow.tenant_id == trusted.tenant_id,
+                CommandRow.workspace_id == trusted.workspace_id,
                 CommandRow.actor_id == trusted.actor_id,
                 CommandRow.idempotency_key == idempotency_key,
             ))
@@ -223,7 +231,8 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
             before, after = _apply_action(session, domain, payload, trusted, now)
             result = {"requestId": trusted.request_id, "status": "succeeded", "object": after}
             session.add(CommandRow(
-                command_id=str(uuid4()), actor_id=trusted.actor_id,
+                command_id=str(uuid4()), tenant_id=trusted.tenant_id,
+                workspace_id=trusted.workspace_id, actor_id=trusted.actor_id,
                 idempotency_key=idempotency_key, fingerprint=fingerprint,
                 result_json=json.dumps(result, ensure_ascii=False), created_at=now,
             ))
