@@ -107,6 +107,43 @@ def test_create_template_persists_an_immutable_wire_safe_initial_version() -> No
     assert json.loads(json.dumps(detail.to_dict(), ensure_ascii=False))["versions"][0]["number"] == 1
 
 
+def test_platform_operator_can_create_and_version_managed_templates() -> None:
+    service = MarketplaceService(FakeMarketplaceRepository(), clock=lambda: NOW)
+    created = service.create_template(
+        admin_context(),
+        CreateTemplate(
+            title="剪辑导出模板",
+            kind=TemplateKind.EXPORT,
+            content={"source": {"id": "export-config-1", "versionId": "v1"}},
+            tags=("premiere",),
+            rights=RightsPolicyInput.public(
+                commercial_use=True,
+                attribution_required=False,
+                inheritable_scopes=("export",),
+            ),
+            revenue_shares=(RevenueShareInput("platform", 10_000),),
+            idempotency_key="admin-create-export-template",
+        ),
+    )
+    versioned = service.create_template_version(
+        admin_context(),
+        CreateTemplateVersion(
+            template_id=created.resource_id,
+            expected_revision=1,
+            content={"source": {"id": "export-config-1", "versionId": "v2"}},
+            rights=RightsPolicyInput.public(
+                commercial_use=True,
+                attribution_required=False,
+                inheritable_scopes=("export",),
+            ),
+            revenue_shares=(RevenueShareInput("platform", 10_000),),
+            idempotency_key="admin-version-export-template",
+        ),
+    )
+
+    assert versioned.resource_version == 2
+
+
 def test_edit_appends_an_immutable_version_with_idempotency_and_optimistic_locking() -> None:
     service = MarketplaceService(FakeMarketplaceRepository(), clock=lambda: NOW)
     template_id = create_project_template(service)

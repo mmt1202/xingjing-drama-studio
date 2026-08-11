@@ -83,7 +83,7 @@ class MarketplaceService:
         self._ids = ids or uuid7
 
     def create_template(self, context: RequestContext, command: CreateTemplate) -> CommandReceipt:
-        self._require_context(context, TEMPLATE_MANAGE)
+        self._require_any_context(context, frozenset({TEMPLATE_MANAGE, ADMIN_BUSINESS_MANAGE}))
         title = command.title.strip()
         if not title:
             raise InvalidInput("template title is required")
@@ -355,7 +355,7 @@ class MarketplaceService:
         context: RequestContext,
         command: CreateTemplateVersion,
     ) -> CommandReceipt:
-        self._require_context(context, TEMPLATE_MANAGE)
+        self._require_any_context(context, frozenset({TEMPLATE_MANAGE, ADMIN_BUSINESS_MANAGE}))
         if command.expected_revision < 1:
             raise InvalidInput("expected revision must be positive")
         self._validate_price(command.price_minor)
@@ -464,7 +464,7 @@ class MarketplaceService:
         context: RequestContext,
         command: SubmitTemplateReview,
     ) -> CommandReceipt:
-        self._require_context(context, TEMPLATE_MANAGE)
+        self._require_any_context(context, frozenset({TEMPLATE_MANAGE, ADMIN_BUSINESS_MANAGE}))
         statement = command.statement.strip()
         idempotency_key = command.idempotency_key.strip()
         if command.expected_revision < 1 or not statement or not idempotency_key:
