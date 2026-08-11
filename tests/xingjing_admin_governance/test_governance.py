@@ -16,6 +16,7 @@ from server.xingjing_admin_governance import (
     RuleTerm,
     SubjectSnapshot,
 )
+from server.xingjing_admin_governance.runtime import _audit_csv, _filter_records
 
 
 @pytest.fixture
@@ -158,3 +159,27 @@ def test_clean_content_enters_manual_queue_instead_of_being_fixed_to_pass(govern
 
     assert review.status is ReviewStatus.PENDING
     assert service.list_review_queue(manager, status=ReviewStatus.PENDING) == (review,)
+
+
+def test_admin_governance_combines_search_and_multiple_status_filters() -> None:
+    records = [
+        {"id": "review-1", "name": "视频审核", "status": "pending"},
+        {"id": "review-2", "name": "图片审核", "status": "approved"},
+        {"id": "risk-1", "name": "视频风险", "status": "blocked"},
+    ]
+
+    filtered = _filter_records(records, search="视频", status="pending,blocked")
+
+    assert [item["id"] for item in filtered] == ["review-1", "risk-1"]
+
+
+def test_audit_export_serializes_stable_csv_with_evidence() -> None:
+    content = _audit_csv([{
+        "id": "audit-1", "name": "保存权限", "status": "success",
+        "updatedAt": "2026-08-11T10:00:00+00:00",
+        "details": {"actorId": "security-1", "before": {"role": "viewer"}},
+    }])
+
+    assert content.splitlines()[0] == "id,action,result,occurred_at,details_json"
+    assert "audit-1" in content
+    assert "security-1" in content

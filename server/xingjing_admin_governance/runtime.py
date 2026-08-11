@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import inspect
 import json
 import os
@@ -7,11 +8,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+from io import StringIO
 from typing import cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import (
     JSON,
@@ -109,6 +111,19 @@ class SecurityAuditRow(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class SecurityAuditExportRow(Base):
+    __tablename__ = "xingjing_admin_security_audit_exports"
+    export_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    csv_content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ActionPayload(BaseModel):
     action: str
     objectId: str
@@ -160,6 +175,7 @@ def create_production_admin_governance_runtime(
             session.execute(text(
                 "SELECT tenant_id,workspace_id FROM xingjing_admin_governance_commands LIMIT 1"
             ))
+            session.execute(text("SELECT 1 FROM xingjing_admin_security_audit_exports LIMIT 1"))
     except SQLAlchemyError as error:
         engine.dispose()
         raise RuntimeError("XINGJING_GOVERNANCE_MIGRATION_REQUIRED") from error
@@ -182,17 +198,21 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
     def compliance(
         resource: str = Query("reviews"), page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
         require(trusted, "admin.compliance.view")
         with sessions() as session:
             records = _compliance_records(session, resource, trusted)
-        return _page(records, page, page_size)
+        return _page(_filter_records(records, search=search, status=status), page, page_size)
 
     @router.get("/security")
     def security(
         resource: str = Query("audit-logs"), page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         query: str | None = None, request_id: str | None = Query(None, alias="requestId"),
         actor_id: str | None = Query(None, alias="actorId"),
         object_id: str | None = Query(None, alias="objectId"),
@@ -201,10 +221,10 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
         require(trusted, "admin.security.view")
         with sessions() as session:
             records = _security_records(
-                session, resource, trusted, query=query, request_id=request_id,
+                session, resource, trusted, query=query or search, request_id=request_id,
                 actor_id=actor_id, object_id=object_id,
             )
-        return _page(records, page, page_size)
+        return _page(_filter_records(records, search="", status=status), page, page_size)
 
     def act(
         domain: str, payload: ActionPayload, trusted: TrustedWorkspaceContext,
@@ -270,6 +290,29 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
     ) -> dict[str, object]:
         return act("security", payload, trusted, idempotency_key, request)
 
+    @router.get("/security/exports/{export_id}")
+    def download_security_export(
+        export_id: str,
+        trusted: TrustedWorkspaceContext = Depends(resolve),
+    ) -> Response:
+        require(trusted, "admin.security.view")
+        with sessions() as session:
+            export = session.get(SecurityAuditExportRow, export_id)
+            if (
+                export is None
+                or export.tenant_id != trusted.tenant_id
+                or export.workspace_id != trusted.workspace_id
+            ):
+                raise HTTPException(404, detail={"code": "AUDIT_EXPORT_NOT_FOUND"})
+            return Response(
+                export.csv_content.encode("utf-8-sig"),
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Content-Disposition": f'attachment; filename="audit-{export.export_id}.csv"',
+                    "X-Content-SHA256": export.content_digest.removeprefix("sha256:"),
+                },
+            )
+
     return router
 
 
@@ -277,6 +320,25 @@ def _page(records: list[dict[str, object]], page: int, page_size: int) -> dict[s
     start = (page - 1) * page_size
     return {"items": records[start:start + page_size], "page": page,
             "pageSize": page_size, "total": len(records)}
+
+
+def _filter_records(
+    records: list[dict[str, object]], *, search: str, status: str | None,
+) -> list[dict[str, object]]:
+    needle = search.strip().casefold()
+    statuses = {
+        item.strip().casefold() for item in (status or "").split(",") if item.strip()
+    }
+    return [
+        record for record in records
+        if (
+            not needle
+            or needle in str(record.get("id", "")).casefold()
+            or needle in str(record.get("name", "")).casefold()
+            or needle in json.dumps(record.get("details", {}), ensure_ascii=False).casefold()
+        )
+        and (not statuses or str(record.get("status", "")).casefold() in statuses)
+    ]
 
 
 def _record(mapping: dict[str, object]) -> dict[str, object]:
@@ -412,15 +474,21 @@ def _security_records(
         return sorted(records, key=lambda item: str(item["updatedAt"]), reverse=True)
     if resource == "login-logs":
         return _rows(session, """SELECT e.id::text id,
-          COALESCE(u.display_name,'未识别登录尝试') name,lower(e.result) status,
+          COALESCE(u.display_name,'未识别登录尝试') name,
+          COALESCE(g.status,lower(e.result)) status,
           1 version,e.occurred_at updated_at,
           jsonb_build_object('userId',e.user_id,'reason',e.reason,'ip',e.ip_address,
-          'region',e.region,'device',e.device_name,'requestId',e.request_id) details
+          'region',e.region,'device',e.device_name,'requestId',e.request_id,
+          'riskDisposition',g.payload) details
           FROM identity.login_security_events e LEFT JOIN identity.users u ON u.id=e.user_id
+          LEFT JOIN xingjing_admin_governance_objects g
+            ON g.tenant_id=:tenant AND g.workspace_id=:ws AND g.resource='login-risks'
+            AND g.object_id=e.id::text
           WHERE e.user_id IS NULL OR EXISTS (
             SELECT 1 FROM identity.workspace_members wm WHERE wm.user_id=e.user_id
             AND wm.workspace_id::text=:ws AND wm.status<>'REMOVED')
-          ORDER BY e.occurred_at DESC,e.id""", {"ws": trusted.workspace_id})
+          ORDER BY e.occurred_at DESC,e.id""",
+          {"tenant": trusted.tenant_id, "ws": trusted.workspace_id})
     if resource == "approvals":
         return _rows(session, """SELECT approval_id id,action name,status,version,updated_at,
           jsonb_build_object('targetType',target_type,'targetId',target_id,'requestedBy',requested_by,
@@ -486,7 +554,11 @@ def _apply_action(
 
     if payload.action == "执行审批":
         approval = session.get(SensitiveApprovalRow, payload.objectId)
-        if approval is None or approval.workspace_id != trusted.workspace_id:
+        if (
+            approval is None
+            or approval.tenant_id != trusted.tenant_id
+            or approval.workspace_id != trusted.workspace_id
+        ):
             raise HTTPException(404, detail={"code": "APPROVAL_NOT_FOUND"})
         if approval.version != payload.version:
             raise HTTPException(409, detail={"code": "VERSION_CONFLICT"})
@@ -510,8 +582,38 @@ def _apply_action(
         return before, {"id": approval.approval_id, "status": approval.status,
                         "votes": approval.votes, "version": approval.version}
     if payload.action == "标记风险":
-        return {"version": payload.version}, {
-            "id": payload.objectId, "status": "risk_marked", "version": payload.version + 1,
+        key = (trusted.tenant_id, trusted.workspace_id, "login-risks", payload.objectId)
+        current = session.get(GovernanceObjectRow, key)
+        before = {} if current is None else {
+            "status": current.status, "payload": current.payload, "version": current.version,
+        }
+        risk_payload = {
+            **(payload.payload or {}),
+            "reason": payload.reason or "后台登录风险人工标记",
+            "markedBy": trusted.actor_id,
+            "markedAt": now.isoformat(),
+        }
+        if current is None:
+            session.add(GovernanceObjectRow(
+                tenant_id=trusted.tenant_id, workspace_id=trusted.workspace_id,
+                resource="login-risks", object_id=payload.objectId,
+                name=f"登录风险 {payload.objectId}", status="risk_marked",
+                payload=risk_payload, version=1, updated_by=trusted.actor_id,
+                updated_at=now,
+            ))
+            version = 1
+        else:
+            if current.version != payload.version:
+                raise HTTPException(409, detail={"code": "VERSION_CONFLICT"})
+            current.status = "risk_marked"
+            current.payload = risk_payload
+            current.version += 1
+            current.updated_by = trusted.actor_id
+            current.updated_at = now
+            version = current.version
+        return before, {
+            "id": payload.objectId, "status": "risk_marked",
+            "payload": risk_payload, "version": version,
         }
     resources = {
         "保存权限": ("roles", "active"), "发布规则": ("word-rules", "published"),
@@ -536,7 +638,24 @@ def _apply_action(
                                 "version": payload.version + 1}
         return _update_governance_object(session, payload, trusted, resource, status, now)
     if payload.action == "导出审计":
-        return {}, {"id": payload.objectId, "status": "exported", "version": payload.version + 1}
+        records = _security_records(
+            session, "audit-logs", trusted, query=None, request_id=None,
+            actor_id=None, object_id=None,
+        )
+        content = _audit_csv(records)
+        export_id = str(uuid4())
+        digest = "sha256:" + sha256(content.encode("utf-8")).hexdigest()
+        session.add(SecurityAuditExportRow(
+            export_id=export_id, tenant_id=trusted.tenant_id,
+            workspace_id=trusted.workspace_id, requested_by=trusted.actor_id,
+            request_id=trusted.request_id, row_count=len(records),
+            content_digest=digest, csv_content=content, created_at=now,
+        ))
+        return {}, {
+            "id": export_id, "status": "exported", "version": 1,
+            "rowCount": len(records), "contentDigest": digest,
+            "downloadUrl": f"/api/v1/admin/security/exports/{export_id}",
+        }
     raise HTTPException(422, detail={"code": "UNSUPPORTED_ACTION"})
 
 
@@ -570,3 +689,16 @@ def _update_governance_object(
         ))
     return before, {"id": payload.objectId, "status": status,
                     "payload": next_payload, "version": version}
+
+
+def _audit_csv(records: list[dict[str, object]]) -> str:
+    output = StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["id", "action", "result", "occurred_at", "details_json"])
+    for record in records:
+        writer.writerow([
+            record.get("id", ""), record.get("name", ""), record.get("status", ""),
+            record.get("updatedAt", ""),
+            json.dumps(record.get("details", {}), ensure_ascii=False, sort_keys=True),
+        ])
+    return output.getvalue()

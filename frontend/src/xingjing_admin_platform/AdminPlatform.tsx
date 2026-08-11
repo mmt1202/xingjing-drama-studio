@@ -179,7 +179,7 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
       {actionState === "failed" && "操作未完成，服务端未确认写入。请重新读取后再试。"}
       {actionState === "conflict" && <><strong>数据已被其他管理员更新</strong><button onClick={() => { setActionState("idle"); void load(); }}>读取最新版本</button></>}
     </section>}
-    {downloadUrl && <section className="xj-admin-notice"><strong>财务导出已生成并持久化</strong><button onClick={() => void downloadExport()}>下载 CSV</button></section>}
+    {downloadUrl && <section className="xj-admin-notice"><strong>导出文件已由服务端生成并持久化</strong><button onClick={() => void downloadExport()}>下载 CSV</button></section>}
     {route.resource === "dashboard" && visibleItems.length ? <section className="xj-admin-metrics" aria-label="实时运营指标">{visibleItems.map((item) => <article key={item.id}><p>{item.name}</p><strong>{metricValue(item)}</strong><span>{item.status} · {item.updatedAt}</span></article>)}</section> : !visibleItems.length ? <section className="xj-admin-empty"><h2>{items?.length ? "没有符合筛选条件的对象" : `当前数据范围内没有${route.emptyLabel}`}</h2><p>{items?.length ? "清除搜索词后可恢复完整列表。" : "可以调整服务端筛选条件或稍后重新读取，不展示演示数据。"}</p></section> :
       <section className="xj-admin-table-wrap"><table><thead><tr><th>对象</th><th>状态</th><th>业务明细</th><th>敏感信息</th><th>版本</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => <tr key={item.id}>
         <td><strong>{item.name}</strong><small>{item.id}</small></td><td><span className={`xj-admin-status is-${item.status}`}>{item.status}</span></td>
