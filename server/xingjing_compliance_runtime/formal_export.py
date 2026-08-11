@@ -9,6 +9,7 @@ import shutil
 import zipfile
 from dataclasses import asdict
 from pathlib import Path
+from uuid import uuid4
 from xml.etree import ElementTree
 
 from sqlalchemy import select
@@ -180,17 +181,20 @@ class LocalFormalExportExecutor:
         destination_dir.mkdir(parents=True, exist_ok=True)
         extension = _FORMAT_EXTENSIONS[output_format]
         destination = destination_dir / f"formal-delivery.{extension}"
-        temporary = destination.with_suffix(".tmp")
-        self._write_artifact(
-            output_format=output_format,
-            destination=temporary,
-            source=source,
-            version=version,
-            timeline=timeline,
-            manifest=manifest,
-            evidence=evidence,
-        )
-        os.replace(temporary, destination)
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+        try:
+            self._write_artifact(
+                output_format=output_format,
+                destination=temporary,
+                source=source,
+                version=version,
+                timeline=timeline,
+                manifest=manifest,
+                evidence=evidence,
+            )
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
         output_digest, output_size = _file_digest(destination)
         if output_format == "mp4" and (output_digest != source_digest or output_size != source_size):
             destination.unlink(missing_ok=True)
@@ -213,10 +217,16 @@ class LocalFormalExportExecutor:
                 "size_bytes": output_size,
             },
         }
-        (destination_dir / "manifest.json").write_text(
-            json.dumps(manifest_payload, ensure_ascii=False, sort_keys=True, default=str, indent=2),
-            encoding="utf-8",
-        )
+        manifest_path = destination_dir / "manifest.json"
+        manifest_temporary = destination_dir / f".manifest.{uuid4().hex}.tmp"
+        try:
+            manifest_temporary.write_text(
+                json.dumps(manifest_payload, ensure_ascii=False, sort_keys=True, default=str, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(manifest_temporary, manifest_path)
+        finally:
+            manifest_temporary.unlink(missing_ok=True)
         object_key = destination.relative_to(self._export_root).as_posix()
         return ExportArtifact(
             format=output_format,
