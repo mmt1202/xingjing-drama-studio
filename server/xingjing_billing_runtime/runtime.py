@@ -7,7 +7,7 @@ import json
 import os
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from csv import DictWriter
 from dataclasses import dataclass
@@ -21,14 +21,31 @@ from sqlalchemy import select
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from server.xingjing_audio_persistence.models import audio_billing_holds, audio_billing_journals
+from server.xingjing_audio_persistence.models import (
+    audio_billing_holds,
+    audio_billing_journals,
+)
+from server.xingjing_audio_persistence.models import (
+    generation_tasks as audio_generation_tasks,
+)
 from server.xingjing_billing_persistence import BillingFinanceRepository
 from server.xingjing_billing_persistence.models import BillingOrderRow
-from server.xingjing_editing_persistence.models import EditingRenderBillingHoldRow, EditingRenderBillingJournalRow
+from server.xingjing_editing_persistence.models import (
+    EditingAuditRow,
+    EditingRenderBillingHoldRow,
+    EditingRenderBillingJournalRow,
+    RenderTaskRow,
+)
+from server.xingjing_generation_persistence.repository import (
+    AuditRow as GenerationAuditRow,
+)
 from server.xingjing_generation_persistence.repository import (
     GenerationBillingAccountRow,
     GenerationBillingHoldRow,
     GenerationBillingJournalRow,
+)
+from server.xingjing_generation_persistence.repository import (
+    TaskRow as GenerationTaskRow,
 )
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
@@ -422,6 +439,44 @@ class BillingRuntime:
                     )
                 )
             ).all()
+            generation_tasks = (
+                await session.scalars(
+                    select(GenerationTaskRow).where(GenerationTaskRow.workspace_id == context.workspace_id)
+                )
+            ).all()
+            generation_audits = (
+                await session.scalars(
+                    select(GenerationAuditRow).where(GenerationAuditRow.workspace_id == context.workspace_id)
+                )
+            ).all()
+            audio_tasks = (
+                (
+                    await session.execute(
+                        select(audio_generation_tasks).where(
+                            audio_generation_tasks.c.tenant_id == context.tenant_id,
+                            audio_generation_tasks.c.workspace_id == context.workspace_id,
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            editing_tasks = (
+                await session.scalars(
+                    select(RenderTaskRow).where(
+                        RenderTaskRow.tenant_id == context.tenant_id,
+                        RenderTaskRow.workspace_id == context.workspace_id,
+                    )
+                )
+            ).all()
+            editing_audits = (
+                await session.scalars(
+                    select(EditingAuditRow).where(
+                        EditingAuditRow.tenant_id == context.tenant_id,
+                        EditingAuditRow.workspace_id == context.workspace_id,
+                    )
+                )
+            ).all()
         account = {
             "workspace_id": context.workspace_id,
             "currency": "CNY" if account_row is None else account_row.currency,
@@ -435,6 +490,14 @@ class BillingRuntime:
             [_hold(row, source="generation") for row in generation_holds]
             + [_mapping_hold(row, source="audio") for row in audio_holds]
             + [_hold(row, source="editing") for row in editing_holds]
+        )
+        _enrich_cost_dimensions(
+            holds,
+            generation_tasks=generation_tasks,
+            generation_audits=generation_audits,
+            audio_tasks=audio_tasks,
+            editing_tasks=editing_tasks,
+            editing_audits=editing_audits,
         )
         journals = (
             [_journal(row, source="generation") for row in generation_journals]
@@ -578,19 +641,85 @@ def _integer(value: object) -> int:
 
 
 def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str, object]]:
-    projects: defaultdict[str, dict[str, int]] = defaultdict(
+    dimensions: defaultdict[tuple[str, str, str, str], dict[str, int]] = defaultdict(
         lambda: {"estimated_minor": 0, "actual_minor": 0, "released_minor": 0, "task_count": 0}
     )
     for hold in holds:
-        project = projects[str(hold["project_id"])]
-        project["estimated_minor"] += _integer(hold["estimated_minor"])
-        project["actual_minor"] += _integer(hold["actual_minor"])
-        project["released_minor"] += _integer(hold["released_minor"])
-        project["task_count"] += 1
+        key = (
+            str(hold["project_id"]),
+            str(hold.get("source") or "unknown"),
+            str(hold.get("model_id") or "unattributed"),
+            str(hold.get("actor_id") or "unattributed"),
+        )
+        values = dimensions[key]
+        values["estimated_minor"] += _integer(hold["estimated_minor"])
+        values["actual_minor"] += _integer(hold["actual_minor"])
+        values["released_minor"] += _integer(hold["released_minor"])
+        values["task_count"] += 1
     return [
-        {"id": project_id, "project_id": project_id, "currency": currency, **values}
-        for project_id, values in sorted(projects.items())
+        {
+            "id": ":".join(key),
+            "project_id": key[0],
+            "source": key[1],
+            "model_id": None if key[2] == "unattributed" else key[2],
+            "actor_id": None if key[3] == "unattributed" else key[3],
+            "currency": currency,
+            **values,
+        }
+        for key, values in sorted(dimensions.items())
     ]
+
+
+def _enrich_cost_dimensions(
+    holds: list[dict[str, object]],
+    *,
+    generation_tasks: Sequence[GenerationTaskRow],
+    generation_audits: Sequence[GenerationAuditRow],
+    audio_tasks: Sequence[RowMapping],
+    editing_tasks: Sequence[RenderTaskRow],
+    editing_audits: Sequence[EditingAuditRow],
+) -> None:
+    generation_actors: dict[str, str] = {}
+    for audit in sorted(generation_audits, key=lambda item: item.occurred_at):
+        actor = audit.payload.get("actor_id")
+        action = audit.payload.get("action")
+        if action == "generation.provider_submitted" and isinstance(actor, str) and not actor.startswith("provider:"):
+            generation_actors.setdefault(audit.task_id, actor)
+    generation_dimensions: dict[str, tuple[str | None, str | None]] = {}
+    for task in generation_tasks:
+        snapshot = task.snapshot
+        request_value = snapshot.get("request")
+        request: dict[str, Any] = request_value if isinstance(request_value, dict) else {}
+        model_id = snapshot.get("resolved_model_id") or request.get("requested_model_id")
+        generation_dimensions[task.task_id] = (
+            str(model_id) if isinstance(model_id, str) and model_id else None,
+            generation_actors.get(task.task_id),
+        )
+
+    audio_dimensions = {
+        str(task["id"]): (
+            str(task["provider_name"]) if task.get("provider_name") else None,
+            str(task["created_by"]),
+        )
+        for task in audio_tasks
+    }
+    editing_actors: dict[str, str] = {}
+    for audit in sorted(editing_audits, key=lambda item: item.occurred_at):
+        if audit.object_type == "render_task":
+            editing_actors.setdefault(audit.object_id, audit.actor_id)
+    editing_dimensions = {
+        task.task_id: ("editing-renderer", editing_actors.get(task.task_id)) for task in editing_tasks
+    }
+
+    sources = {
+        "generation": generation_dimensions,
+        "audio": audio_dimensions,
+        "editing": editing_dimensions,
+    }
+    for hold in holds:
+        dimensions = sources.get(str(hold.get("source")), {}).get(str(hold.get("task_id")))
+        if dimensions is not None:
+            hold["model_id"], hold["actor_id"] = dimensions
 
 
 def _csv_bytes(records: list[dict[str, object]]) -> bytes:
