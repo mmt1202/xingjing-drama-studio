@@ -1,0 +1,32 @@
+export function commercialOrderFixture(version = 7) {
+  return {
+    id: "order-1",
+    owner_workspace_id: "workspace-owner",
+    title: "品牌宣传片",
+    requirements: "交付可验收的成片",
+    budget_minor: 10_000,
+    currency: "CNY",
+    milestones: [{
+      id: "milestone-1",
+      title: "成片交付",
+      amount_minor: 10_000,
+      acceptance_criteria: "客户书面确认",
+      due_at: "2026-07-20T08:00:00+00:00",
+      status: "pending",
+      version: 1,
+    }],
+    status: "published",
+    version,
+    created_at: "2026-07-16T08:00:00+00:00",
+    updated_at: "2026-07-16T08:00:00+00:00",
+    contractor_workspace_id: null,
+    accepted_quote_id: null,
+    active_contract_version_id: null,
+    quotes: [],
+    contract_versions: [],
+    deliveries: [],
+    acceptance_records: [],
+    settlements: [],
+    disputes: [],
+  } as const;
+}

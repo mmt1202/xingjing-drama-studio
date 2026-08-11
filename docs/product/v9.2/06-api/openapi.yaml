@@ -1,0 +1,1048 @@
+openapi: 3.1.0
+info:
+  title: Xingjing Drama Studio API
+  version: 9.2.0-spec.1
+  description: 星镜剧创 v9.2 四端 Web 开发契约。所有租户接口均需服务端校验工作区和对象归属。
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api/v1
+tags:
+  - name: Session
+    description: 会话、当前工作区和能力上下文
+  - name: Account
+    description: 账号、安全与偏好
+  - name: Workspace
+    description: 工作区、成员、角色和企业资料
+  - name: Project
+    description: 项目、剧集、状态与项目配置
+  - name: Script
+    description: 剧本、解析、改写与版本
+  - name: Asset
+    description: 角色、场景、道具和主体资产
+  - name: Shot
+    description: 分镜、故事板和提示词
+  - name: Generation
+    description: 长任务、模型调用和生成结果
+  - name: Audio
+    description: 配音、字幕、音效和对口型
+  - name: Timeline
+    description: 时间线、成片和渲染
+  - name: Review
+    description: 团队和客户审片
+  - name: Export
+    description: 导出任务和发布包
+  - name: Billing
+    description: 算力账户、流水和成本
+  - name: Compliance
+    description: 合规检查、授权和风险处置
+  - name: Template
+    description: 模板创建、审核和应用
+  - name: Market
+    description: 市场与 Fork
+  - name: Commercial
+    description: 商单生产、验收和结算
+  - name: Analytics
+    description: 业务指标和数据看板
+  - name: Admin
+    description: 平台运营后台聚合接口
+paths:
+  /session/context:
+    get:
+      tags: [Session]
+      summary: get Session Context
+      operationId: getSessionContext
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: 当前用户、工作区、角色和功能开关
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionContextResponse'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+  /account/profile:
+    get:
+      tags: [Account]
+      summary: get Account Profile
+      operationId: getAccountProfile
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+  /account/preferences:
+    get:
+      tags: [Account]
+      summary: get Account Preferences
+      operationId: getAccountPreferences
+      security: [{bearerAuth: []}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+    put:
+      tags: [Account]
+      summary: update Account Preferences
+      operationId: updateAccountPreferences
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/IfMatch'}]
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /auth/actions:
+    post:
+      tags: [Account]
+      summary: execute Auth Action
+      operationId: executeAuthAction
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [changePassword, revokeSession, enableMfa, disableMfa, requestAccountCancel, confirmAccountCancel]}
+                payload: {type: object, additionalProperties: true}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workspaces/{workspaceId}:
+    get:
+      tags: [Workspace]
+      summary: get Workspace
+      operationId: getWorkspace
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /workspaces/{workspaceId}/overview:
+    get:
+      tags: [Workspace]
+      summary: get Workspace Overview
+      operationId: getWorkspaceOverview
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /workspaces/{workspaceId}/actions:
+    post:
+      tags: [Workspace]
+      summary: execute Workspace Action
+      operationId: executeWorkspaceAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workspaces/{workspaceId}/members:
+    get:
+      tags: [Workspace]
+      summary: list Workspace Members
+      operationId: listWorkspaceMembers
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Workspace]
+      summary: invite Workspace Member
+      operationId: inviteWorkspaceMember
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /workspaces/{workspaceId}/roles/{roleId}:
+    put:
+      tags: [Workspace]
+      summary: update Workspace Role
+      operationId: updateWorkspaceRole
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/RoleId'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workspaces/{workspaceId}/enterprise-profile:
+    get:
+      tags: [Workspace]
+      summary: get Enterprise Profile
+      operationId: getEnterpriseProfile
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+    put:
+      tags: [Workspace]
+      summary: update Enterprise Profile
+      operationId: updateEnterpriseProfile
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workspaces/{workspaceId}/review-links:
+    get:
+      tags: [Review]
+      summary: list Workspace Review Links
+      operationId: listWorkspaceReviewLinks
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Review]
+      summary: create Workspace Review Link
+      operationId: createWorkspaceReviewLink
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /projects:
+    get:
+      tags: [Project]
+      summary: list Projects
+      operationId: listProjects
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceHeader'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Project]
+      summary: create Project
+      operationId: createProject
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceHeader'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateProjectRequest'}
+      responses:
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+        '400': {$ref: '#/components/responses/ValidationError'}
+  /projects/{projectId}:
+    get:
+      tags: [Project]
+      summary: get Project
+      operationId: getProject
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Project]
+      summary: update Project
+      operationId: updateProject
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /projects/{projectId}/actions:
+    post:
+      tags: [Project]
+      summary: execute Project Action
+      operationId: executeProjectAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /projects/{projectId}/scripts:
+    get:
+      tags: [Script]
+      summary: list Project Scripts
+      operationId: listProjectScripts
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Script]
+      summary: create Project Script
+      operationId: createProjectScript
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/scripts/actions:
+    post:
+      tags: [Script]
+      summary: execute Script Action
+      operationId: executeScriptAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /projects/{projectId}/assets:
+    get:
+      tags: [Asset]
+      summary: list Project Assets
+      operationId: listProjectAssets
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Asset]
+      summary: create Project Asset
+      operationId: createProjectAsset
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/assets/actions:
+    post:
+      tags: [Asset]
+      summary: execute Asset Action
+      operationId: executeAssetAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/shots:
+    get:
+      tags: [Shot]
+      summary: list Project Shots
+      operationId: listProjectShots
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Shot]
+      summary: create Project Shot
+      operationId: createProjectShot
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/shots/actions:
+    post:
+      tags: [Shot]
+      summary: execute Shot Action
+      operationId: executeShotAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+  /generation-tasks:
+    get:
+      tags: [Generation]
+      summary: list Generation Tasks
+      operationId: listGenerationTasks
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceHeader'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Generation]
+      summary: create Generation Task
+      operationId: createGenerationTask
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceHeader'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateGenerationTaskRequest'}
+      responses:
+        '202':
+          description: 任务已持久化并完成算力冻结
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TaskResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /generation-tasks/{taskId}:
+    get:
+      tags: [Generation]
+      summary: get Generation Task
+      operationId: getGenerationTask
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/TaskId'}]
+      responses:
+        '200':
+          description: 任务详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TaskResponse'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /generation-tasks/{taskId}/actions:
+    post:
+      tags: [Generation]
+      summary: execute Generation Task Action
+      operationId: executeGenerationTaskAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/TaskId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [cancel, retry, selectResult]}
+                payload: {type: object, additionalProperties: true}
+      responses:
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /projects/{projectId}/audio-tracks:
+    get:
+      tags: [Audio]
+      summary: list Project Audio Tracks
+      operationId: listProjectAudioTracks
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+  /projects/{projectId}/audio-actions:
+    post:
+      tags: [Audio]
+      summary: execute Audio Action
+      operationId: executeAudioAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/timelines:
+    get:
+      tags: [Timeline]
+      summary: list Project Timelines
+      operationId: listProjectTimelines
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Timeline]
+      summary: create Timeline Version
+      operationId: createTimelineVersion
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/render-tasks:
+    post:
+      tags: [Timeline]
+      summary: create Render Task
+      operationId: createRenderTask
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/reviews:
+    get:
+      tags: [Review]
+      summary: list Project Reviews
+      operationId: listProjectReviews
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+  /projects/{projectId}/review-links:
+    post:
+      tags: [Review]
+      summary: create Review Link
+      operationId: createReviewLink
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /review-links/{token}/context:
+    get:
+      tags: [Review]
+      summary: get Review Link Context
+      operationId: getReviewLinkContext
+      security: [{reviewToken: []}]
+      parameters: [{$ref: '#/components/parameters/ReviewToken'}]
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '410': {$ref: '#/components/responses/Gone'}
+  /review-links/{token}/actions:
+    post:
+      tags: [Review]
+      summary: execute Review Action
+      operationId: executeReviewAction
+      security: [{reviewToken: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ReviewToken'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [verify, comment, approve, reject]}
+                payload: {type: object, additionalProperties: true}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /projects/{projectId}/exports:
+    get:
+      tags: [Export]
+      summary: list Project Exports
+      operationId: listProjectExports
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Export]
+      summary: create Export Task
+      operationId: createExportTask
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /workspaces/{workspaceId}/credit-account:
+    get:
+      tags: [Billing]
+      summary: get Credit Account
+      operationId: getCreditAccount
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /workspaces/{workspaceId}/credit-transactions:
+    get:
+      tags: [Billing]
+      summary: list Credit Transactions
+      operationId: listCreditTransactions
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/WorkspaceId'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+  /workspaces/{workspaceId}/billing:
+    get:
+      tags: [Billing]
+      summary: get Workspace Billing Summary
+      operationId: getWorkspaceBillingSummary
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /workspaces/{workspaceId}/costs:
+    get:
+      tags: [Billing]
+      summary: get Workspace Cost Breakdown
+      operationId: getWorkspaceCostBreakdown
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/compliance:
+    get:
+      tags: [Compliance]
+      summary: get Project Compliance
+      operationId: getProjectCompliance
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/ProjectId'}]
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /projects/{projectId}/compliance/actions:
+    post:
+      tags: [Compliance]
+      summary: execute Compliance Action
+      operationId: executeComplianceAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/ProjectId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /templates:
+    get:
+      tags: [Template]
+      summary: list Templates
+      operationId: listTemplates
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+    post:
+      tags: [Template]
+      summary: create Template
+      operationId: createTemplate
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '201': {$ref: '#/components/responses/ObjectResponse'}
+  /templates/actions:
+    post:
+      tags: [Template]
+      summary: execute Template Action
+      operationId: executeTemplateAction
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /market/items:
+    get:
+      tags: [Market]
+      summary: list Market Items
+      operationId: listMarketItems
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+  /forks:
+    post:
+      tags: [Market]
+      summary: create Fork
+      operationId: createFork
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/EntityRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /commercial-orders:
+    get:
+      tags: [Commercial]
+      summary: list Commercial Orders
+      operationId: listCommercialOrders
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ListResponse'}
+  /commercial-orders/{orderId}/actions:
+    post:
+      tags: [Commercial]
+      summary: execute Commercial Order Action
+      operationId: executeCommercialOrderAction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/OrderId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /analytics/dashboards/{dashboardKey}:
+    get:
+      tags: [Analytics]
+      summary: get Analytics Dashboard
+      operationId: getAnalyticsDashboard
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: dashboardKey
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+  /admin/{resource}:
+    get:
+      tags: [Admin]
+      summary: list Admin Resources
+      operationId: listAdminResources
+      security: [{adminSession: []}]
+      parameters:
+        - name: resource
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [models, finance, compliance, commercial-orders, operations, security, support-tickets, notifications, api-clients, operations-config, business-objects]
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/PageToken'}
+      responses:
+        '200': {$ref: '#/components/responses/ListResponse'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /admin/{resource}/actions:
+    post:
+      tags: [Admin]
+      summary: execute Admin Resource Action
+      operationId: executeAdminResourceAction
+      security: [{adminSession: []}]
+      parameters:
+        - name: resource
+          in: path
+          required: true
+          schema:
+            type: string
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ActionRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/ObjectResponse'}
+        '202': {$ref: '#/components/responses/ObjectResponse'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: xj_admin_session
+    reviewToken:
+      type: apiKey
+      in: cookie
+      name: xj_review_session
+  parameters:
+    WorkspaceHeader:
+      name: X-Workspace-Id
+      in: header
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    RoleId:
+      name: roleId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Uuid'}
+    ReviewToken:
+      name: token
+      in: path
+      required: true
+      schema: {type: string, minLength: 32, maxLength: 256}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 16, maxLength: 128}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: {type: string, pattern: '^"[0-9]+"$'}
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    PageToken:
+      name: pageToken
+      in: query
+      required: false
+      schema: {type: string, maxLength: 2048}
+  requestBodies:
+    ActionRequest:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ActionRequest'}
+    EntityRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+  responses:
+    ObjectResponse:
+      description: 单对象成功响应
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ObjectResponse'}
+    ListResponse:
+      description: 游标分页列表响应
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ListResponse'}
+    ValidationError:
+      description: 请求字段不合法
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Unauthenticated:
+      description: 未认证
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Forbidden:
+      description: 权限不足
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    NotFound:
+      description: 资源不存在或不可见
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Gone:
+      description: 资源已撤销或永久不可用
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Conflict:
+      description: 版本、状态、计费、幂等或合规冲突
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+  schemas:
+    Uuid:
+      type: string
+      format: uuid
+    Meta:
+      type: object
+      required: [requestId]
+      properties:
+        requestId: {$ref: '#/components/schemas/Uuid'}
+        serverTime: {type: string, format: date-time}
+        page:
+          type: object
+          properties:
+            size: {type: integer}
+            nextToken: {type: [string, 'null']}
+    ObjectResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: object, additionalProperties: true}
+        meta: {$ref: '#/components/schemas/Meta'}
+    ListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: {type: object, additionalProperties: true}
+        meta: {$ref: '#/components/schemas/Meta'}
+    ErrorDetail:
+      type: object
+      properties:
+        field: {type: string}
+        reason: {type: string}
+    ErrorResponse:
+      type: object
+      required: [error, meta]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            retryable: {type: boolean}
+            details:
+              type: array
+              items: {$ref: '#/components/schemas/ErrorDetail'}
+        meta: {$ref: '#/components/schemas/Meta'}
+    SessionContextResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [user, workspaces]
+          properties:
+            user: {type: object, additionalProperties: true}
+            activeWorkspace: {type: [object, 'null'], additionalProperties: true}
+            workspaces: {type: array, items: {type: object, additionalProperties: true}}
+            permissions: {type: array, items: {type: string}}
+            featureFlags: {type: object, additionalProperties: true}
+        meta: {$ref: '#/components/schemas/Meta'}
+    ActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: {type: string, minLength: 1, maxLength: 80}
+        targetId: {$ref: '#/components/schemas/Uuid'}
+        payload: {type: object, additionalProperties: true}
+    CreateProjectRequest:
+      type: object
+      required: [name, projectType, narrativeMode, targetPlatforms, aspectRatio, qualityMode]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        projectType: {type: string, enum: [aiComicDrama, aiLiveAction, narratedDrama, motionComic, brandAd]}
+        narrativeMode: {type: string, enum: [narration, dialogue, mixed]}
+        targetPlatforms: {type: array, minItems: 1, uniqueItems: true, items: {type: string}}
+        aspectRatio: {type: string, enum: ['9:16', '16:9', '1:1', '4:3', '3:4']}
+        stylePreset: {type: string, maxLength: 80}
+        qualityMode: {type: string, enum: [draft, standard, premium]}
+        budgetCap: {type: integer, format: int64, minimum: 0}
+        episodeCount: {type: integer, minimum: 1, maximum: 500}
+        durationTargetMs: {type: integer, format: int64, minimum: 1000}
+    CreateGenerationTaskRequest:
+      type: object
+      required: [projectId, taskType, input, qualityMode]
+      properties:
+        projectId: {$ref: '#/components/schemas/Uuid'}
+        episodeId: {$ref: '#/components/schemas/Uuid'}
+        shotId: {$ref: '#/components/schemas/Uuid'}
+        taskType:
+          type: string
+          enum: [scriptAnalyze, directorGenerate, subjectExtract, imageGenerate, videoGenerate, tts, subtitle, lipSync, enhance, render, export, complianceCheck]
+        input: {type: object, additionalProperties: true}
+        qualityMode: {type: string, enum: [draft, standard, premium]}
+        budgetLimit: {type: integer, format: int64, minimum: 0}
+        preferredModelId: {$ref: '#/components/schemas/Uuid'}
+    TaskResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [taskId, status, progress]
+          properties:
+            taskId: {$ref: '#/components/schemas/Uuid'}
+            status: {type: string, enum: [pending, queued, running, success, failed, retrying, cancelled, timeout, settlementPending]}
+            progress: {type: integer, minimum: 0, maximum: 100}
+            estimatedCredit: {type: integer, format: int64, minimum: 0}
+            actualCredit: {type: integer, format: int64, minimum: 0}
+            failureCode: {type: [string, 'null']}
+        meta: {$ref: '#/components/schemas/Meta'}

@@ -1,0 +1,29 @@
+server:
+  port: ${PLATFORM_PORT:8080}
+
+spring:
+  application:
+    name: xingjing-platform
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://127.0.0.1:5432/xingjing?currentSchema=identity,public}
+    username: ${DATABASE_USER:xingjing}
+    password: ${DATABASE_PASSWORD:xingjing-local}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    create-schemas: true
+    default-schema: identity
+    schemas: identity
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true

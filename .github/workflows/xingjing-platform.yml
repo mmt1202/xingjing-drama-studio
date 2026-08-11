@@ -1,0 +1,39 @@
+name: Xingjing Platform
+
+on:
+  pull_request:
+  push:
+    branches:
+      - xingjing/platform-main
+
+permissions:
+  contents: read
+
+jobs:
+  product-baseline:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify v9.2 product baseline
+        shell: pwsh
+        run: .\scripts\Test-ProductBaseline.ps1
+
+  platform-java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c3 # v4.4.2
+      - name: Run platform tests
+        run: ./gradlew test
+      - name: Build platform application
+        run: ./gradlew :platform-services:platform-app:bootJar
+      - name: Upload platform application
+        uses: actions/upload-artifact@v4
+        with:
+          name: xingjing-platform-app
+          path: platform-services/platform-app/build/libs/*.jar

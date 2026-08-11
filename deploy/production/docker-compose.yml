@@ -1,0 +1,209 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: arcreel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: arcreel
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./pgdata:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arcreel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  identity:
+    image: ghcr.io/arcreel/xingjing-platform-identity:latest
+    build:
+      context: ../..
+      dockerfile: platform-services/platform-app/Dockerfile
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/arcreel?currentSchema=identity,public
+      DATABASE_USER: arcreel
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      PLATFORM_PORT: 8080
+      XINGJING_IDENTITY_NOTIFICATION_URL: http://arcreel:1241/api/v1/internal/identity/notifications
+      XINGJING_IDENTITY_NOTIFICATION_TOKEN: ${XINGJING_IDENTITY_NOTIFICATION_TOKEN:?请配置身份通知服务令牌}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/actuator/health/readiness | grep -q '\"status\":\"UP\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  arcreel:
+    image: ghcr.io/arcreel/arcreel:latest
+    ports:
+      - "1241:1241"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      # M03/M04/M05 use SQLAlchemy's synchronous repository boundary against
+      # the same PostgreSQL database; they are not separate databases.
+      XINGJING_CONTENT_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_ASSET_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_STORYBOARD_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_TEAM_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_DYNAMIC_PERMISSIONS_REQUIRED: "true"
+      XINGJING_TASK_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_TASK_WORKER_TOKEN: ${XINGJING_TASK_WORKER_TOKEN:?请配置统一任务 Worker 服务令牌}
+      XINGJING_MAX_REQUEST_BODY_BYTES: ${XINGJING_MAX_REQUEST_BODY_BYTES:-16777216}
+      XINGJING_RATE_LIMIT_AUTH_PER_MINUTE: ${XINGJING_RATE_LIMIT_AUTH_PER_MINUTE:-20}
+      XINGJING_RATE_LIMIT_UPLOAD_PER_MINUTE: ${XINGJING_RATE_LIMIT_UPLOAD_PER_MINUTE:-60}
+      XINGJING_RATE_LIMIT_TASK_PER_MINUTE: ${XINGJING_RATE_LIMIT_TASK_PER_MINUTE:-120}
+      XINGJING_RATE_LIMIT_ADMIN_PER_MINUTE: ${XINGJING_RATE_LIMIT_ADMIN_PER_MINUTE:-60}
+      XINGJING_RATE_LIMIT_API_PER_MINUTE: ${XINGJING_RATE_LIMIT_API_PER_MINUTE:-600}
+      PLATFORM_IDENTITY_URL: http://identity:8080
+      XINGJING_IDENTITY_NOTIFICATION_TOKEN: ${XINGJING_IDENTITY_NOTIFICATION_TOKEN:?请配置身份通知服务令牌}
+      XINGJING_COMMERCIAL_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_ADMIN_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_FINANCE_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_GOVERNANCE_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_OPERATIONS_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_ASSET_EVIDENCE_ROOT: /app/projects/xingjing-asset-evidence
+      XINGJING_STORYBOARD_STORAGE_ROOT: /app/projects/xingjing-storyboard-storage
+      # M06 persists task state in the async platform database and stores only
+      # verified provider callback artifacts below the mounted projects volume.
+      XINGJING_GENERATION_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_MODEL_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_MODEL_CONTROL_TOKEN: ${XINGJING_MODEL_CONTROL_TOKEN:?请配置模型健康与证据服务令牌}
+      XINGJING_CREDENTIAL_ENCRYPTION_KEY: ${XINGJING_CREDENTIAL_ENCRYPTION_KEY:?请配置 32 字节 URL-safe Base64 凭证加密密钥}
+      XINGJING_M06_ARTIFACT_ROOT: /app/projects/xingjing-generation-artifacts
+      XINGJING_M06_PROVIDER_PROJECT_ROOT: /app/projects
+      XINGJING_M06_PROVIDER_ID: ${XINGJING_M06_PROVIDER_ID:?set XINGJING_M06_PROVIDER_ID}
+      XINGJING_M06_PROVIDER_MODEL_ID: ${XINGJING_M06_PROVIDER_MODEL_ID:?set XINGJING_M06_PROVIDER_MODEL_ID}
+      XINGJING_M06_PROVIDER_SUBMIT_URL: ${XINGJING_M06_PROVIDER_SUBMIT_URL:?set XINGJING_M06_PROVIDER_SUBMIT_URL}
+      XINGJING_M06_PROVIDER_CANCEL_URL: ${XINGJING_M06_PROVIDER_CANCEL_URL:?set XINGJING_M06_PROVIDER_CANCEL_URL}
+      XINGJING_M06_PROVIDER_TOKEN: ${XINGJING_M06_PROVIDER_TOKEN:?set XINGJING_M06_PROVIDER_TOKEN}
+      XINGJING_M06_PROVIDER_CALLBACK_SECRET: ${XINGJING_M06_PROVIDER_CALLBACK_SECRET:?set XINGJING_M06_PROVIDER_CALLBACK_SECRET}
+      XINGJING_M06_ESTIMATED_COST_MINOR: ${XINGJING_M06_ESTIMATED_COST_MINOR:?set XINGJING_M06_ESTIMATED_COST_MINOR}
+      XINGJING_M06_BILLING_CURRENCY: ${XINGJING_M06_BILLING_CURRENCY:-CNY}
+      XINGJING_M06_PRICING_VERSION: ${XINGJING_M06_PRICING_VERSION:?set XINGJING_M06_PRICING_VERSION}
+      XINGJING_M06_MAX_ACTIVE_TASKS: ${XINGJING_M06_MAX_ACTIVE_TASKS:-20}
+      XINGJING_M06_BILLING_CALLBACK_SECRET: ${XINGJING_M06_BILLING_CALLBACK_SECRET:?set XINGJING_M06_BILLING_CALLBACK_SECRET}
+      XINGJING_M06_PROVIDER_RECOVERY_SECRET: ${XINGJING_M06_PROVIDER_RECOVERY_SECRET:?set XINGJING_M06_PROVIDER_RECOVERY_SECRET}
+      XINGJING_M06_MODEL_CATALOG_JSON: ${XINGJING_M06_MODEL_CATALOG_JSON:?set XINGJING_M06_MODEL_CATALOG_JSON}
+      # M07 uses a PostgreSQL task store and imports Provider output from the
+      # same mounted projects volume into a scoped durable artifact root.
+      XINGJING_AUDIO_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_M07_ARTIFACT_ROOT: /app/projects/xingjing-audio-artifacts
+      XINGJING_M07_PROVIDER_PROJECT_ROOT: /app/projects
+      XINGJING_M07_PROVIDER_ID: ${XINGJING_M07_PROVIDER_ID:?请配置正式音频媒体 Provider ID}
+      XINGJING_M07_PROVIDER_SUBMIT_URL: ${XINGJING_M07_PROVIDER_SUBMIT_URL:?请配置正式音频媒体 Provider 提交地址}
+      XINGJING_M07_PROVIDER_CHECK_URL: ${XINGJING_M07_PROVIDER_CHECK_URL:?请配置正式对口型检测地址}
+      XINGJING_M07_PROVIDER_CANCEL_URL: ${XINGJING_M07_PROVIDER_CANCEL_URL:?请配置正式音频媒体 Provider 取消地址}
+      XINGJING_M07_PROVIDER_TOKEN: ${XINGJING_M07_PROVIDER_TOKEN:?请配置正式音频媒体 Provider 令牌}
+      XINGJING_M07_PROVIDER_CALLBACK_SECRET: ${XINGJING_M07_PROVIDER_CALLBACK_SECRET:?请配置 M07 Provider 回调签名密钥}
+      XINGJING_M07_TASK_TIMEOUT_SECONDS: ${XINGJING_M07_TASK_TIMEOUT_SECONDS:-21600}
+      XINGJING_M07_BILLING_CURRENCY: ${XINGJING_M07_BILLING_CURRENCY:-CNY}
+      XINGJING_M07_PRICING_VERSION: ${XINGJING_M07_PRICING_VERSION:?请配置 M07 计价版本}
+      XINGJING_M07_ESTIMATED_COSTS_JSON: ${XINGJING_M07_ESTIMATED_COSTS_JSON:?请配置 M07 各任务类型预估费用}
+      # M08 accepts only authenticated external renderer callbacks and verifies
+      # every output in this scoped object-storage root.
+      XINGJING_EDITING_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_EDITING_RENDERER_URL: ${XINGJING_EDITING_RENDERER_URL:?请配置正式成片渲染器地址}
+      XINGJING_EDITING_RENDERER_TOKEN: ${XINGJING_EDITING_RENDERER_TOKEN:?请配置正式成片渲染器令牌}
+      XINGJING_EDITING_CALLBACK_SECRET: ${XINGJING_EDITING_CALLBACK_SECRET:?请配置成片回调签名密钥}
+      XINGJING_EDITING_OBJECT_STORAGE_ROOT: /app/projects/xingjing-render-objects
+      XINGJING_EDITING_BILLING_CURRENCY: ${XINGJING_EDITING_BILLING_CURRENCY:-CNY}
+      XINGJING_EDITING_BILLING_PRICING_VERSION: ${XINGJING_EDITING_BILLING_PRICING_VERSION:?请配置成片计费版本}
+      XINGJING_EDITING_BILLING_MINOR_PER_MEGAPIXEL_SECOND: ${XINGJING_EDITING_BILLING_MINOR_PER_MEGAPIXEL_SECOND:?请配置成片单位计费价格}
+      # M09 reads the same PostgreSQL authority facts, copies only verified M08
+      # final versions, and exposes downloads from a separate delivery root.
+      XINGJING_COMPLIANCE_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_COMPLIANCE_EXPORT_ROOT: /app/projects/xingjing-formal-exports
+      XINGJING_COMPLIANCE_PROVIDER_URL: ${XINGJING_COMPLIANCE_PROVIDER_URL:-}
+      XINGJING_COMPLIANCE_PROVIDER_TOKEN: ${XINGJING_COMPLIANCE_PROVIDER_TOKEN:-}
+      XINGJING_COMMERCIAL_EXPORT_ENABLED: ${XINGJING_COMMERCIAL_EXPORT_ENABLED:-false}
+      XINGJING_BILLING_CALLBACK_SECRET: ${XINGJING_BILLING_CALLBACK_SECRET:?set XINGJING_BILLING_CALLBACK_SECRET}
+      # M11 aggregates the production M06/M07/M08 ledgers and persists team
+      # plans, invoice requests, idempotency receipts and audit events here.
+      XINGJING_BILLING_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_PAYMENT_CALLBACK_SECRET: ${XINGJING_PAYMENT_CALLBACK_SECRET:?set XINGJING_PAYMENT_CALLBACK_SECRET}
+      # M12 serves only immutable M08 outputs through expiring review sessions
+      # and stores customer screenshots in a separate scoped durable root.
+      XINGJING_REVIEW_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_REVIEW_HMAC_SECRET: ${XINGJING_REVIEW_HMAC_SECRET:?请配置至少 32 字符的审片签名密钥}
+      XINGJING_REVIEW_SCREENSHOT_ROOT: /app/projects/xingjing-review-screenshots
+      TZ: ${TZ:-Asia/Shanghai}
+    # Agent Bash 沙箱 (bwrap) 需要：
+    # 1) 非特权 user namespace → 放开 docker 默认 seccomp/apparmor profile
+    # 2) bwrap 嵌套出的 net namespace 内配置 loopback → 容器需要 NET_ADMIN cap
+    #    （否则报 "loopback: Failed RTM_NEWADDR: Operation not permitted"）
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./.env:/app/.env
+      - ./projects:/app/projects
+      - ./logs:/app/logs
+      - ./vertex_keys:/app/vertex_keys
+      - ./claude_data:/root/.claude
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1241/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  comfy-gateway:
+    image: ghcr.io/arcreel/arcreel:latest
+    command: ["uv", "run", "uvicorn", "server.xingjing_comfy_gateway.app:app", "--host", "0.0.0.0", "--port", "1250"]
+    environment:
+      COMFYUI_URL: ${COMFYUI_URL:?请配置隔离的 ComfyUI 服务地址}
+      COMFY_GATEWAY_TOKEN: ${COMFY_GATEWAY_TOKEN:?请配置 Comfy 网关调用令牌}
+      COMFY_WORKFLOW_ROOT: /app/comfy-workflows
+      COMFY_WORKFLOW_MANIFEST: /app/comfy-workflows/manifest.json
+      XINGJING_PLATFORM_URL: http://arcreel:1241
+      XINGJING_TASK_WORKER_TOKEN: ${XINGJING_TASK_WORKER_TOKEN:?请配置统一任务 Worker 服务令牌}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./comfy-workflows:/app/comfy-workflows:ro
+    depends_on:
+      arcreel:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1250/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  media-worker:
+    image: ghcr.io/arcreel/arcreel:latest
+    command: ["uv", "run", "uvicorn", "server.xingjing_media_worker.app:app", "--host", "0.0.0.0", "--port", "1251"]
+    environment:
+      MEDIA_INPUT_ROOT: /data/input
+      MEDIA_OUTPUT_ROOT: /data/output
+      MEDIA_WORKER_TOKEN: ${MEDIA_WORKER_TOKEN:?请配置媒体 Worker 调用令牌}
+      MEDIA_TASK_TIMEOUT_SECONDS: ${MEDIA_TASK_TIMEOUT_SECONDS:-3600}
+      MEDIA_MAX_OUTPUT_BYTES: ${MEDIA_MAX_OUTPUT_BYTES:-21474836480}
+      XINGJING_PLATFORM_URL: http://arcreel:1241
+      XINGJING_TASK_WORKER_TOKEN: ${XINGJING_TASK_WORKER_TOKEN:?请配置统一任务 Worker 服务令牌}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./projects:/data/input:ro
+      - ./media-output:/data/output
+    depends_on:
+      arcreel:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1251/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

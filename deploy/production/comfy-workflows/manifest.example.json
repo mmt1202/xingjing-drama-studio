@@ -1,0 +1,32 @@
+{
+  "workflows": {
+    "image.standard.v1": {
+      "file": "image-standard-v1.json",
+      "parameters": {
+        "prompt": {
+          "type": "string",
+          "required": true,
+          "maxLength": 4000,
+          "node": "6",
+          "input": "text"
+        },
+        "width": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 512,
+          "maximum": 2048,
+          "node": "5",
+          "input": "width"
+        },
+        "height": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 512,
+          "maximum": 2048,
+          "node": "5",
+          "input": "height"
+        }
+      }
+    }
+  }
+}
