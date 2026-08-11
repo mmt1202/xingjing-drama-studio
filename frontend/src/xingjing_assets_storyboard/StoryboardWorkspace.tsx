@@ -1930,7 +1930,21 @@ export function StoryboardWorkspace({
         />
       ) : null}
       {batch && activeView !== "import" ? (
-        <BatchResultPanel receipt={batch} busy={busy} />
+        <BatchResultPanel
+          receipt={batch}
+          busy={busy}
+          onRetry={(itemIds) =>
+            void run(
+              "retryFailedItems",
+              {
+                itemIds,
+                previousOperationId: batch.operationId,
+              },
+              undefined,
+              undefined,
+            )
+          }
+        />
       ) : null}
     </WorkspaceShell>
   );

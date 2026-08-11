@@ -19,6 +19,7 @@ const context: SessionContext = {
 function shot(overrides: Partial<ShotItem> = {}): ShotItem {
   return {
     id: "shot-a",
+    storyboardId: "storyboard-1",
     episodeId: "episode-1",
     shotNo: "01",
     sequenceNo: 10,
@@ -89,12 +90,25 @@ describe("分镜与故事板工作区", () => {
         { id: "shot-b", status: "failed", message: "资产引用已失效", retryable: true },
       ] } })
       .mockResolvedValueOnce({ batch: { operationId: "shot-batch-2", succeeded: 1, failed: 0, items: [{ id: "shot-b", status: "succeeded" }] } });
-    const api = port({ listShots: vi.fn().mockResolvedValue({ items: [shot(), shot({ id: "shot-b", shotNo: "02" })], nextToken: null, collectionVersion: 12 }), shotAction: action });
+    const api = port({
+      listAssets: vi.fn().mockResolvedValue({
+        items: [{
+          id: "asset-character-1", type: "character", name: "林导", tags: [], source: "project",
+          status: "draft", rightsStatus: "verified", currentVersionId: "asset-character-v3",
+          version: 3, referenceCount: 0, updatedAt: "2026-07-16T00:00:00Z", metadata: {}, versions: [],
+        }],
+        nextToken: null,
+      }),
+      listShots: vi.fn().mockResolvedValue({ items: [shot(), shot({ id: "shot-b", shotNo: "02" })], nextToken: null, collectionVersion: 12 }),
+      shotAction: action,
+    });
     render(<StoryboardWorkspace scope={scope} api={api} view="batch" />);
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("checkbox", { name: "选择镜头 01" }));
     await user.click(screen.getByRole("checkbox", { name: "选择镜头 02" }));
+    await user.type(screen.getByLabelText("景别"), "近景");
+    await user.click(screen.getByRole("checkbox", { name: "绑定资产 林导" }));
     await user.click(screen.getByRole("button", { name: "应用批量编辑" }));
     expect(await screen.findByText("1 项成功，1 项失败")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "仅重试 1 个失败项" }));
@@ -102,6 +116,13 @@ describe("分镜与故事板工作区", () => {
     expect(action).toHaveBeenLastCalledWith(scope, expect.objectContaining({
       action: "retryFailedItems",
       payload: { itemIds: ["shot-b"], previousOperationId: "shot-batch-1" },
+    }));
+    expect(action).toHaveBeenNthCalledWith(1, scope, expect.objectContaining({
+      payload: expect.objectContaining({
+        changes: expect.objectContaining({
+          assetReferences: [{ id: "asset-character-1", versionId: "asset-character-v3", type: "character" }],
+        }),
+      }),
     }));
   });
 
@@ -135,7 +156,7 @@ describe("分镜与故事板工作区", () => {
     expect(screen.getByRole("dialog", { name: "确认冻结故事板" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "确认冻结版本 12" }));
 
-    expect(action).toHaveBeenCalledWith(scope, expect.objectContaining({ action: "confirmStoryboard", payload: { baseVersion: 12, shotIds: ["shot-a"] } }));
+    expect(action).toHaveBeenCalledWith(scope, expect.objectContaining({ action: "confirmStoryboard", payload: { baseVersion: 12, shotIds: ["shot-a"], storyboardId: "storyboard-1" } }));
     expect(await screen.findByText("故事板冻结任务已创建")).toBeInTheDocument();
   });
 

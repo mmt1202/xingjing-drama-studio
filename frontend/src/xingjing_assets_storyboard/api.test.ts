@@ -12,7 +12,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 }
 
 describe("资产与分镜 typed API", () => {
-  it("资产列表携带工作区上下文、组合筛选与包含唯一键的稳定排序", async () => {
+  it("资产列表使用可信会话、组合筛选与包含唯一键的稳定排序", async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({
       data: [],
       meta: { requestId: "request-1", page: { nextToken: null }, collectionVersion: 7 },
@@ -27,7 +27,7 @@ describe("资产与分镜 typed API", () => {
     expect(url).toContain("rightsStatus=verified");
     expect(url).toContain("search=%E4%B8%BB%E8%A7%92");
     expect(url).toContain("sort=updatedAt%3Adesc%2Cid%3Adesc");
-    expect(new Headers(init.headers).get("X-Workspace-Id")).toBe("workspace-019f");
+    expect(new Headers(init.headers).get("X-Workspace-Id")).toBeNull();
   });
 
   it("不确定网络失败后用同一幂等键安全重放，并发送带引号的版本", async () => {
@@ -51,9 +51,22 @@ describe("资产与分镜 typed API", () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: {}, meta: { requestId: "request-workspace" } }));
     const api = createAssetsStoryboardApi({ fetcher, createId: () => "request-workspace-client" });
 
-    await api.assetAction({ workspaceId: "workspace-019f" }, { action: "licenseMarketAsset", targetId: "asset-market-1", version: 2, payload: {} });
+    await api.assetAction(
+      { workspaceId: "workspace-019f" },
+      {
+        action: "licenseMarketAsset",
+        targetId: "asset-market-1",
+        version: 2,
+        payload: {
+          sourceVersionId: "market-version-2",
+          projectName: "雾港",
+          intendedCommercialUse: true,
+          requestedInheritableScopes: ["project"],
+        },
+      },
+    );
 
-    expect(fetcher.mock.calls[0]?.[0]).toContain("/api/v1/workspaces/workspace-019f/assets/actions");
+    expect(fetcher.mock.calls[0]?.[0]).toContain("/api/v1/forks");
   });
 
   it("解析统一错误信封并保留 409 的请求 ID 与当前版本摘要", async () => {

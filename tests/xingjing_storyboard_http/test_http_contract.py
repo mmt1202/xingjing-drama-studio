@@ -148,6 +148,11 @@ def _client(
     dependencies = create_storyboard_http_dependencies(
         service=service,
         trusted_context_resolver=resolver or resolve_context,
+        project_scope_authorizer=lambda trusted, project_id: (
+            trusted.tenant_id == "tenant-1"
+            and trusted.workspace_id == "workspace-1"
+            and project_id == "project-1"
+        ),
         upload_store=InMemoryStoryboardUploadStore(),
     )
     app = FastAPI()
@@ -185,8 +190,12 @@ def test_list_and_detail_are_scoped_permission_checked_frontend_contracts(tmp_pa
                 "shotSize": "wide",
                 "cameraMove": "pan",
                 "durationMs": 2000,
-                "dialogue": "hello",
-                "prompt": "first prompt",
+                    "dialogue": "hello",
+                    "prompt": "first prompt",
+                    "negativePrompt": "",
+                    "promptTemplateId": None,
+                    "promptVariables": {},
+                    "promptModelAdapterVersion": None,
                 "assetReferences": [
                     {
                         "id": "character-1",
@@ -196,7 +205,8 @@ def test_list_and_detail_are_scoped_permission_checked_frontend_contracts(tmp_pa
                     },
                     {"id": "scene-1", "versionId": "scene-version-1", "type": "scene", "name": "scene-1"},
                 ],
-                "generationStatus": "not_started",
+                    "generationStatus": "not_started",
+                    "generationTaskId": None,
                 "issueCount": 0,
                 "qualityIssues": [],
                 "candidates": [],
@@ -329,6 +339,13 @@ def test_batch_edit_is_idempotent_optimistically_locked_and_read_after_write(tmp
                 "durationMs": 1750,
                 "modelPolicy": "quality",
                 "costTier": "premium",
+                "assetReferences": [
+                    {
+                        "id": "character-1",
+                        "versionId": "character-version-1",
+                        "type": "character",
+                    }
+                ],
             },
         },
     }
@@ -344,6 +361,14 @@ def test_batch_edit_is_idempotent_optimistically_locked_and_read_after_write(tmp
         "shotSize": "close-up",
         "durationMs": 1750,
     }
+    assert changed["assetReferences"] == [
+        {
+            "id": "character-1",
+            "versionId": "character-version-1",
+            "type": "character",
+            "name": "character-1",
+        }
+    ]
     assert response.json()["data"]["batch"] == {
         "operationId": "batch-key-1",
         "items": [{"id": "shot-1", "status": "succeeded", "version": 2}],

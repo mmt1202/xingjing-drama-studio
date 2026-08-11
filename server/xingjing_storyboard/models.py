@@ -194,7 +194,11 @@ class Shot:
             "replacements": [item.to_dict() for item in self.replacements],
             "negative_prompt": self.negative_prompt,
             "prompt_template_id": self.prompt_template_id,
-            "prompt_variables": dict(self.prompt_variables or {}),
+            "prompt_variables": (
+                dict(self.prompt_variables)
+                if self.prompt_variables is not None
+                else None
+            ),
             "prompt_model_adapter_version": self.prompt_model_adapter_version,
             "generation_task_id": self.generation_task_id,
         }
@@ -219,7 +223,14 @@ class Shot:
             replacements=tuple(ShotReplacement.from_dict(item) for item in _mapping_list(value, "replacements")),
             negative_prompt=str(value.get("negative_prompt") or ""),
             prompt_template_id=_optional_string(value, "prompt_template_id"),
-            prompt_variables={str(key): str(item) for key, item in _object_dict_optional(value, "prompt_variables").items()},
+            prompt_variables=(
+                {
+                    str(key): str(item)
+                    for key, item in _object_dict(value, "prompt_variables").items()
+                }
+                if value.get("prompt_variables") is not None
+                else None
+            ),
             prompt_model_adapter_version=_optional_string(value, "prompt_model_adapter_version"),
             generation_task_id=_optional_string(value, "generation_task_id"),
         )
@@ -493,13 +504,6 @@ def _mapping_list(value: Mapping[str, object], key: str) -> list[Mapping[str, ob
 def _object_dict(value: Mapping[str, object], key: str) -> dict[str, object]:
     raw = _mapping(value.get(key))
     return {str(item_key): item_value for item_key, item_value in raw.items()}
-
-
-def _object_dict_optional(value: Mapping[str, object], key: str) -> dict[str, object]:
-    raw = value.get(key)
-    if raw is None:
-        return {}
-    return {str(item_key): item_value for item_key, item_value in _mapping(raw).items()}
 
 
 def _enum[T: StrEnum](enum_type: type[T], value: Mapping[str, object], key: str) -> T:
