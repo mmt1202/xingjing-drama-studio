@@ -35,6 +35,7 @@ from server.xingjing_editing_persistence.models import (
     EditingRenderBillingHoldRow,
     EditingRenderBillingJournalRow,
     RenderTaskRow,
+    TimelineVersionRow,
 )
 from server.xingjing_generation_persistence.repository import (
     AuditRow as GenerationAuditRow,
@@ -477,6 +478,14 @@ class BillingRuntime:
                     )
                 )
             ).all()
+            editing_timelines = (
+                await session.scalars(
+                    select(TimelineVersionRow).where(
+                        TimelineVersionRow.tenant_id == context.tenant_id,
+                        TimelineVersionRow.workspace_id == context.workspace_id,
+                    )
+                )
+            ).all()
         account = {
             "workspace_id": context.workspace_id,
             "currency": "CNY" if account_row is None else account_row.currency,
@@ -498,6 +507,7 @@ class BillingRuntime:
             audio_tasks=audio_tasks,
             editing_tasks=editing_tasks,
             editing_audits=editing_audits,
+            editing_timelines=editing_timelines,
         )
         journals = (
             [_journal(row, source="generation") for row in generation_journals]
@@ -641,7 +651,7 @@ def _integer(value: object) -> int:
 
 
 def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str, object]]:
-    dimensions: defaultdict[tuple[str, str, str, str], dict[str, int]] = defaultdict(
+    dimensions: defaultdict[tuple[str, str, str, str, str, str], dict[str, int]] = defaultdict(
         lambda: {"estimated_minor": 0, "actual_minor": 0, "released_minor": 0, "task_count": 0}
     )
     for hold in holds:
@@ -650,6 +660,8 @@ def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str,
             str(hold.get("source") or "unknown"),
             str(hold.get("model_id") or "unattributed"),
             str(hold.get("actor_id") or "unattributed"),
+            str(hold.get("episode_id") or "unattributed"),
+            str(hold.get("shot_id") or "unattributed"),
         )
         values = dimensions[key]
         values["estimated_minor"] += _integer(hold["estimated_minor"])
@@ -663,6 +675,8 @@ def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str,
             "source": key[1],
             "model_id": None if key[2] == "unattributed" else key[2],
             "actor_id": None if key[3] == "unattributed" else key[3],
+            "episode_id": None if key[4] == "unattributed" else key[4],
+            "shot_id": None if key[5] == "unattributed" else key[5],
             "currency": currency,
             **values,
         }
@@ -678,6 +692,7 @@ def _enrich_cost_dimensions(
     audio_tasks: Sequence[RowMapping],
     editing_tasks: Sequence[RenderTaskRow],
     editing_audits: Sequence[EditingAuditRow],
+    editing_timelines: Sequence[TimelineVersionRow],
 ) -> None:
     generation_actors: dict[str, str] = {}
     for audit in sorted(generation_audits, key=lambda item: item.occurred_at):
@@ -685,21 +700,27 @@ def _enrich_cost_dimensions(
         action = audit.payload.get("action")
         if action == "generation.provider_submitted" and isinstance(actor, str) and not actor.startswith("provider:"):
             generation_actors.setdefault(audit.task_id, actor)
-    generation_dimensions: dict[str, tuple[str | None, str | None]] = {}
+    generation_dimensions: dict[str, tuple[str | None, str | None, str | None, str | None]] = {}
     for task in generation_tasks:
         snapshot = task.snapshot
         request_value = snapshot.get("request")
         request: dict[str, Any] = request_value if isinstance(request_value, dict) else {}
+        parameters_value = request.get("parameters")
+        parameters: dict[str, Any] = parameters_value if isinstance(parameters_value, dict) else {}
         model_id = snapshot.get("resolved_model_id") or request.get("requested_model_id")
         generation_dimensions[task.task_id] = (
             str(model_id) if isinstance(model_id, str) and model_id else None,
             generation_actors.get(task.task_id),
+            _dimension_value(parameters, "episode_id", "episodeId"),
+            _dimension_value(parameters, "shot_id", "shotId"),
         )
 
     audio_dimensions = {
         str(task["id"]): (
             str(task["provider_name"]) if task.get("provider_name") else None,
             str(task["created_by"]),
+            str(task["resource_id"]) if task.get("resource_type") == "episode" else None,
+            str(task["resource_id"]) if task.get("resource_type") == "shot" else None,
         )
         for task in audio_tasks
     }
@@ -707,8 +728,18 @@ def _enrich_cost_dimensions(
     for audit in sorted(editing_audits, key=lambda item: item.occurred_at):
         if audit.object_type == "render_task":
             editing_actors.setdefault(audit.object_id, audit.actor_id)
+    editing_episodes = {
+        (row.timeline_id, row.version_id): _dimension_value(row.snapshot, "episode_id", "episodeId")
+        for row in editing_timelines
+    }
     editing_dimensions = {
-        task.task_id: ("editing-renderer", editing_actors.get(task.task_id)) for task in editing_tasks
+        task.task_id: (
+            "editing-renderer",
+            editing_actors.get(task.task_id),
+            editing_episodes.get((task.timeline_id, task.timeline_version_id)),
+            None,
+        )
+        for task in editing_tasks
     }
 
     sources = {
@@ -719,7 +750,15 @@ def _enrich_cost_dimensions(
     for hold in holds:
         dimensions = sources.get(str(hold.get("source")), {}).get(str(hold.get("task_id")))
         if dimensions is not None:
-            hold["model_id"], hold["actor_id"] = dimensions
+            hold["model_id"], hold["actor_id"], hold["episode_id"], hold["shot_id"] = dimensions
+
+
+def _dimension_value(payload: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 def _csv_bytes(records: list[dict[str, object]]) -> bytes:

@@ -128,6 +128,8 @@ const invoiceColumns: readonly CommerceColumnDefinition[] = [
 ];
 const costColumns: readonly CommerceColumnDefinition[] = [
   { key: "projectId", labelKey: "columns.dataScope" },
+  { key: "episodeId", labelKey: "columns.episode" },
+  { key: "shotId", labelKey: "columns.shot" },
   { key: "source", labelKey: "columns.type" },
   { key: "modelId", labelKey: "columns.model" },
   { key: "actorId", labelKey: "columns.member" },
