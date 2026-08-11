@@ -796,8 +796,18 @@ class AudioPostgresRepository:
             rows = (
                 await session.execute(
                     select(generation_tasks)
+                    .join(
+                        audio_billing_holds,
+                        (audio_billing_holds.c.task_id == generation_tasks.c.id)
+                        & (audio_billing_holds.c.tenant_id == generation_tasks.c.tenant_id)
+                        & (audio_billing_holds.c.workspace_id == generation_tasks.c.workspace_id)
+                        & (audio_billing_holds.c.project_id == generation_tasks.c.project_id),
+                    )
                     .where(
-                        generation_tasks.c.status.in_(("pending", "queued", "running", "retrying", "cancelling")),
+                        generation_tasks.c.status.in_(
+                            ("pending", "queued", "running", "retrying", "cancelling", "failed")
+                        ),
+                        audio_billing_holds.c.status == "active",
                         generation_tasks.c.timeout_at <= at,
                     )
                     .order_by(generation_tasks.c.timeout_at, generation_tasks.c.id)

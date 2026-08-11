@@ -960,6 +960,12 @@ def create_production_audio_runtime(
         return _unavailable_runtime("XINGJING_AUDIO_DATABASE_URL_REQUIRED")
     if not url.startswith("postgresql+asyncpg://"):
         return _unavailable_runtime("XINGJING_AUDIO_DATABASE_URL_MUST_BE_POSTGRESQL_ASYNCPG")
+    callback_secret = os.environ.get("XINGJING_M07_PROVIDER_CALLBACK_SECRET", "").strip()
+    if callback_secret and len(callback_secret) < 32:
+        return _unavailable_runtime("XINGJING_M07_PROVIDER_CALLBACK_SECRET_MINIMUM_32_REQUIRED")
+    raw_timeout = os.environ.get("XINGJING_M07_TASK_TIMEOUT_SECONDS", "21600").strip()
+    if not raw_timeout.isdigit() or not 60 <= int(raw_timeout) <= 604_800:
+        return _unavailable_runtime("XINGJING_M07_TASK_TIMEOUT_SECONDS_INVALID")
     try:
         engine = create_async_engine(url, pool_pre_ping=True)
     except (SQLAlchemyError, ValueError, ModuleNotFoundError):
@@ -968,12 +974,6 @@ def create_production_audio_runtime(
     configured_provider = provider or _provider_from_environment()
     artifact_root = os.environ.get("XINGJING_M07_ARTIFACT_ROOT", "").strip()
     provider_project_root = os.environ.get("XINGJING_M07_PROVIDER_PROJECT_ROOT", "").strip()
-    callback_secret = os.environ.get("XINGJING_M07_PROVIDER_CALLBACK_SECRET", "").strip()
-    if callback_secret and len(callback_secret) < 32:
-        return _unavailable_runtime("XINGJING_M07_PROVIDER_CALLBACK_SECRET_MINIMUM_32_REQUIRED")
-    raw_timeout = os.environ.get("XINGJING_M07_TASK_TIMEOUT_SECONDS", "21600").strip()
-    if not raw_timeout.isdigit() or not 60 <= int(raw_timeout) <= 604_800:
-        return _unavailable_runtime("XINGJING_M07_TASK_TIMEOUT_SECONDS_INVALID")
     return AudioRuntime(
         repository=AudioPostgresRepository(factory),
         session_factory=factory,
