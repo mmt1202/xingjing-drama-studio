@@ -79,7 +79,7 @@ async def test_runtime_refuses_to_start_without_an_authoritative_store() -> None
 
 
 @pytest.mark.asyncio
-async def test_direct_export_reads_persisted_evidence_and_records_a_delivery(tmp_path: Path) -> None:
+async def test_direct_export_preflight_reads_persisted_evidence_without_recording_delivery(tmp_path: Path) -> None:
     store = SqliteComplianceAuthorityStore(tmp_path / "compliance.sqlite3")
     await store.initialize()
     await persist_complete_authority(store)
@@ -89,11 +89,9 @@ async def test_direct_export_reads_persisted_evidence_and_records_a_delivery(tmp
 
     assert decision.allowed is True
     assert decision.manifest_context is not None
-    deliveries = await store.list_deliveries(tenant_id="tenant-1", project_id="project-1")
-    assert len(deliveries) == 1
-    assert deliveries[0].project_version == "v7"
-    assert deliveries[0].policy_version == "2026-07"
-    assert deliveries[0].manifest_digest.startswith("sha256:")
+    # 预检通过不等于文件已经生成。交付记录必须由正式导出执行器在
+    # 产物落盘并校验成功后写入，避免产生“已交付”假记录。
+    assert await store.list_deliveries(tenant_id="tenant-1", project_id="project-1") == ()
 
 
 @pytest.mark.asyncio
