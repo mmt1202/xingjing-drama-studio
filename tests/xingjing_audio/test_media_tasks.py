@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+
 import pytest
 
 from server.xingjing_audio import (
@@ -10,6 +14,59 @@ from server.xingjing_audio import (
     MediaTaskStatus,
     ProviderFailure,
 )
+from server.xingjing_audio_runtime.runtime import AudioRuntime
+
+
+@pytest.mark.asyncio
+async def test_provider_callback_validates_billing_before_importing_output() -> None:
+    class Runtime(AudioRuntime):
+        async def _get_task(self, scope, task_id):
+            return {
+                "id": task_id,
+                "provider_task_id": "remote-1",
+                "provider_name": "provider-a",
+                "status": "running",
+                "version": 2,
+                "attempt_count": 1,
+                "max_attempts": 2,
+            }
+
+    class Storage:
+        def __init__(self) -> None:
+            self.imports = 0
+
+        async def inspect(self, **_kwargs):
+            raise AssertionError("not used")
+
+        async def import_provider_output(self, **_kwargs):
+            self.imports += 1
+            raise AssertionError("output must not be imported before billing validation")
+
+    storage = Storage()
+    runtime = Runtime(
+        repository=None,
+        session_factory=None,
+        context_resolver=None,
+        object_storage=storage,
+        provider_callback_secret="callback-secret",
+    )
+    payload = {
+        "tenantId": "tenant-a",
+        "workspaceId": "workspace-a",
+        "projectId": "project-a",
+        "taskId": "task-a",
+        "providerTaskId": "remote-1",
+        "eventId": "event-a",
+        "status": "succeeded",
+        "outputs": [{"outputId": "audio-a", "sourcePath": "audio.wav"}],
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    signature = hmac.new(b"callback-secret", raw, hashlib.sha256).hexdigest()
+
+    with pytest.raises(ValueError, match="AUDIO_PROVIDER_CALLBACK_BILLING_REQUIRED"):
+        await runtime.apply_provider_callback(raw_body=raw, signature=signature, payload=payload)
+
+    assert storage.imports == 0
 
 
 def test_media_task_contract_preserves_external_references() -> None:

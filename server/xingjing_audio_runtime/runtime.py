@@ -713,10 +713,12 @@ class AudioRuntime:
         if str(current.get("status")) in {"succeeded", "failed", "cancelled", "timed_out", "cancelling"}:
             return current
         if outcome == "succeeded":
+            # Validate settlement before touching object storage so a rejected
+            # callback cannot leave an untracked media artifact behind.
+            billing_currency, actual_minor = self._callback_billing(payload)
             result_metadata = await self._store_callback_outputs(scope, task_id, event_id, payload)
             status = "succeeded"
             failure_metadata = None
-            billing_currency, actual_minor = self._callback_billing(payload)
         elif outcome == "failed":
             status = "failed"
             result_metadata = None
