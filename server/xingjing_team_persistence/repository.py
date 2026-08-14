@@ -37,6 +37,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from server.xingjing_identity_context.permissions import DEFAULT_ROLE_PERMISSIONS
 from server.xingjing_team.errors import (
+    Forbidden,
     IdempotencyConflict,
     InvitationStateError,
     NotFound,
@@ -50,9 +51,11 @@ from server.xingjing_team.models import (
     EnterpriseProfileUpdate,
     Invitation,
     InvitationState,
+    MemberUpdate,
     Role,
     RoleUpdate,
     SeatUsage,
+    TeamMember,
 )
 
 
@@ -108,6 +111,7 @@ class MemberRow(TeamPersistenceBase):
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     role_id: Mapped[str] = mapped_column(String(128), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
 class InvitationRow(TeamPersistenceBase):
@@ -669,6 +673,67 @@ class SqlAlchemyTeamRepository:
                 )
             )
 
+    def update_member(
+        self,
+        *,
+        workspace_id: str,
+        member_id: str,
+        update: MemberUpdate,
+        expected_version: int,
+        actor_id: str,
+        request_id: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> TeamMember:
+        self._assert_workspace(workspace_id)
+        fingerprint = self._fingerprint({
+            "actor_id": actor_id,
+            "member_id": member_id,
+            "role_id": update.role_id,
+            "active": update.active,
+            "expected_version": expected_version,
+        })
+        with self._session_factory() as session, session.begin():
+            replay = self._replay(session, "member.update", idempotency_key, fingerprint)
+            if replay is not None:
+                return self._member_from_payload(replay)
+            row = session.scalar(
+                select(MemberRow).where(*self._scope_clauses(MemberRow), MemberRow.member_id == member_id).with_for_update()
+            )
+            if row is None:
+                raise NotFound(member_id)
+            if row.version != expected_version:
+                raise VersionConflict(member_id)
+            if session.scalar(select(RoleRow.role_id).where(*self._scope_clauses(RoleRow), RoleRow.role_id == update.role_id)) is None:
+                raise NotFound(update.role_id)
+            if row.role_id == "owner" and (update.role_id != "owner" or not update.active):
+                owner_count = session.scalar(select(func.count()).select_from(MemberRow).where(
+                    *self._scope_clauses(MemberRow), MemberRow.role_id == "owner", MemberRow.active.is_(True)
+                )) or 0
+                if owner_count <= 1:
+                    raise Forbidden("last owner cannot be deactivated or demoted")
+            if update.active and not row.active:
+                workspace = session.scalar(self._workspace_query().with_for_update())
+                if workspace is None:
+                    raise NotFound(workspace_id)
+                occupied = session.scalar(select(func.count()).select_from(MemberRow).where(
+                    *self._scope_clauses(MemberRow), MemberRow.active.is_(True)
+                )) or 0
+                if occupied >= workspace.seat_limit:
+                    raise SeatLimitReached(workspace_id)
+            before = self._member_payload(self._member(row))
+            row.role_id = update.role_id
+            row.active = update.active
+            row.version += 1
+            member = self._member(row)
+            after = self._member_payload(member)
+            session.execute(sa_update(WorkspaceRow).where(*self._scope_clauses(WorkspaceRow)).values(
+                permission_version=WorkspaceRow.permission_version + 1
+            ))
+            self._append_audit(session, actor_id, "member.update", "member", member_id, before, after, request_id, now)
+            self._remember(session, "member.update", idempotency_key, fingerprint, after, now)
+            return member
+
     def update_enterprise_profile(
         self,
         *,
@@ -986,6 +1051,28 @@ class SqlAlchemyTeamRepository:
             str(value["name"]),
             frozenset(cast(list[str], value["permissions"])),
             _integer(value["version"]),
+        )
+
+    @staticmethod
+    def _member(row: MemberRow) -> TeamMember:
+        return TeamMember(row.member_id, row.workspace_id, row.email, row.role_id, row.active, row.version)
+
+    @staticmethod
+    def _member_payload(value: TeamMember) -> dict[str, object]:
+        return {
+            "member_id": value.member_id,
+            "workspace_id": value.workspace_id,
+            "email": value.email,
+            "role_id": value.role_id,
+            "active": value.active,
+            "version": value.version,
+        }
+
+    @staticmethod
+    def _member_from_payload(value: Mapping[str, object]) -> TeamMember:
+        return TeamMember(
+            str(value["member_id"]), str(value["workspace_id"]), str(value["email"]),
+            str(value["role_id"]), bool(value["active"]), _integer(value["version"]),
         )
 
     @staticmethod

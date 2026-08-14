@@ -10,9 +10,11 @@ from .models import (
     EnterpriseProfile,
     EnterpriseProfileUpdate,
     Invitation,
+    MemberUpdate,
     Role,
     RoleUpdate,
     SeatUsage,
+    TeamMember,
 )
 
 
@@ -67,6 +69,18 @@ class TeamRepository(Protocol):
         now: datetime,
     ) -> Role: ...
     def add_member(self, workspace_id: str, member_id: str, email: str, role_id: str) -> None: ...
+    def update_member(
+        self,
+        *,
+        workspace_id: str,
+        member_id: str,
+        update: MemberUpdate,
+        expected_version: int,
+        actor_id: str,
+        request_id: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> TeamMember: ...
     def update_enterprise_profile(
         self,
         *,

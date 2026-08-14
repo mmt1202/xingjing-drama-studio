@@ -10,9 +10,11 @@ from .models import (
     EnterpriseProfile,
     EnterpriseProfileUpdate,
     Invitation,
+    MemberUpdate,
     Role,
     RoleUpdate,
     SeatUsage,
+    TeamMember,
 )
 from .ports import TeamRepository
 
@@ -115,6 +117,31 @@ class TeamService:
     def add_member_for_provisioning(self, workspace_id: str, member_id: str, email: str, role_id: str) -> None:
         """主线身份同步边界：仅供受信任的 provisioning adapter 调用。"""
         self._repository.add_member(workspace_id, member_id, email, role_id)
+
+    def update_member(
+        self,
+        workspace_id: str,
+        actor: Actor,
+        member_id: str,
+        update: MemberUpdate,
+        *,
+        expected_version: int,
+        request_id: str,
+        idempotency_key: str,
+    ) -> TeamMember:
+        self._require(workspace_id, actor, "workspace.member.manage")
+        if actor.id == member_id and not update.active:
+            raise Forbidden("cannot deactivate current actor")
+        return self._repository.update_member(
+            workspace_id=workspace_id,
+            member_id=member_id,
+            update=update,
+            expected_version=expected_version,
+            actor_id=actor.id,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            now=self._clock(),
+        )
 
     def update_enterprise_profile(
         self,

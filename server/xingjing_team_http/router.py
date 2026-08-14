@@ -62,7 +62,26 @@ def create_team_router(runtime: TeamRuntime) -> APIRouter:
     async def members(request: Request, workspace_id: str) -> JSONResponse:
         context = await _context_for_workspace(runtime, request, workspace_id, "workspace.member.view")
         rows = await runtime.members(request, context=context)
-        return _success(context.trusted.request_id, {"members": jsonable_encoder(rows)})
+        members_payload = [
+            {"id": row.member_id, **cast(dict[str, object], jsonable_encoder(row))}
+            for row in rows
+        ]
+        return _success(context.trusted.request_id, {"members": members_payload})
+
+    @router.patch("/{workspace_id}/members/{member_id}")
+    async def update_member(request: Request, workspace_id: str, member_id: str) -> JSONResponse:
+        context = await _context_for_workspace(runtime, request, workspace_id, "workspace.member.manage")
+        body = await _json_object(request)
+        member = await runtime.update_member(
+            request,
+            member_id=member_id,
+            role_id=_text(body, "roleId"),
+            active=_optional_boolean(body.get("active"), default=True),
+            expected_version=_expected_version(request, body),
+            idempotency_key=_idempotency_key(request),
+            context=context,
+        )
+        return _success(context.trusted.request_id, {"member": jsonable_encoder(member)})
 
     @router.get("/{workspace_id}/roles")
     async def roles(request: Request, workspace_id: str) -> JSONResponse:

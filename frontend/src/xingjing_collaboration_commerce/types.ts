@@ -1,7 +1,7 @@
 export type CollaborationCommerceModule = "M01" | "M10" | "M11" | "M12" | "M13" | "M14" | "M16";
 export type CommerceAudience = "internal" | "admin" | "client";
 export type CommerceResponseKind = "list" | "object";
-export type CommerceActionMethod = "POST" | "PUT";
+export type CommerceActionMethod = "POST" | "PUT" | "PATCH";
 export type CommerceActionBodyKind = "action" | "entity";
 export type CommerceConfirmationKind = "standard" | "approval" | "financial" | "danger" | "none";
 export type CommerceFieldType = "text" | "email" | "number" | "textarea" | "password" | "datetime-local" | "checkbox" | "file";

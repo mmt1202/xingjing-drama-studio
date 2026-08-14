@@ -76,7 +76,7 @@ function pageResources(language: keyof typeof moduleDescriptions, titles: Record
 
 const actionsZh: Record<string, string> = {
   saveEnterpriseProfile: "保存企业配置", revokeInvitation: "撤销邀请", resendInvitation: "重发邀请", inviteMember: "邀请成员",
-  updateRole: "更新角色", disableMember: "停用成员", removeMember: "移除成员", previewPermissionImpact: "预览权限影响", savePermissionMatrix: "保存权限矩阵",
+  updateRole: "更新角色", updateMember: "调整成员角色或状态", disableMember: "停用成员", removeMember: "移除成员", previewPermissionImpact: "预览权限影响", savePermissionMatrix: "保存权限矩阵",
   assignProjectMember: "保存项目成员权限",
   assignSeat: "分配席位", reclaimSeat: "回收席位", requestInvoice: "申请开票", createPaymentOrder: "创建充值订单", refundPaymentOrder: "发起退款", requestReconciliation: "发起对账",
   approve: "通过验收", reject: "打回修改", confirmDelivery: "确认交付", comment: "提交批注", verify: "验证访问", logout: "退出审片", createReviewLink: "创建审片链接",

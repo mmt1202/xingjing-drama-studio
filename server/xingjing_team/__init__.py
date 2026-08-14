@@ -15,9 +15,11 @@ from .models import (
     EnterpriseProfileUpdate,
     Invitation,
     InvitationState,
+    MemberUpdate,
     Role,
     RoleUpdate,
     SeatUsage,
+    TeamMember,
 )
 from .ports import TeamRepository
 from .repository import SqliteTeamRepository
@@ -33,12 +35,14 @@ __all__ = [
     "IdempotencyConflict",
     "Invitation",
     "InvitationState",
+    "MemberUpdate",
     "InvitationStateError",
     "NotFound",
     "Role",
     "RoleUpdate",
     "SeatLimitReached",
     "SeatUsage",
+    "TeamMember",
     "SqliteTeamRepository",
     "TeamDomainError",
     "TeamRepository",

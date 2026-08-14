@@ -39,6 +39,22 @@ class SeatUsage:
 
 
 @dataclass(frozen=True)
+class TeamMember:
+    member_id: str
+    workspace_id: str
+    email: str
+    role_id: str
+    active: bool
+    version: int
+
+
+@dataclass(frozen=True)
+class MemberUpdate:
+    role_id: str
+    active: bool
+
+
+@dataclass(frozen=True)
 class RoleUpdate:
     name: str
     permissions: frozenset[str]

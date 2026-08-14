@@ -29,12 +29,11 @@ const members: CommercePageSnapshot = {
   serverTime: "2026-07-16T08:00:00Z",
   items: [{
     id: "member-1",
-    name: "林晚",
     email: "linwan@example.test",
-    role: "项目负责人",
+    roleId: "member",
     dataScope: "project:assigned",
     seat: "creator",
-    status: "active",
+    active: true,
     version: 3,
     updatedAt: "2026-07-16T07:00:00Z",
   }],
@@ -64,7 +63,7 @@ describe("M10-M14 生产级页面状态", () => {
 
     expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("正在核对会话、权限与数据范围")).toBeInTheDocument();
-    expect(await screen.findByText("林晚")).toBeInTheDocument();
+    expect(await screen.findByText("linwan@example.test")).toBeInTheDocument();
     expect(screen.getByText("星镜内容团队")).toBeInTheDocument();
     expect(screen.getByText("已邀请")).toBeInTheDocument();
     expect(client.getSessionContext).toHaveBeenCalledTimes(1);
@@ -118,17 +117,18 @@ describe("M10-M14 生产级页面状态", () => {
     const executeAction = vi.fn().mockResolvedValue({ requestId: "request-action-2", status: "succeeded", failures: [], retryableIds: [] });
     const client = api({ loadPage, executeAction });
     render(<CollaborationCommercePage pageId="TM-010" api={client} context={{ workspaceId: "workspace-1" }} />);
-    await screen.findByText("林晚");
+    await screen.findByText("linwan@example.test");
 
     await user.click(screen.getByRole("button", { name: "邀请成员" }));
     const dialog = screen.getByRole("alertdialog", { name: "确认邀请成员" });
     await user.type(within(dialog).getByLabelText("成员邮箱"), "new@example.test");
+    await user.type(within(dialog).getByLabelText("角色编号"), "member");
+    await user.type(within(dialog).getByLabelText("失效时间"), "2026-07-23T08:00:00Z");
     await user.click(within(dialog).getByRole("button", { name: "确认邀请成员" }));
 
-    expect(screen.getByText("正在提交邀请成员")).toBeInTheDocument();
-    expect(await screen.findByText("待加入成员")).toBeInTheDocument();
+    expect(await screen.findByText("new@example.test")).toBeInTheDocument();
     expect(executeAction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: "inviteMember" }), { workspaceId: "workspace-1" }, expect.objectContaining({
-      payload: { email: "new@example.test" },
+      payload: { email: "new@example.test", roleId: "member", expiresAt: "2026-07-23T08:00:00Z" },
     }), expect.anything());
     expect(loadPage).toHaveBeenCalledTimes(2);
     expect(screen.getByText("操作已确认，已读取服务端最终状态")).toBeInTheDocument();
@@ -143,15 +143,15 @@ describe("M10-M14 生产级页面状态", () => {
       requestId: "request-conflict",
     }));
     render(<CollaborationCommercePage pageId="TM-010" api={api({ loadPage, executeAction })} context={{ workspaceId: "workspace-1" }} />);
-    await screen.findByText("林晚");
+    await screen.findByText("linwan@example.test");
 
-    await user.click(screen.getByRole("button", { name: "停用成员" }));
-    const dialog = screen.getByRole("alertdialog", { name: "确认停用成员" });
-    await user.type(within(dialog).getByLabelText("操作原因"), "岗位调整");
-    await user.click(within(dialog).getByRole("button", { name: "确认停用成员" }));
+    await user.click(screen.getByRole("button", { name: "调整成员角色或状态" }));
+    const dialog = screen.getByRole("alertdialog", { name: "确认调整成员角色或状态" });
+    await user.type(within(dialog).getByLabelText(/角色/), "reviewer");
+    await user.click(within(dialog).getByRole("button", { name: "确认调整成员角色或状态" }));
 
     expect(await screen.findByText("数据已被其他协作者更新")).toBeInTheDocument();
-    expect(screen.getByText("林晚")).toBeInTheDocument();
+    expect(screen.getByText("linwan@example.test")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "读取最新版本" }));
     await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(2));
   });
@@ -167,12 +167,12 @@ describe("M10-M14 生产级页面状态", () => {
       })
       .mockResolvedValueOnce({ requestId: "request-retry", status: "succeeded", failures: [], retryableIds: [] });
     render(<CollaborationCommercePage pageId="TM-010" api={api({ executeAction })} context={{ workspaceId: "workspace-1" }} />);
-    await screen.findByText("林晚");
+    await screen.findByText("linwan@example.test");
 
-    await user.click(screen.getByRole("button", { name: "停用成员" }));
-    const dialog = screen.getByRole("alertdialog", { name: "确认停用成员" });
-    await user.type(within(dialog).getByLabelText("操作原因"), "权限收回");
-    await user.click(within(dialog).getByRole("button", { name: "确认停用成员" }));
+    await user.click(screen.getByRole("button", { name: "调整成员角色或状态" }));
+    const dialog = screen.getByRole("alertdialog", { name: "确认调整成员角色或状态" });
+    await user.type(within(dialog).getByLabelText(/角色/), "member");
+    await user.click(within(dialog).getByRole("button", { name: "确认调整成员角色或状态" }));
 
     expect(await screen.findByText("部分对象处理失败")).toBeInTheDocument();
     expect(screen.getByText("席位已满")).toBeInTheDocument();

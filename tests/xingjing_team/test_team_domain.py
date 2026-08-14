@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from server.xingjing_team import (
     Actor,
     EnterpriseProfileUpdate,
@@ -12,6 +14,7 @@ from server.xingjing_team import (
     IdempotencyConflict,
     InvitationState,
     InvitationStateError,
+    MemberUpdate,
     RoleUpdate,
     SeatLimitReached,
     SqliteTeamRepository,
@@ -240,6 +243,35 @@ def test_permission_change_is_visible_on_the_next_authorization_check(service):
             expected_version=role.version,
             request_id="req-stale",
             idempotency_key="role-stale",
+        )
+
+
+def test_member_role_and_active_state_use_version_idempotency_and_owner_guard(service):
+    role = service.update_role(
+        "ws-1", OWNER, "editor", RoleUpdate("编辑", frozenset({"project.view"})),
+        expected_version=0, request_id="req-role", idempotency_key="role-member",
+    )
+    service.add_member_for_provisioning("ws-1", "editor-1", "editor@example.com", role.id)
+
+    disabled = service.update_member(
+        "ws-1", OWNER, "editor-1", MemberUpdate(role_id=role.id, active=False),
+        expected_version=1, request_id="req-disable", idempotency_key="member-disable",
+    )
+    assert disabled.active is False
+    assert disabled.version == 2
+    assert service.update_member(
+        "ws-1", OWNER, "editor-1", MemberUpdate(role_id=role.id, active=False),
+        expected_version=1, request_id="req-disable-replay", idempotency_key="member-disable",
+    ) == disabled
+    with pytest.raises(VersionConflict):
+        service.update_member(
+            "ws-1", OWNER, "editor-1", MemberUpdate(role_id=role.id, active=True),
+            expected_version=1, request_id="req-stale", idempotency_key="member-stale",
+        )
+    with pytest.raises(Forbidden):
+        service.update_member(
+            "ws-1", OWNER, OWNER.id, MemberUpdate(role_id="member", active=False),
+            expected_version=1, request_id="req-owner", idempotency_key="owner-disable",
         )
 
 

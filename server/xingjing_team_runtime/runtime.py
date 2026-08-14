@@ -35,10 +35,12 @@ from server.xingjing_team import (
     EnterpriseProfileUpdate,
     Invitation,
     InvitationState,
+    MemberUpdate,
     NotFound,
     Role,
     RoleUpdate,
     SeatUsage,
+    TeamMember,
     TeamService,
 )
 from server.xingjing_team_persistence import SqlAlchemyTeamRepository, TeamPersistenceScope
@@ -108,14 +110,6 @@ class TeamIdentityActor:
     request_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class TeamMember:
-    member_id: str
-    email: str
-    role_id: str
-    active: bool
-
-
 class JavaTeamTrustedContextResolver:
     """直接读取 Java 会话返回的用户邮箱与工作区角色，拒绝客户端伪造字段。"""
 
@@ -172,6 +166,29 @@ class TeamRuntime:
     async def members(self, request: Request, *, context: TeamRequestContext | None = None) -> tuple[TeamMember, ...]:
         context = await self._request_context(request, "workspace.member.view", context)
         return await asyncio.to_thread(self._members_sync, context)
+
+    async def update_member(
+        self,
+        request: Request,
+        *,
+        member_id: str,
+        role_id: str,
+        active: bool,
+        expected_version: int,
+        idempotency_key: str,
+        context: TeamRequestContext | None = None,
+    ) -> TeamMember:
+        context = await self._request_context(request, "workspace.member.manage", context)
+        return await asyncio.to_thread(
+            self._service(context).update_member,
+            context.trusted.workspace_id,
+            context.actor,
+            member_id,
+            MemberUpdate(role_id, active),
+            expected_version=expected_version,
+            request_id=context.trusted.request_id,
+            idempotency_key=_idempotency_key(idempotency_key),
+        )
 
     async def seat_usage(self, request: Request, *, context: TeamRequestContext | None = None) -> SeatUsage:
         context = await self._request_context(request, "workspace.member.view", context)
@@ -538,7 +555,7 @@ class TeamRuntime:
                     )
                     .order_by(MemberRow.member_id)
                 ).all()
-                return tuple(TeamMember(row.member_id, row.email, row.role_id, row.active) for row in rows)
+                return tuple(TeamMember(row.member_id, row.workspace_id, row.email, row.role_id, row.active, row.version) for row in rows)
         except SQLAlchemyError as error:
             raise TeamRuntimeConfigurationError("TEAM_MEMBER_READ_UNAVAILABLE") from error
 

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from server.xingjing_identity_context.permissions import WORKSPACE_OWNER_PERMISSIONS
 
-from .errors import IdempotencyConflict, InvitationStateError, NotFound, SeatLimitReached, VersionConflict
+from .errors import Forbidden, IdempotencyConflict, InvitationStateError, NotFound, SeatLimitReached, VersionConflict
 from .models import (
     Actor,
     AuditEvent,
@@ -18,9 +18,11 @@ from .models import (
     EnterpriseProfileUpdate,
     Invitation,
     InvitationState,
+    MemberUpdate,
     Role,
     RoleUpdate,
     SeatUsage,
+    TeamMember,
 )
 
 T = TypeVar("T")
@@ -68,7 +70,7 @@ class SqliteTeamRepository:
                 );
                 CREATE TABLE IF NOT EXISTS team_members (
                     workspace_id TEXT NOT NULL, member_id TEXT NOT NULL, email TEXT NOT NULL,
-                    role_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+                    role_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY (workspace_id, member_id), UNIQUE (workspace_id, email)
                 );
                 CREATE TABLE IF NOT EXISTS team_invitations (
@@ -133,7 +135,7 @@ class SqliteTeamRepository:
                 ],
             )
             connection.execute(
-                "INSERT INTO team_members VALUES (?, ?, ?, 'owner', 1)",
+                "INSERT INTO team_members VALUES (?, ?, ?, 'owner', 1, 1)",
                 (workspace_id, owner.id, owner.email.casefold()),
             )
 
@@ -382,7 +384,7 @@ class SqliteTeamRepository:
                 raise SeatLimitReached(invitation.workspace_id)
             before = self._invitation_dict(invitation)
             connection.execute(
-                "INSERT INTO team_members VALUES (?,?,?,?,1)",
+                "INSERT INTO team_members VALUES (?,?,?,?,1,1)",
                 (invitation.workspace_id, actor.id, actor.email.casefold(), invitation.role_id),
             )
             connection.execute(
@@ -547,9 +549,54 @@ class SqliteTeamRepository:
     def add_member(self, workspace_id: str, member_id: str, email: str, role_id: str) -> None:
         self._write(
             lambda connection: connection.execute(
-                "INSERT INTO team_members VALUES (?,?,?,?,1)", (workspace_id, member_id, email.casefold(), role_id)
+                "INSERT INTO team_members (workspace_id,member_id,email,role_id,active,version) VALUES (?,?,?,?,1,1)",
+                (workspace_id, member_id, email.casefold(), role_id),
             )
         )
+
+    def update_member(
+        self, *, workspace_id: str, member_id: str, update: MemberUpdate, expected_version: int,
+        actor_id: str, request_id: str, idempotency_key: str, now: datetime,
+    ) -> TeamMember:
+        def operation(connection: sqlite3.Connection) -> TeamMember:
+            fingerprint = {"actor_id": actor_id, "member_id": member_id, "role_id": update.role_id,
+                           "active": update.active, "expected_version": expected_version}
+            replay = self._replay(connection, workspace_id, "member.update", idempotency_key, fingerprint)
+            if replay is not None:
+                return TeamMember(str(replay["member_id"]), str(replay["workspace_id"]), str(replay["email"]),
+                                  str(replay["role_id"]), bool(replay["active"]), int(replay["version"]))
+            row = connection.execute("SELECT * FROM team_members WHERE workspace_id=? AND member_id=?",
+                                     (workspace_id, member_id)).fetchone()
+            if row is None:
+                raise NotFound(member_id)
+            if int(row["version"]) != expected_version:
+                raise VersionConflict(member_id)
+            if connection.execute("SELECT 1 FROM team_roles WHERE workspace_id=? AND id=?",
+                                  (workspace_id, update.role_id)).fetchone() is None:
+                raise NotFound(update.role_id)
+            if row["role_id"] == "owner" and (update.role_id != "owner" or not update.active):
+                owners = connection.execute("SELECT count(*) FROM team_members WHERE workspace_id=? AND role_id='owner' AND active=1",
+                                            (workspace_id,)).fetchone()[0]
+                if owners <= 1:
+                    raise Forbidden("last owner cannot be deactivated or demoted")
+            if update.active and not bool(row["active"]):
+                usage = self._seat_usage(connection, workspace_id)
+                if usage.occupied >= usage.limit:
+                    raise SeatLimitReached(workspace_id)
+            before = dict(row)
+            version = expected_version + 1
+            connection.execute("UPDATE team_members SET role_id=?, active=?, version=? WHERE workspace_id=? AND member_id=? AND version=?",
+                               (update.role_id, update.active, version, workspace_id, member_id, expected_version))
+            connection.execute("UPDATE team_workspaces SET permission_version=permission_version+1 WHERE id=?", (workspace_id,))
+            member = TeamMember(member_id, workspace_id, str(row["email"]), update.role_id, update.active, version)
+            after = {"member_id": member.member_id, "workspace_id": workspace_id, "email": member.email,
+                     "role_id": member.role_id, "active": member.active, "version": member.version}
+            self._audit(connection, workspace_id=workspace_id, actor_id=actor_id, action="member.update",
+                        object_type="member", object_id=member_id, before=before, after=after,
+                        request_id=request_id, now=now)
+            self._remember(connection, workspace_id, "member.update", idempotency_key, fingerprint, after)
+            return member
+        return self._write(operation)
 
     @staticmethod
     def _profile_from_dict(value: dict[str, Any]) -> EnterpriseProfile:

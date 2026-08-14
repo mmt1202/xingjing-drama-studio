@@ -22,6 +22,13 @@ describe("M10-M14 页面信息架构", () => {
       requiredContext: ["workspaceId"],
       viewPermission: "workspace.member.view",
     });
+    expect(collaborationCommerceRouteMap.get("TM-010")?.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "updateMember",
+        method: "PATCH",
+        endpoint: "/workspaces/{workspaceId}/members/{targetId}",
+      }),
+    ]));
     expect(collaborationCommerceRouteMap.get("TM-001")).toMatchObject({
       module: "M11",
       loadEndpoint: "/workspaces/{workspaceId}/billing",
