@@ -197,3 +197,47 @@ def test_expired_rights_do_not_allow_cross_project_reuse(tmp_path: Path) -> None
 
     with pytest.raises(CrossProjectReuseDenied):
         service.reference_project(workspace_id="workspace-1", project_id="project-b", asset_id=asset.asset_id)
+
+
+def test_rights_confirmation_requires_evidence_and_appends_verified_history(tmp_path: Path) -> None:
+    service = service_at(tmp_path)
+    asset = service.create(
+        workspace_id="workspace-1",
+        owner_project_id="project-a",
+        kind=AssetKind.CHARACTER,
+        name="林默",
+        content={"appearance": "black coat"},
+        source=source(),
+        frozen_snapshot=snapshot(),
+    )
+    with pytest.raises(ValueError, match="RIGHTS_EVIDENCE_REQUIRED"):
+        service.confirm_rights(workspace_id="workspace-1", asset_id=asset.asset_id, expected_revision=1)
+
+    pending = service.record_rights(
+        workspace_id="workspace-1",
+        asset_id=asset.asset_id,
+        expected_revision=1,
+        evidence=RightsEvidence(
+            rights_id="rights-pending",
+            status=RightsStatus.PENDING,
+            reuse_scope=ReuseScope.WORKSPACE,
+            allowed_project_ids=(),
+            evidence_object_key="workspace-1/rights/contract.pdf",
+            evidence_sha256="f" * 64,
+        ),
+    )
+    confirmed = service.confirm_rights(
+        workspace_id="workspace-1",
+        asset_id=asset.asset_id,
+        expected_revision=pending.revision,
+    )
+
+    assert confirmed.revision == 3
+    assert [item.status for item in confirmed.rights] == [RightsStatus.PENDING, RightsStatus.VERIFIED]
+    assert confirmed.rights[-1].evidence_sha256 == "f" * 64
+    replayed = service.confirm_rights(
+        workspace_id="workspace-1",
+        asset_id=asset.asset_id,
+        expected_revision=confirmed.revision,
+    )
+    assert replayed == confirmed

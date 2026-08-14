@@ -378,7 +378,46 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 requested_kinds=tuple(_kind(item) for item in _text_list(payload.get("assetTypes"), "ASSET_TYPES_REQUIRED")),
             )
             return _success(context, {"batch": batch})
-        if action in {"licenseMarketAsset", "confirmAssets", "batchUpdate", "retryFailedItems"}:
+        if action in {"confirmAssets", "retryFailedItems"}:
+            item_ids = tuple(dict.fromkeys(_text_list(payload.get("itemIds"), "ASSET_IDS_REQUIRED")))
+            if len(item_ids) > 100:
+                raise AssetHttpError("ASSET_BATCH_TOO_LARGE")
+            items: list[dict[str, object]] = []
+            for asset_id in item_ids:
+                try:
+                    item_repository = ContextAssetRepository(
+                        repository,
+                        scope,
+                        context,
+                        action="confirmRights",
+                        idempotency_key=f"{key}:{asset_id}",
+                        request_payload={"assetId": asset_id},
+                    )
+                    item_service = AssetService(item_repository, StoryboardImpactQuery(runtime, context, project_id))
+                    current = item_service.get(context.workspace_id, asset_id)
+                    item_service.confirm_rights(
+                        workspace_id=context.workspace_id,
+                        asset_id=asset_id,
+                        expected_revision=current.revision,
+                    )
+                    items.append({"id": asset_id, "status": "succeeded"})
+                except (AssetDomainError, ValueError) as error:
+                    code = str(error) or type(error).__name__
+                    items.append({
+                        "id": asset_id,
+                        "status": "failed",
+                        "code": code,
+                        "message": code,
+                        "retryable": code in {"VERSION_CONFLICT", "ASSET_RUNTIME_UNAVAILABLE"},
+                    })
+            failed = sum(item["status"] == "failed" for item in items)
+            return _success(context, {"batch": {
+                "operationId": context.request_id,
+                "succeeded": len(items) - failed,
+                "failed": failed,
+                "items": items,
+            }})
+        if action in {"licenseMarketAsset", "batchUpdate"}:
             raise AssetHttpError("ASSET_ACTION_DEPENDENCY_UNAVAILABLE", 503)
         raise AssetHttpError("UNSUPPORTED_ASSET_ACTION")
 

@@ -14,6 +14,7 @@ from .contracts import (
     AssetVersion,
     FrozenScriptSnapshotRef,
     RightsEvidence,
+    RightsStatus,
 )
 from .errors import AssetNotFound, CrossProjectReuseDenied
 from .ids import uuid7
@@ -125,6 +126,24 @@ class AssetService:
     ) -> Asset:
         asset = self.get(workspace_id, asset_id)
         changed = replace(asset, revision=asset.revision + 1, rights=(*asset.rights, evidence))
+        self._repository.save(changed, expected_revision=expected_revision)
+        return changed
+
+    def confirm_rights(self, *, workspace_id: str, asset_id: str, expected_revision: int) -> Asset:
+        asset = self.get(workspace_id, asset_id)
+        if not asset.rights:
+            raise ValueError("RIGHTS_EVIDENCE_REQUIRED")
+        latest = asset.rights[-1]
+        if latest.status is RightsStatus.VERIFIED:
+            return asset
+        if latest.status is not RightsStatus.PENDING:
+            raise ValueError("RIGHTS_STATUS_NOT_CONFIRMABLE")
+        if latest.valid_until is not None:
+            expires_at = datetime.fromisoformat(latest.valid_until.replace("Z", "+00:00"))
+            if expires_at <= datetime.now(UTC):
+                raise ValueError("RIGHTS_EVIDENCE_EXPIRED")
+        verified = replace(latest, rights_id=uuid7(), status=RightsStatus.VERIFIED)
+        changed = replace(asset, revision=asset.revision + 1, rights=(*asset.rights, verified))
         self._repository.save(changed, expected_revision=expected_revision)
         return changed
 

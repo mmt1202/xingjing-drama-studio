@@ -155,12 +155,13 @@ describe("主体与素材资产工作区", () => {
 
   it("市场素材须在确认授权后才加入工作区资产库", async () => {
     const action = vi.fn().mockResolvedValue({ asset: asset() });
-    render(<AssetsWorkspace scope={{ workspaceId: "workspace-1" }} assetId="asset-a" api={port({ listMarketAssets: vi.fn().mockResolvedValue({ items: [asset()], nextToken: null }), assetAction: action })} view="market-detail" />);
+    const marketAsset = asset({ source: "marketplace", metadata: { allowFork: true, commercialUse: true, inheritableScopes: ["assets"] } });
+    render(<AssetsWorkspace scope={{ workspaceId: "workspace-1" }} assetId="asset-a" api={port({ listMarketAssets: vi.fn().mockResolvedValue({ items: [marketAsset], nextToken: null }), assetAction: action })} view="market-detail" />);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("button", { name: "确认授权并加入资产库" }));
-    expect(screen.getByRole("dialog", { name: "确认授权并加入资产库" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "确认加入资产库" }));
+    await user.click(await screen.findByRole("button", { name: "创建授权副本" }));
+    expect(screen.getByRole("dialog", { name: "确认创建授权副本" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认创建副本" }));
     await waitFor(() => expect(action).toHaveBeenCalledWith({ workspaceId: "workspace-1" }, expect.objectContaining({ action: "licenseMarketAsset", targetId: "asset-a" })));
   });
 });
