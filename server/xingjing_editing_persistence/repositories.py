@@ -784,7 +784,7 @@ class SqlAlchemyRenderRepository(_TimelineReader):
             async with self._session_factory.begin() as session:
                 current = await self._require_task(session, task=task)
                 if current.task_revision != expected_revision:
-                    if current == task:
+                    if current == task or self._is_replayed_task_transition(current, task):
                         return current
                     raise VersionConflict(
                         expected_version=expected_revision,
@@ -1365,6 +1365,18 @@ class SqlAlchemyRenderRepository(_TimelineReader):
     def _new_callback_event_ids(current: RenderTask, task: RenderTask) -> tuple[str, ...]:
         current_ids = set(current.processed_callback_event_ids)
         return tuple(event_id for event_id in task.processed_callback_event_ids if event_id not in current_ids)
+
+    @staticmethod
+    def _is_replayed_task_transition(current: RenderTask, task: RenderTask) -> bool:
+        """Accept an identical terminal callback after persistence enriched billing fields."""
+        if not task.processed_callback_event_ids or not set(task.processed_callback_event_ids).issubset(
+            current.processed_callback_event_ids
+        ):
+            return False
+        ignored = {"billing_actual_minor", "billing_status"}
+        current_payload = current.model_dump(exclude=ignored)
+        task_payload = task.model_dump(exclude=ignored)
+        return current_payload == task_payload
 
     @staticmethod
     async def _reject_reused_callback_events(

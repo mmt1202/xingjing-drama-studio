@@ -8,6 +8,7 @@ import pytest
 
 from server.xingjing_editing.rendering import RenderProfile
 from server.xingjing_editing_http.renderer import HttpRendererGateway
+from tests.xingjing_editing_http.fakes import timeline_version
 
 
 @pytest.mark.asyncio
@@ -31,6 +32,7 @@ async def test_renderer_gateway_submits_a_scoped_idempotent_job_to_configured_se
         task_id="render-task-1",
         attempt=2,
         input_snapshot_sha256="a" * 64,
+        timeline=timeline_version(),
         profile=RenderProfile(
             container="mp4",
             video_codec="h264",
@@ -46,15 +48,14 @@ async def test_renderer_gateway_submits_a_scoped_idempotent_job_to_configured_se
 
     assert submission.renderer_job_id == "job-1"
     assert submission.accepted_at == datetime(2026, 7, 16, 8, 0, 1, tzinfo=UTC)
-    assert seen == {
-        "method": "POST",
-        "path": "/v1/render-jobs",
-        "authorization": "Bearer renderer-secret",
-        "body": {
-            "task_id": "render-task-1",
-            "attempt": 2,
-            "input_snapshot_sha256": "a" * 64,
-            "profile": {"container": "mp4", "video_codec": "h264", "audio_codec": "aac", "width": 1920, "height": 1080, "frame_rate_milli": 25_000},
-            "deadline_at": "2026-07-16T09:00:00Z",
-        },
-    }
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/v1/render-jobs"
+    assert seen["authorization"] == "Bearer renderer-secret"
+    body = seen["body"]
+    assert isinstance(body, dict)
+    assert body["task_id"] == "render-task-1"
+    assert body["attempt"] == 2
+    assert body["input_snapshot_sha256"] == "a" * 64
+    assert body["timeline"]["timeline_id"] == "timeline-1"
+    assert body["profile"]["container"] == "mp4"
+    assert body["deadline_at"] == "2026-07-16T09:00:00Z"

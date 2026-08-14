@@ -19,7 +19,6 @@ from server.xingjing_editing import (
     RenderFailure,
     RenderOutput,
     RenderProfile,
-    RenderService,
     RenderStatus,
     RenderTask,
     RequestRenderCommand,
@@ -29,9 +28,25 @@ from server.xingjing_editing import (
     TrackKind,
     VersionConflict,
 )
+from server.xingjing_editing import (
+    RenderService as DomainRenderService,
+)
 from server.xingjing_editing.contracts import canonical_sha256, timeline_content_sha256
 
 NOW = datetime(2026, 7, 15, 8, 0, tzinfo=UTC)
+
+
+class BillingPolicyStub:
+    currency = "CNY"
+    pricing_version = "test-v1"
+
+    def estimate_minor(self, *, duration_ms: int, width: int, height: int) -> int:
+        del duration_ms, width, height
+        return 100
+
+
+def RenderService(**kwargs):
+    return DomainRenderService(billing_policy=BillingPolicyStub(), **kwargs)
 
 
 class FixedClock:
@@ -196,10 +211,11 @@ class RendererStub:
         task_id: str,
         attempt: int,
         input_snapshot_sha256: str,
+        timeline: TimelineVersion,
         profile: RenderProfile,
         deadline_at: datetime,
     ) -> RendererSubmission:
-        del profile, deadline_at
+        del timeline, profile, deadline_at
         self.submissions.append((task_id, attempt, input_snapshot_sha256))
         return RendererSubmission(renderer_job_id=f"renderer-job-{attempt}", accepted_at=next(self._accepted_times))
 

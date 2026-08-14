@@ -25,6 +25,8 @@ from server.xingjing_editing.rendering import (
     succeed_render_task,
 )
 from server.xingjing_editing_persistence import EditingPersistenceBase
+from server.xingjing_generation_persistence import Base as GenerationPersistenceBase
+from server.xingjing_generation_persistence import SqlAlchemyGenerationTaskRepository
 
 
 @pytest.fixture
@@ -39,7 +41,16 @@ async def editing_session_factory(tmp_path) -> AsyncIterator[async_sessionmaker[
 
     async with engine.begin() as connection:
         await connection.run_sync(EditingPersistenceBase.metadata.create_all)
+        await connection.run_sync(GenerationPersistenceBase.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    await SqlAlchemyGenerationTaskRepository(factory).grant_credits(
+        workspace_id="workspace-1",
+        currency="CNY",
+        amount_minor=10_000,
+        event_id="editing-test-credit",
+        reference="M08 persistence test",
+        at=datetime(2026, 7, 16, 7, 0, tzinfo=UTC),
+    )
     try:
         yield factory
     finally:
@@ -49,6 +60,7 @@ async def editing_session_factory(tmp_path) -> AsyncIterator[async_sessionmaker[
 async def _drop_schema(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(EditingPersistenceBase.metadata.drop_all)
+        await connection.run_sync(GenerationPersistenceBase.metadata.drop_all)
     await engine.dispose()
 
 
@@ -131,6 +143,9 @@ def make_render_task(
             frame_rate_milli=25_000,
         ),
         max_attempts=3,
+        billing_currency="CNY",
+        billing_estimated_minor=100,
+        billing_pricing_version="test-v1",
         created_at=timeline.created_at,
         deadline_at=timeline.created_at + timedelta(minutes=30),
     )

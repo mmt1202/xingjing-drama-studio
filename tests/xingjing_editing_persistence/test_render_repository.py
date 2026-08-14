@@ -110,8 +110,11 @@ async def test_save_render_task_uses_cas_and_deduplicates_callback_event_ids(edi
         event_id="callback-event-1",
         occurred_at=running.updated_at + timedelta(seconds=1),
     )
-    assert await repository.save_render_task(failed, expected_revision=2) == failed
-    assert await repository.save_render_task(failed, expected_revision=2) == failed
+    stored_failed = await repository.save_render_task(failed, expected_revision=2)
+    assert stored_failed.status == failed.status
+    assert stored_failed.billing_status.value == "released"
+    assert stored_failed.billing_actual_minor == 0
+    assert await repository.save_render_task(failed, expected_revision=2) == stored_failed
 
     stale = running.model_copy(update={"renderer_job_id": "stale-job"})
     with pytest.raises(VersionConflict) as conflict:

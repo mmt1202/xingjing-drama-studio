@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
@@ -45,12 +46,12 @@ async def test_signed_callback_derives_scope_from_signed_provider_headers() -> N
 
     context = await HmacRenderCallbackContextResolver(secret=secret)(_request(body=body, signature=signature))
 
-    assert (context.tenant_id, context.workspace_id, context.actor_id, context.request_id) == (
+    assert (context.tenant_id, context.workspace_id, context.actor_id) == (
         "tenant-1",
         "workspace-1",
         "renderer-callback",
-        "renderer-request-1",
     )
+    assert str(UUID(context.request_id)) == context.request_id
     assert context.permissions == frozenset({Permission.FINAL_MANAGE})
 
 

@@ -14,7 +14,6 @@ from server.xingjing_editing import (
     RenderCompletion,
     RendererSubmission,
     RenderProfile,
-    RenderService,
     RenderTask,
     SourceMediaVersion,
     StoredRenderObject,
@@ -24,11 +23,27 @@ from server.xingjing_editing import (
     TrackKind,
     VersionConflict,
 )
+from server.xingjing_editing import (
+    RenderService as DomainRenderService,
+)
 from server.xingjing_editing.contracts import timeline_content_sha256
 from server.xingjing_editing_http import create_editing_dependencies, create_editing_router
 
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 OUTPUT_KEY = "tenant-1/workspace-1/renders/final.mp4"
+
+
+class BillingPolicyStub:
+    currency = "CNY"
+    pricing_version = "test-v1"
+
+    def estimate_minor(self, *, duration_ms: int, width: int, height: int) -> int:
+        del duration_ms, width, height
+        return 100
+
+
+def RenderService(**kwargs):
+    return DomainRenderService(billing_policy=BillingPolicyStub(), **kwargs)
 
 
 class MutableClock:
@@ -220,10 +235,11 @@ class RendererStub:
         task_id: str,
         attempt: int,
         input_snapshot_sha256: str,
+        timeline: TimelineVersion,
         profile: RenderProfile,
         deadline_at: datetime,
     ) -> RendererSubmission:
-        del profile, deadline_at
+        del timeline, profile, deadline_at
         self.submissions.append((task_id, attempt, input_snapshot_sha256))
         return RendererSubmission(
             renderer_job_id=f"renderer-job-{attempt}",
@@ -330,6 +346,8 @@ class EditingHttpHarness:
             render_repository=self.repository,
             access_context_resolver=access_context_resolver,
             callback_context_resolver=access_context_resolver,
+            project_scope_authorizer=lambda _request, project_id: project_id == "project-1",
+            render_input_validator=lambda _request, _project_id, _timeline_id, _version_id: None,
         )
         app = FastAPI()
         app.include_router(create_editing_router(dependencies))

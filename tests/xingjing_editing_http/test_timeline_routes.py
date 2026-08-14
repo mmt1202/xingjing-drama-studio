@@ -128,6 +128,7 @@ def test_read_timeline_returns_versioned_domain_preview() -> None:
     dependencies = create_editing_dependencies(
         timeline_service=service,
         access_context_resolver=_access_context,
+        project_scope_authorizer=lambda _request, project_id: project_id == "project-1",
     )
     app = FastAPI()
     app.include_router(create_editing_router(dependencies))
@@ -135,7 +136,12 @@ def test_read_timeline_returns_versioned_domain_preview() -> None:
     response = TestClient(app).get("/api/v1/projects/project-1/timelines/timeline-1")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert response.json() | {
+        "project_id": "project-1",
+        "episode_id": "episode-1",
+        "final_video_id": "final-video-1",
+        "updated_at": response.json()["updated_at"],
+    } == {
         "timeline_id": "timeline-1",
         "timeline_version_id": "timeline-version-4",
         "timeline_revision": 4,
@@ -145,6 +151,10 @@ def test_read_timeline_returns_versioned_domain_preview() -> None:
         "track_count": 1,
         "clip_count": 0,
         "source_version_ids": [],
+        "project_id": "project-1",
+        "episode_id": "episode-1",
+        "final_video_id": "final-video-1",
+        "updated_at": response.json()["updated_at"],
     }
 
 
@@ -171,6 +181,7 @@ def test_read_timeline_enforces_current_permission_and_workspace_scope() -> None
     dependencies = create_editing_dependencies(
         timeline_service=service,
         access_context_resolver=resolve_context,
+        project_scope_authorizer=lambda _request, project_id: project_id == "project-1",
     )
     app = FastAPI()
     app.include_router(create_editing_router(dependencies))

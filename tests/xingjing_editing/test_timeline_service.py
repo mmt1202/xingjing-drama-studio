@@ -51,6 +51,7 @@ class MediaCatalogStub:
             allowed_project_ids=(),
             content_sha256=versions[version_id] * 64,
             duration_ms=5_000,
+            object_key=f"tenant-1/workspace-1/project-1/source/{version_id}.mp4",
         )
 
 

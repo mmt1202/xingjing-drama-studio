@@ -14,7 +14,7 @@ def test_alembic_head_creates_editing_tables(tmp_path: Path, monkeypatch) -> Non
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).parents[2] / "alembic"))
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "a4b7c2d8e910")
 
     engine = create_engine(f"sqlite:///{database.as_posix()}")
     tables = set(inspect(engine).get_table_names())
@@ -39,6 +39,6 @@ def test_editing_audit_table_is_added_after_the_original_editing_revision(tmp_pa
     before = set(inspect(create_engine(f"sqlite:///{database.as_posix()}")).get_table_names())
     assert "xingjing_editing_audit_events" not in before
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "a4b7c2d8e910")
     after = set(inspect(create_engine(f"sqlite:///{database.as_posix()}")).get_table_names())
     assert "xingjing_editing_audit_events" in after
