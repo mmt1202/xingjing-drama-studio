@@ -31,7 +31,7 @@ def test_m03_upgrade_from_current_head_creates_content_schema_with_constraints(t
     config = _config(database, monkeypatch)
 
     command.upgrade(config, "a4b7c2d8e910")
-    command.upgrade(config, "head")
+    command.upgrade(config, M03_REVISION)
 
     engine = create_engine(f"sqlite:///{database.as_posix()}")
     inspector = inspect(engine)
@@ -54,7 +54,7 @@ def test_m03_downgrade_removes_only_content_tables(tmp_path: Path, monkeypatch) 
     database = tmp_path / "m03-downgrade.db"
     config = _config(database, monkeypatch)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, M03_REVISION)
     engine = create_engine(f"sqlite:///{database.as_posix()}")
     assert M03_TABLES <= set(inspect(engine).get_table_names())
     command.downgrade(config, "a4b7c2d8e910")

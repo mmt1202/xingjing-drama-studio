@@ -11,6 +11,7 @@ function port(overrides: Partial<CreatorProjectsPort> = {}): CreatorProjectsPort
     getProject: vi.fn(),
     projectAction: vi.fn(),
     listScripts: vi.fn().mockResolvedValue({ items: [], nextToken: null }),
+    importScriptFile: vi.fn(),
     scriptAction: vi.fn(),
     ...overrides,
   };
@@ -47,19 +48,17 @@ describe("项目库", () => {
 });
 
 describe("剧本导入", () => {
-  it("异步解析显示处理中，失败后可用同一动作恢复", async () => {
-    const scriptAction = vi.fn()
-      .mockResolvedValueOnce({ taskId: "t1", status: "queued", statusUrl: "/api/v1/tasks/t1" })
-      .mockRejectedValueOnce(Object.assign(new Error("模型暂不可用"), { requestId: "req-2" }))
-      .mockResolvedValueOnce({ taskId: "t2", status: "queued", statusUrl: "/api/v1/tasks/t2" });
-    render(<ScriptImportPage api={port({ scriptAction })} projectId="p1" />);
-    await screen.findByText("尚未导入原文或剧本");
-    fireEvent.change(screen.getByLabelText("选择源文件"), { target: { files: [new File(["正文"], "故事.txt", { type: "text/plain" })] } });
-    fireEvent.click(screen.getByRole("button", { name: "导入并解析" }));
-    expect(await screen.findByText("解析任务已进入队列")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新解析" }));
-    expect(await screen.findByText("模型暂不可用")).toBeInTheDocument();
+  it("真实文件导入失败后可用同一操作恢复", async () => {
+    const importScriptFile = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("上传服务暂不可用"), { requestId: "req-2" }))
+      .mockResolvedValueOnce({ id: "s1" });
+    render(<ScriptImportPage api={port({ importScriptFile })} projectId="p1" />);
+    await screen.findByText("尚未导入剧本");
+    fireEvent.change(screen.getByLabelText("剧本文件"), { target: { files: [new File(["正文"], "故事.txt", { type: "text/plain" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "导入并预检" }));
+    expect(await screen.findByText("上传服务暂不可用")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    await waitFor(() => expect(scriptAction).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(importScriptFile).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("剧本已导入并完成服务端预检。")).toBeInTheDocument();
   });
 });

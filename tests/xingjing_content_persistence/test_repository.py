@@ -21,6 +21,7 @@ from server.xingjing_content_persistence import (
     ContentAuditRow,
     ContentPersistenceBase,
     ScriptVersionRow,
+    SqlAlchemyContentAiRequestRepository,
     SqlAlchemyContentRepository,
 )
 
@@ -161,3 +162,43 @@ def test_schema_compiles_for_postgresql_without_sqlite_only_features() -> None:
     assert "CREATE TABLE xingjing_content_script_versions" in ddl
     assert "CREATE TABLE xingjing_content_source_mappings" in ddl
     assert "AUTOINCREMENT" not in ddl
+
+
+def test_ai_request_failure_retries_and_success_replays_without_duplicate_model_call(
+    repository: SqlAlchemyContentRepository,
+) -> None:
+    requests = SqlAlchemyContentAiRequestRepository(repository._session_factory)
+    fingerprint = "a" * 64
+    scope = {
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace-a",
+        "project_id": "project-a",
+        "action": "analyze",
+        "idempotency_key": "ai-1",
+        "request_fingerprint": fingerprint,
+    }
+
+    first = requests.claim(**scope, now=NOW)
+    assert first.claimed is True
+    requests.fail(
+        **{key: value for key, value in scope.items() if key != "action"},
+        reason="provider timeout",
+        now=NOW,
+    )
+
+    retry = requests.claim(**scope, now=NOW)
+    assert retry.claimed is True
+    requests.succeed(
+        **{key: value for key, value in scope.items() if key != "action"},
+        payload={"locations": ["雨夜街头"]},
+        raw_response='{"locations":["雨夜街头"]}',
+        evidence={"templateVersion": 1},
+        now=NOW,
+    )
+
+    replay = requests.claim(**scope, now=NOW)
+    assert replay.claimed is False
+    assert replay.status == "succeeded"
+    assert replay.result_payload == {"locations": ["雨夜街头"]}
+    with pytest.raises(ValueError, match="IDEMPOTENCY_KEY_REUSED"):
+        requests.claim(**{**scope, "request_fingerprint": "b" * 64}, now=NOW)

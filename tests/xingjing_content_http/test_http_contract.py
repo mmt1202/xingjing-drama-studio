@@ -6,14 +6,19 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from server.xingjing_content import ContentService, FileContentRepository
+from server.xingjing_content import ContentAnalysis, ContentService, DirectorProfile, FileContentRepository
 from server.xingjing_content_http import ContentHttpDependencies, configure_content_http, create_content_router, router
 from server.xingjing_identity_context import TrustedWorkspaceContext
 
 SOURCE = """场景：雨夜街头\n动作：雨水打湿了招牌。\n阿明：我们得走了。"""
 
 
-def _client(tmp_path: Path, *, permissions: frozenset[str] = frozenset({"script.view", "script.manage"})) -> TestClient:
+def _client(
+    tmp_path: Path,
+    *,
+    permissions: frozenset[str] = frozenset({"script.view", "script.manage"}),
+    ai_service: object | None = None,
+) -> TestClient:
     service = ContentService(FileContentRepository(tmp_path))
 
     async def resolve_context(_request):
@@ -23,7 +28,16 @@ def _client(tmp_path: Path, *, permissions: frozenset[str] = frozenset({"script.
         return context.workspace_id == "workspace-1" and project_id == "project-1"
 
     app = FastAPI()
-    app.include_router(create_content_router(ContentHttpDependencies(service, resolve_context, authorize_project)))
+    app.include_router(
+        create_content_router(
+            ContentHttpDependencies(
+                service,
+                resolve_context,
+                authorize_project,
+                ai_service_factory=(lambda _context, _project_id: ai_service) if ai_service is not None else None,
+            )
+        )
+    )
     return TestClient(app)
 
 
@@ -84,6 +98,7 @@ def test_scripts_http_import_list_detail_revise_profile_freeze_and_compare(tmp_p
         "scenes",
         "sourceMappings",
         "changeSummary",
+        "analysis",
     ]
 
     frozen = client.post(
@@ -159,3 +174,78 @@ def test_scripts_http_has_stable_input_idempotency_and_conflict_errors(tmp_path:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "VERSION_CONFLICT"
+
+
+def test_ai_analysis_rewrite_and_director_actions_persist_real_results(tmp_path: Path) -> None:
+    class AiService:
+        async def analyze(self, document, *, expected_revision: int, idempotency_key: str) -> ContentAnalysis:
+            assert document.revision == expected_revision
+            assert idempotency_key == "analyze-1"
+            return ContentAnalysis(
+                character_count=len(document.current_version.source_content),
+                scene_count=1,
+                characters=(),
+                locations=("雨夜街头",),
+                props=("招牌",),
+                episode_suggestions=("第一集",),
+            )
+
+        async def rewrite(self, document, *, expected_revision: int, instruction: str, idempotency_key: str):
+            assert document.revision == expected_revision
+            assert instruction == "增强结尾"
+            assert idempotency_key == "rewrite-1"
+            return document.current_version.source_content + "\n动作：车灯消失在雨幕中。", "增强结尾"
+
+        async def direct(self, document, *, expected_revision: int, idempotency_key: str) -> DirectorProfile:
+            assert document.revision == expected_revision
+            if document.locked_version_number is None:
+                raise ValueError("SCRIPT_NOT_FROZEN")
+            assert idempotency_key == "director-1"
+            return DirectorProfile("短剧观众", "快节奏", "霓虹黑色电影", "手持跟拍", ("夜景拍摄",))
+
+    client = _client(tmp_path, ai_service=AiService())
+    imported = client.post(
+        "/projects/project-1/scripts/actions",
+        headers=_headers(**{"Idempotency-Key": "import-ai"}),
+        json={"action": "import", "payload": {"title": "雨夜", "filename": "rain.md", "mediaType": "text/markdown", "content": SOURCE}},
+    ).json()["data"]["script"]
+    script_id = imported["id"]
+
+    analyzed = client.post(
+        "/projects/project-1/scripts/actions",
+        headers=_headers(**{"Idempotency-Key": "analyze-1", "If-Match": "1"}),
+        json={"action": "analyze", "targetId": script_id, "payload": {}},
+    )
+    assert analyzed.status_code == 200
+    assert analyzed.json()["data"]["script"]["versions"][-1]["analysis"]["locations"] == ["雨夜街头"]
+
+    rewritten = client.post(
+        "/projects/project-1/scripts/actions",
+        headers=_headers(**{"Idempotency-Key": "rewrite-1", "If-Match": "2"}),
+        json={"action": "rewrite", "targetId": script_id, "payload": {"instruction": "增强结尾"}},
+    )
+    assert rewritten.status_code == 200
+    assert rewritten.json()["data"]["script"]["versions"][-1]["changeSummary"] == "增强结尾"
+
+    not_frozen = client.post(
+        "/projects/project-1/scripts/actions",
+        headers=_headers(**{"Idempotency-Key": "director-before-freeze", "If-Match": "3"}),
+        json={"action": "generateDirector", "targetId": script_id, "payload": {}},
+    )
+    assert not_frozen.status_code == 409
+    assert not_frozen.json()["error"]["code"] == "SCRIPT_NOT_FROZEN"
+
+    frozen = client.post(
+        "/projects/project-1/scripts/actions",
+        headers=_headers(**{"Idempotency-Key": "freeze-ai", "If-Match": "3"}),
+        json={"action": "freeze", "targetId": script_id, "payload": {}},
+    )
+    assert frozen.status_code == 200
+
+    directed = client.post(
+        "/projects/project-1/scripts/actions",
+        headers=_headers(**{"Idempotency-Key": "director-1", "If-Match": "4"}),
+        json={"action": "generateDirector", "targetId": script_id, "payload": {}},
+    )
+    assert directed.status_code == 200
+    assert directed.json()["data"]["script"]["directorProfile"]["visualStyle"] == "霓虹黑色电影"

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCreatorProjectsApi, CreatorApiError } from "./api";
 
 describe("星镜项目 typed API", () => {
-  it("写操作携带工作区、幂等键与乐观锁版本", async () => {
+  it("写操作依赖可信会话并携带幂等键与乐观锁版本", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { id: "p1", version: 8 }, meta: { requestId: "r1" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     const api = createCreatorProjectsApi({ workspaceId: "w1", fetcher, createId: () => "idem-1" });
 
@@ -10,8 +10,9 @@ describe("星镜项目 typed API", () => {
 
     expect(fetcher).toHaveBeenCalledWith("/api/v1/projects/p1/actions", expect.objectContaining({
       method: "POST",
-      headers: expect.objectContaining({ "X-Workspace-Id": "w1", "Idempotency-Key": "idem-1", "If-Match": '"7"' }),
+      headers: expect.objectContaining({ "Idempotency-Key": "idem-1", "If-Match": '"7"' }),
     }));
+    expect(fetcher.mock.calls[0][1].headers).not.toHaveProperty("X-Workspace-Id");
   });
 
   it("将 409 解析为保留请求 ID 的类型化冲突", async () => {

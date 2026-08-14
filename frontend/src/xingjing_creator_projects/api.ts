@@ -50,8 +50,8 @@ export function createCreatorProjectsApi({ fetcher = fetch, createId = () => cry
       retryKeys.delete(operation);
       return result.value;
     } catch (error) {
-      // Retain the key only for a safe retry of an interrupted write; a response proves the request reached the server.
-      if (error instanceof CreatorApiError) retryKeys.delete(operation);
+      // 可重试的网关/服务故障并不能证明服务端没有接受写入；复用原键才能安全恢复。
+      if (error instanceof CreatorApiError && !error.retryable) retryKeys.delete(operation);
       throw error;
     }
   };
@@ -109,7 +109,7 @@ export function createCreatorProjectsApi({ fetcher = fetch, createId = () => cry
         retryKeys.delete(operation);
         return result.value.script;
       } catch (error) {
-        if (error instanceof CreatorApiError) retryKeys.delete(operation);
+        if (error instanceof CreatorApiError && !error.retryable) retryKeys.delete(operation);
         throw error;
       }
     },
