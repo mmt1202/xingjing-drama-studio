@@ -80,6 +80,56 @@ def test_scope_hides_cross_tenant_assets(repository: SqlAlchemyAssetRepository) 
     )
 
     assert repository.get(scope("tenant-b"), "asset-1") is None
+
+
+def test_semantic_extraction_claim_is_single_runner_and_replays_result(repository: SqlAlchemyAssetRepository) -> None:
+    first = repository.claim_operation(
+        scope(),
+        operation_kind="semantic.extract",
+        idempotency_key="extract-1",
+        fingerprint="a" * 64,
+        owner_id="project-a",
+        now=NOW,
+    )
+    duplicate = repository.claim_operation(
+        scope(),
+        operation_kind="semantic.extract",
+        idempotency_key="extract-1",
+        fingerprint="a" * 64,
+        owner_id="project-a",
+        now=NOW,
+    )
+    assert first.claimed is True
+    assert duplicate.claimed is False
+    assert duplicate.status == "running"
+
+    repository.finish_operation(
+        scope(),
+        operation_kind="semantic.extract",
+        idempotency_key="extract-1",
+        fingerprint="a" * 64,
+        result={"assets": [{"kind": "prop", "name": "怀表"}]},
+        now=NOW,
+    )
+    replay = repository.claim_operation(
+        scope(),
+        operation_kind="semantic.extract",
+        idempotency_key="extract-1",
+        fingerprint="a" * 64,
+        owner_id="project-a",
+        now=NOW,
+    )
+    assert replay.result == {"assets": [{"kind": "prop", "name": "怀表"}]}
+
+    with pytest.raises(ValueError, match="IDEMPOTENCY_KEY_REUSED"):
+        repository.claim_operation(
+            scope(),
+            operation_kind="semantic.extract",
+            idempotency_key="extract-1",
+            fingerprint="b" * 64,
+            owner_id="project-a",
+            now=NOW,
+        )
     assert repository.list_audit(scope("tenant-b"), asset_id="asset-1") == ()
 
 

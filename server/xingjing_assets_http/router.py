@@ -18,7 +18,11 @@ from uuid import uuid4
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, Field
 
+from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequest, TextTaskType
+from lib.text_generator import TextGenerator
+from lib.text_utils import strip_json_code_fences
 from server.xingjing_assets.contracts import (
     Asset,
     AssetKind,
@@ -48,6 +52,22 @@ class AssetHttpError(RuntimeError):
         self.status_code = status_code
         self.details = dict(details or {})
         super().__init__(code)
+
+
+class _SemanticAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: AssetKind
+    name: str = Field(min_length=1, max_length=512)
+    description: str = Field(default="", max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=32)
+    source_scene_ids: list[str] = Field(default_factory=list, max_length=128)
+
+
+class _SemanticAssets(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assets: list[_SemanticAsset] = Field(default_factory=list, max_length=300)
 
 
 class AssetContractRoute(APIRoute):
@@ -366,7 +386,7 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         if action == "extractAssets":
             frozen_snapshot_id = _text(payload, "scriptVersionId")
             frozen = _snapshot(runtime, context, project_id, frozen_snapshot_id)
-            batch = _extract_assets_from_frozen_script(
+            batch = await _extract_assets_from_frozen_script(
                 runtime=runtime,
                 context=context,
                 project_id=project_id,
@@ -566,7 +586,81 @@ def _generation_task_receipt(task: GenerationTask, context: TrustedWorkspaceCont
     }
 
 
-def _extract_assets_from_frozen_script(
+async def _semantic_asset_candidates(
+    *,
+    repository: SqlAlchemyAssetRepository,
+    scope: AssetScope,
+    idempotency_key: str,
+    fingerprint: str,
+    project_id: str,
+    script_source: str,
+    requested_kinds: tuple[AssetKind, ...],
+) -> _SemanticAssets:
+    operation_key = f"semantic:{hashlib.sha256(idempotency_key.encode()).hexdigest()}"
+    claim = repository.claim_operation(
+        scope,
+        operation_kind="semantic.extract",
+        idempotency_key=operation_key,
+        fingerprint=fingerprint,
+        owner_id=project_id,
+        now=datetime.now(UTC),
+    )
+    if claim.status == "succeeded":
+        if claim.result is None:
+            raise AssetHttpError("SEMANTIC_EXTRACTION_RESULT_MISSING", 500)
+        return _SemanticAssets.model_validate(claim.result)
+    if not claim.claimed:
+        raise AssetHttpError("SEMANTIC_EXTRACTION_IN_PROGRESS", 409)
+    try:
+        generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project_id)
+        generated = await generator.generate(
+            TextGenerationRequest(
+                system_prompt=(
+                    "你是影视资产拆解师。只能从给定冻结剧本中提取明确出现的道具、服装和音色需求，"
+                    "不得虚构人物、物品或权利信息。输出必须严格符合 JSON Schema。"
+                ),
+                prompt=(
+                    f"仅提取这些类型：{', '.join(kind.value for kind in requested_kinds)}。"
+                    "同类型同名称合并，source_scene_ids 仅填写剧本中可确认的场景标识；无法确认时留空。\n"
+                    + script_source
+                ),
+                response_schema=_SemanticAssets,
+                max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            ),
+            project_name=project_id,
+        )
+        output = _SemanticAssets.model_validate_json(strip_json_code_fences(generated.text))
+        requested = set(requested_kinds)
+        seen: set[tuple[AssetKind, str]] = set()
+        for item in output.assets:
+            identity = (item.kind, item.name.strip().casefold())
+            if item.kind not in requested:
+                raise ValueError("SEMANTIC_EXTRACTION_KIND_NOT_REQUESTED")
+            if identity in seen:
+                raise ValueError("SEMANTIC_EXTRACTION_DUPLICATE_ASSET")
+            seen.add(identity)
+    except Exception as error:
+        repository.fail_operation(
+            scope,
+            operation_kind="semantic.extract",
+            idempotency_key=operation_key,
+            fingerprint=fingerprint,
+            reason=str(error),
+            now=datetime.now(UTC),
+        )
+        raise AssetHttpError("SEMANTIC_EXTRACTION_MODEL_FAILED", 502, {"reason": str(error)[:500]}) from error
+    repository.finish_operation(
+        scope,
+        operation_kind="semantic.extract",
+        idempotency_key=operation_key,
+        fingerprint=fingerprint,
+        result=cast(dict[str, object], output.model_dump(mode="json")),
+        now=datetime.now(UTC),
+    )
+    return output
+
+
+async def _extract_assets_from_frozen_script(
     *,
     runtime: AssetRuntime,
     context: TrustedWorkspaceContext,
@@ -578,12 +672,7 @@ def _extract_assets_from_frozen_script(
     frozen: FrozenScriptSnapshotRef,
     requested_kinds: tuple[AssetKind, ...],
 ) -> dict[str, object]:
-    """Persist the deterministic subset of M03 assets without inventing AI output.
-
-    Frozen M03 documents carry reliable scene headings and dialogue speakers.
-    Props, costumes and voices require a semantic model or a reviewed human
-    source, so they are reported as skipped instead of being guessed.
-    """
+    """Persist deterministic entities plus model-validated semantic assets."""
     version_number = int(frozen.script_version_id.rsplit("@", 1)[1])
     parsed = parse_script(
         runtime.frozen_script_source(context, project_id, frozen.snapshot_id),
@@ -617,14 +706,23 @@ def _extract_assets_from_frozen_script(
 
     fingerprint = _digest({"action": "extractAssets", "payload": request_body})
     result_items: list[dict[str, object]] = []
-    for kind in requested_kinds:
-        if kind in {AssetKind.PROP, AssetKind.COSTUME, AssetKind.VOICE}:
-            result_items.append({
-                "id": f"{kind.value}:semantic-extraction",
-                "status": "skipped",
-                "code": "SEMANTIC_EXTRACTION_REQUIRES_PROVIDER",
-                "message": f"{kind.value} 需要语义模型或人工标注，未猜测创建资产。",
-            })
+    semantic_kinds = tuple(kind for kind in requested_kinds if kind in {AssetKind.PROP, AssetKind.COSTUME, AssetKind.VOICE})
+    if semantic_kinds:
+        semantic = await _semantic_asset_candidates(
+            repository=repository,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+            project_id=project_id,
+            script_source=runtime.frozen_script_source(context, project_id, frozen.snapshot_id),
+            requested_kinds=semantic_kinds,
+        )
+        candidates.extend((item.kind, item.name, {
+            "description": item.description,
+            "tags": list(dict.fromkeys((*item.tags, "model-extracted"))),
+            "sourceScriptVersionId": frozen.script_version_id,
+            "sourceSceneIds": item.source_scene_ids,
+        }) for item in semantic.assets)
 
     for kind, name, content in candidates:
         candidate_key = f"{idempotency_key}:extract:{kind.value}:{_digest({'name': name})[:16]}"

@@ -193,6 +193,13 @@ class AssetAuditEvent:
             raise ValueError("occurred_at must include a timezone")
 
 
+@dataclass(frozen=True, slots=True)
+class OperationClaim:
+    claimed: bool
+    status: str
+    result: dict[str, object] | None = None
+
+
 class SqlAlchemyAssetRepository:
     """资产聚合根的真实数据库仓储；所有读取和写入都必须携带租户作用域。"""
 
@@ -253,6 +260,116 @@ class SqlAlchemyAssetRepository:
                 return None
             self._assert_fingerprint(receipt, fingerprint)
             return self._asset(cast(Mapping[str, object], receipt.result_payload))
+
+    def claim_operation(
+        self,
+        scope: AssetScope,
+        *,
+        operation_kind: str,
+        idempotency_key: str,
+        fingerprint: str,
+        owner_id: str,
+        now: datetime,
+    ) -> OperationClaim:
+        if not operation_kind.strip() or len(operation_kind) > 32:
+            raise ValueError("OPERATION_KIND_INVALID")
+        if not idempotency_key.strip() or len(fingerprint) != 64:
+            raise ValueError("OPERATION_CLAIM_INVALID")
+        try:
+            with self._session_factory() as session, session.begin():
+                key = (scope.tenant_id, scope.workspace_id, operation_kind, idempotency_key)
+                row = session.get(IdempotencyRow, key, with_for_update=True)
+                if row is None:
+                    session.add(IdempotencyRow(
+                        tenant_id=scope.tenant_id,
+                        workspace_id=scope.workspace_id,
+                        operation_kind=operation_kind,
+                        idempotency_key=idempotency_key,
+                        fingerprint=fingerprint,
+                        asset_id=owner_id,
+                        result_payload={"status": "running", "attempts": 1, "updatedAt": now.isoformat()},
+                        created_at=now,
+                    ))
+                    return OperationClaim(True, "running")
+                return self._operation_claim(row, fingerprint, now)
+        except IntegrityError:
+            with self._session_factory() as session, session.begin():
+                row = session.get(
+                    IdempotencyRow,
+                    (scope.tenant_id, scope.workspace_id, operation_kind, idempotency_key),
+                    with_for_update=True,
+                )
+                if row is None:
+                    raise
+                return self._operation_claim(row, fingerprint, now)
+
+    def finish_operation(
+        self,
+        scope: AssetScope,
+        *,
+        operation_kind: str,
+        idempotency_key: str,
+        fingerprint: str,
+        result: dict[str, object],
+        now: datetime,
+    ) -> None:
+        with self._session_factory() as session, session.begin():
+            row = session.get(
+                IdempotencyRow,
+                (scope.tenant_id, scope.workspace_id, operation_kind, idempotency_key),
+                with_for_update=True,
+            )
+            if row is None or row.fingerprint != fingerprint:
+                raise ValueError("OPERATION_CLAIM_NOT_FOUND")
+            if row.result_payload.get("status") != "running":
+                raise ValueError("OPERATION_NOT_RUNNING")
+            row.result_payload = {"status": "succeeded", "result": result, "updatedAt": now.isoformat()}
+
+    def fail_operation(
+        self,
+        scope: AssetScope,
+        *,
+        operation_kind: str,
+        idempotency_key: str,
+        fingerprint: str,
+        reason: str,
+        now: datetime,
+    ) -> None:
+        with self._session_factory() as session, session.begin():
+            row = session.get(
+                IdempotencyRow,
+                (scope.tenant_id, scope.workspace_id, operation_kind, idempotency_key),
+                with_for_update=True,
+            )
+            if row is None or row.fingerprint != fingerprint:
+                raise ValueError("OPERATION_CLAIM_NOT_FOUND")
+            row.result_payload = {
+                "status": "failed",
+                "reason": reason[:1000],
+                "attempts": self._operation_attempts(row),
+                "updatedAt": now.isoformat(),
+            }
+
+    @staticmethod
+    def _operation_claim(row: IdempotencyRow, fingerprint: str, now: datetime) -> OperationClaim:
+        if row.fingerprint != fingerprint:
+            raise ValueError("IDEMPOTENCY_KEY_REUSED")
+        status = str(row.result_payload.get("status") or "running")
+        updated_raw = row.result_payload.get("updatedAt")
+        updated_at = datetime.fromisoformat(updated_raw) if isinstance(updated_raw, str) else row.created_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=UTC)
+        if status == "failed" or (status == "running" and updated_at.timestamp() + 300 <= now.timestamp()):
+            attempts = SqlAlchemyAssetRepository._operation_attempts(row) + 1
+            row.result_payload = {"status": "running", "attempts": attempts, "updatedAt": now.isoformat()}
+            return OperationClaim(True, "running")
+        result = row.result_payload.get("result")
+        return OperationClaim(False, status, dict(result) if isinstance(result, Mapping) else None)
+
+    @staticmethod
+    def _operation_attempts(row: IdempotencyRow) -> int:
+        value = row.result_payload.get("attempts")
+        return value if isinstance(value, int) and value > 0 else 1
 
     def get(self, scope: AssetScope, asset_id: str) -> Asset | None:
         with self._session_factory() as session:
