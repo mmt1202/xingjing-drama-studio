@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from server.xingjing_assets.contracts import (
     AssetKind,
@@ -16,6 +19,11 @@ from server.xingjing_assets.contracts import (
 from server.xingjing_assets.errors import CrossProjectReuseDenied, VersionConflict
 from server.xingjing_assets.file_repository import AtomicFileAssetRepository
 from server.xingjing_assets.service import AssetService
+from server.xingjing_assets_persistence import AssetAuditEvent, AssetScope, SqlAlchemyAssetRepository
+from server.xingjing_assets_persistence.repository import Base
+from server.xingjing_storyboard.models import AssetKind as StoryboardAssetKind
+from server.xingjing_storyboard.models import AssetReference as StoryboardAssetReference
+from server.xingjing_storyboard_runtime.runtime import PersistentAssetReferenceValidator
 
 
 @dataclass
@@ -241,3 +249,49 @@ def test_rights_confirmation_requires_evidence_and_appends_verified_history(tmp_
         expected_revision=confirmed.revision,
     )
     assert replayed == confirmed
+
+
+def test_a3_persisted_asset_version_is_consumable_by_m05(tmp_path: Path) -> None:
+    extracted = service_at(tmp_path).create(
+        workspace_id="workspace-1",
+        owner_project_id="project-a",
+        kind=AssetKind.CHARACTER,
+        name="林默",
+        content={"sourceScriptVersionId": "script-v4", "tags": ["script-extracted"]},
+        source=source(),
+        frozen_snapshot=snapshot(),
+    )
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyAssetRepository(sessionmaker(engine, expire_on_commit=False))
+    repository.commit(
+        AssetScope("tenant-1", "workspace-1"),
+        extracted,
+        expected_revision=None,
+        idempotency_key="a3-extract-1",
+        fingerprint="a3-fingerprint",
+        audit=AssetAuditEvent(
+            "request-a3",
+            "actor-a3",
+            "asset.extracted",
+            extracted.asset_id,
+            "succeeded",
+            datetime(2026, 8, 14, tzinfo=UTC),
+            {},
+            extracted.to_dict(),
+        ),
+    )
+    reference = StoryboardAssetReference(
+        asset_id=extracted.asset_id,
+        asset_version_id=extracted.current_version_id,
+        kind=StoryboardAssetKind.CHARACTER,
+    )
+
+    failures = PersistentAssetReferenceValidator(repository).validate(
+        tenant_id="tenant-1",
+        workspace_id="workspace-1",
+        project_id="project-a",
+        references=(reference,),
+    )
+
+    assert failures == ()
