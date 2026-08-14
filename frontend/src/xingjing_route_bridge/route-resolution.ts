@@ -1,4 +1,5 @@
 import { adminRoutes } from "@/xingjing_admin_platform/routes";
+import type { GenerationWorkbenchView } from "@/xingjing_generation_center";
 
 export type ProjectSurface =
   | { kind: "project-library" }
@@ -13,7 +14,7 @@ export type ProjectSurface =
   | { kind: "source-mapping" }
   | { kind: "rewrite" }
   | { kind: "script-versions" }
-  | { kind: "generation"; initialTab: "generation" }
+  | { kind: "generation"; view: GenerationWorkbenchView }
   | { kind: "audio"; pageId: string }
   | { kind: "postproduction"; pageId: string }
   | { kind: "compliance-delivery"; pageId: string }
@@ -34,7 +35,8 @@ const PROJECT_SURFACES: Readonly<Record<string, ProjectSurface>> = {
   "source-mapping": { kind: "source-mapping" },
   rewrite: { kind: "rewrite" },
   versions: { kind: "script-versions" },
-  generation: { kind: "generation", initialTab: "generation" },
+  generation: { kind: "generation", view: "center" },
+  tasks: { kind: "generation", view: "tasks" },
   audio: { kind: "audio", pageId: "CR-007" },
   "audio-subtitle": { kind: "audio", pageId: "CR-007" },
   "bgm-sfx-mixer": { kind: "audio", pageId: "CR-008" },
@@ -93,7 +95,32 @@ const PROJECT_SURFACES: Readonly<Record<string, ProjectSurface>> = {
   "shots-compare": { kind: "assets-storyboard", pageId: "CR-102" },
 };
 
-export function resolveProjectSurface(slug: string): ProjectSurface | null {
+const GENERATION_VIEWS: Readonly<Record<string, GenerationWorkbenchView>> = {
+  image: "image",
+  "image-to-video": "image-to-video",
+  "text-to-video": "text-to-video",
+  video: "video",
+  "first-last-video": "first-last-video",
+  "image-edit": "image-edit",
+  inpaint: "inpaint",
+  "reference-fusion": "reference-fusion",
+  "image-upscale": "image-upscale",
+  "model-center": "model-center",
+  "model-detail": "model-detail",
+  "model-market": "model-market",
+  "model-report": "model-report",
+  "video-candidates": "video-candidates",
+  "video-extend": "video-extend",
+  "video-retry": "video-retry",
+  "video-stabilize": "video-stabilize",
+  "video-upscale": "video-upscale",
+};
+
+export function resolveProjectSurface(slug: string, itemId?: string): ProjectSurface | null {
+  if (slug === "generation" && itemId) {
+    const view = GENERATION_VIEWS[itemId];
+    return view ? { kind: "generation", view } : null;
+  }
   return PROJECT_SURFACES[slug] ?? null;
 }
 

@@ -9,7 +9,7 @@ describe("xingjing business route resolution", () => {
     ["generation", "generation"],
     ["audio", "audio"],
     ["postproduction", "postproduction"],
-    ["compliance-delivery", "postproduction"],
+    ["compliance-delivery", "compliance-delivery"],
     ["assets-extract", "assets-storyboard"],
     ["shots-quality", "assets-storyboard"],
     ["storyboard", "assets-storyboard"],
@@ -19,6 +19,31 @@ describe("xingjing business route resolution", () => {
 
   it("does not silently map an unknown project surface", () => {
     expect(resolveProjectSurface("does-not-exist")).toBeNull();
+  });
+
+  it.each([
+    [undefined, "center"],
+    ["image", "image"],
+    ["image-to-video", "image-to-video"],
+    ["text-to-video", "text-to-video"],
+    ["video", "video"],
+    ["model-center", "model-center"],
+    ["model-report", "model-report"],
+    ["video-candidates", "video-candidates"],
+    ["video-extend", "video-extend"],
+    ["video-retry", "video-retry"],
+    ["video-stabilize", "video-stabilize"],
+    ["video-upscale", "video-upscale"],
+  ])("maps the generation child %s to its real workbench view", (itemId, expected) => {
+    expect(resolveProjectSurface("generation", itemId)).toMatchObject({
+      kind: "generation",
+      view: expected,
+    });
+  });
+
+  it("mounts the task center and rejects unknown generation children", () => {
+    expect(resolveProjectSurface("tasks")).toMatchObject({ kind: "generation", view: "tasks" });
+    expect(resolveProjectSurface("generation", "unknown")).toBeNull();
   });
 
   it("resolves an admin slug to the formal route id", () => {

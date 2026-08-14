@@ -784,6 +784,19 @@ class GenerationRuntime:
             )
             return current
 
+        provider_evidence_id = str(uuid4())
+        cost = self._callback_cost(
+            payload,
+            task_id=task_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            provider_evidence_id=provider_evidence_id,
+            at=received_at,
+        )
+        if outcome == "succeeded" and cost is None:
+            # 在接触对象存储前完成账务契约校验，避免拒绝回调留下孤儿文件。
+            raise ValueError("GENERATION_PROVIDER_CALLBACK_BILLING_REQUIRED")
+
         outputs: tuple[ProviderGeneratedOutput, ...] = ()
         if outcome == "succeeded":
             outputs = await self._store_callback_outputs(
@@ -814,18 +827,6 @@ class GenerationRuntime:
             )
         else:
             raise ValueError("GENERATION_PROVIDER_CALLBACK_STATUS_INVALID")
-
-        provider_evidence_id = str(uuid4())
-        cost = self._callback_cost(
-            payload,
-            task_id=task_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
-            provider_evidence_id=provider_evidence_id,
-            at=received_at,
-        )
-        if outcome == "succeeded" and cost is None:
-            raise ValueError("GENERATION_PROVIDER_CALLBACK_BILLING_REQUIRED")
 
         result = await GenerationProviderCallbackService(self._repository_or_raise()).apply(
             workspace_id=workspace_id,

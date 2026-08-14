@@ -167,7 +167,7 @@ export function ProjectBusinessRoute({
   itemId?: string;
 }) {
   const [location, navigate] = useLocation();
-  const surface = resolveProjectSurface(slug);
+  const surface = resolveProjectSurface(slug, itemId);
   const token = useAuthStore((state) => state.token);
   const creatorApi = useMemo(
     () =>
@@ -253,7 +253,11 @@ export function ProjectBusinessRoute({
       );
     case "generation":
       return (
-        <GenerationAudioWorkspace projectId={projectId} api={generationApi} />
+        <GenerationWorkbench
+          scope={{ workspaceId, projectId }}
+          view={surface.view}
+          api={generationCenterApi}
+        />
       );
     case "audio":
       return (
