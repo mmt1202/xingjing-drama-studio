@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import ANY
@@ -466,21 +467,27 @@ def test_quality_replace_freeze_export_import_and_version_compare_http_contracts
     assert download.headers["content-type"].startswith("application/json")
     assert b'"storyboard_id":"storyboard-1"' in download.content
 
+    source = b'{"schema_version":1,"shots":[{"shot_id":"import-shot","position":1,"shot_number":"I01","shot_size":"wide","camera_movement":"static","dialogue":"","duration_ms":1000,"prompt":"imported","model_strategy":"","cost_tier":"","asset_references":[],"selected_media_id":"","generation_status":"not_started"}]}'
     created = client.post(
         "/api/v1/uploads",
         headers={**_headers(request_id="upload-create"), "Idempotency-Key": "upload-key"},
         json={
             "action": "createUpload",
-            "payload": {"fileName": "import.json", "size": 200, "mimeType": "application/json", "sha256": "ignored"},
+            "payload": {
+                "projectId": "project-1",
+                "fileName": "import.json",
+                "sizeBytes": len(source),
+                "mediaType": "application/json",
+                "sha256": sha256(source).hexdigest(),
+            },
         },
     )
     assert created.status_code == 200
     upload_id = created.json()["data"]["uploadId"]
-    source = b'{"schema_version":1,"shots":[{"shot_id":"import-shot","position":1,"shot_number":"I01","shot_size":"wide","camera_movement":"static","dialogue":"","duration_ms":1000,"prompt":"imported","model_strategy":"","cost_tier":"","asset_references":[],"selected_media_id":"","generation_status":"not_started"}]}'
-    assert client.put(f"/api/v1/storyboard-uploads/{upload_id}/content", content=source).status_code == 204
+    assert client.put(f"/api/v1/projects/project-1/storyboard-uploads/{upload_id}/content", content=source).status_code == 204
     assert (
         client.post(
-            f"/api/v1/uploads/{upload_id}/complete",
+            f"/api/v1/projects/project-1/uploads/{upload_id}/complete",
             headers={**_headers(), "Idempotency-Key": "upload-complete"},
             json={"action": "completeUpload", "payload": {}},
         ).status_code

@@ -12,6 +12,8 @@ def test_schema_compiles_for_postgresql_with_scope_cas_and_upload_constraints() 
         "xingjing_storyboard_idempotency",
         "xingjing_storyboard_audit",
         "xingjing_storyboard_import_uploads",
+        "xingjing_storyboard_prompt_templates",
+        "xingjing_smart_storyboard_requests",
     }
     assert set(Base.metadata.tables) == expected_tables
 

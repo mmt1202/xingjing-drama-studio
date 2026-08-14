@@ -152,6 +152,7 @@ export interface ShotItem {
   readonly promptModelAdapterVersion?: string;
   readonly assetReferences: readonly {
     readonly id: string;
+    readonly versionId?: string;
     readonly type: AssetType;
     readonly name: string;
   }[];

@@ -24,7 +24,7 @@ from server.xingjing_storyboard.errors import (
     VersionConflict,
 )
 from server.xingjing_storyboard.exchange import ExportFormat, import_shots
-from server.xingjing_storyboard.models import Storyboard
+from server.xingjing_storyboard.models import AssetKind, AssetReference, Storyboard
 from server.xingjing_storyboard.ports import AuditEvent
 from server.xingjing_storyboard.service import AccessContext, ShotEdit
 
@@ -866,13 +866,17 @@ def _batch_edits(payload: Mapping[str, object]) -> tuple[ShotEdit, ...]:
         "prompt": "prompt",
         "modelPolicy": "model_strategy",
         "costTier": "cost_tier",
+        "assetReferences": "asset_references",
     }
     unexpected = set(changes) - set(permitted)
     if unexpected:
         raise HttpContractError("UNSUPPORTED_BATCH_CHANGE", details={"fields": sorted(unexpected)})
     if not changes:
         raise HttpContractError("CHANGES_REQUIRED")
-    translated = {permitted[key]: value for key, value in changes.items()}
+    translated = {
+        permitted[key]: _asset_references(value) if key == "assetReferences" else value
+        for key, value in changes.items()
+    }
     try:
         return tuple(
             ShotEdit(shot_id=shot_id, **translated)
@@ -880,6 +884,27 @@ def _batch_edits(payload: Mapping[str, object]) -> tuple[ShotEdit, ...]:
         )
     except TypeError as error:
         raise HttpContractError("INVALID_BATCH_CHANGE") from error
+
+
+def _asset_references(value: object) -> tuple[AssetReference, ...]:
+    if not isinstance(value, list):
+        raise HttpContractError("INVALID_ASSET_REFERENCES")
+    result: list[AssetReference] = []
+    for raw in value:
+        item = _object(raw, code="INVALID_ASSET_REFERENCE")
+        try:
+            result.append(
+                AssetReference(
+                    asset_id=_required_text(item, "id"),
+                    asset_version_id=_required_text(item, "versionId"),
+                    kind=AssetKind(_required_text(item, "type")),
+                )
+            )
+        except ValueError as error:
+            raise HttpContractError("INVALID_ASSET_REFERENCE_TYPE") from error
+    if len({(item.asset_id, item.asset_version_id) for item in result}) != len(result):
+        raise HttpContractError("DUPLICATE_ASSET_REFERENCE")
+    return tuple(result)
 
 
 def _string_mapping(value: object) -> dict[str, str]:

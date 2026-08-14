@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 from fastapi import Request
 from sqlalchemy.orm import sessionmaker
@@ -14,6 +16,7 @@ from server.xingjing_storyboard_runtime import (
     StoryboardRuntimeConfigurationError,
     create_production_storyboard_runtime,
 )
+from server.xingjing_storyboard_runtime.runtime import PersistentAssetReferenceValidator
 
 
 class AssetValidator:
@@ -42,6 +45,8 @@ async def test_runtime_uses_trusted_workspace_context_instead_of_client_identity
         repository=SqlAlchemyStoryboardRepository(sessionmaker()),
         asset_validator=AssetValidator(),
         context_resolver=lambda _request: trusted,
+        upload_store=Mock(),
+        session_factory=sessionmaker(),
     )
     request = Request(
         {
@@ -89,19 +94,19 @@ def test_production_runtime_rejects_the_async_application_database_url() -> None
         raise AssertionError("the synchronous storyboard repository cannot use an async SQLAlchemy URL")
 
 
-def test_production_runtime_requires_a_real_asset_reference_validator(monkeypatch) -> None:
+def test_production_runtime_uses_persistent_asset_validator_by_default(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("XINGJING_STORYBOARD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("XINGJING_STORYBOARD_STORAGE_ROOT", str(tmp_path))
 
-    try:
-        create_production_storyboard_runtime(None)
-    except StoryboardRuntimeConfigurationError as error:
-        assert str(error) == "STORYBOARD_ASSET_VALIDATOR_REQUIRED"
-    else:
-        raise AssertionError("production runtime must not replace the M04 validation boundary with a mock")
+    runtime = create_production_storyboard_runtime(None)
+
+    assert isinstance(runtime.service._asset_validator, PersistentAssetReferenceValidator)
+    runtime.close()
 
 
-def test_production_runtime_composes_sqlalchemy_repository_with_injected_asset_validator(monkeypatch) -> None:
+def test_production_runtime_composes_sqlalchemy_repository_with_injected_asset_validator(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("XINGJING_STORYBOARD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("XINGJING_STORYBOARD_STORAGE_ROOT", str(tmp_path))
     validator = AssetValidator()
 
     runtime = create_production_storyboard_runtime(validator)

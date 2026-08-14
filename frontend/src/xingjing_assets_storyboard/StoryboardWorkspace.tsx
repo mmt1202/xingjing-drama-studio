@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AssetsStoryboardApiError, createAssetsStoryboardApi } from "./api";
 import {
   moveStableItem,
+  type AssetItem,
   type AssetsStoryboardPort,
   type BatchReceipt,
   type PromptTemplateInput,
@@ -234,6 +235,7 @@ function ShotList({
 
 function BatchEditor({
   shots,
+  assets,
   selected,
   canManage,
   busy,
@@ -241,6 +243,7 @@ function BatchEditor({
   onApply,
 }: {
   readonly shots: readonly ShotItem[];
+  readonly assets: readonly AssetItem[];
   readonly selected: readonly string[];
   readonly canManage: boolean;
   readonly busy: boolean;
@@ -254,6 +257,8 @@ function BatchEditor({
   const [prompt, setPrompt] = useState("");
   const [modelPolicy, setModelPolicy] = useState("");
   const [costTier, setCostTier] = useState("");
+  const [assetIds, setAssetIds] = useState<string[]>([]);
+  const [assetSelectionChanged, setAssetSelectionChanged] = useState(false);
   const changes = {
     shotSize: shotSize || undefined,
     durationMs: durationMs ? Number(durationMs) : undefined,
@@ -262,6 +267,18 @@ function BatchEditor({
     prompt: prompt || undefined,
     modelPolicy: modelPolicy || undefined,
     costTier: costTier || undefined,
+    assetReferences: assetSelectionChanged
+      ? assets
+          .filter(
+            (asset) =>
+              assetIds.includes(asset.id) && Boolean(asset.currentVersionId),
+          )
+          .map((asset) => ({
+            id: asset.id,
+            versionId: asset.currentVersionId!,
+            type: asset.type,
+          }))
+      : undefined,
   };
   const hasChanges = Object.values(changes).some(
     (value) => value !== undefined,
@@ -277,8 +294,7 @@ function BatchEditor({
       <aside className={`${panel} h-fit p-5 xl:sticky xl:top-4`}>
         <h2 className="font-semibold">批量变更</h2>
         <p className="mt-2 text-xs text-[#7E8494]">
-          已选择 {selected.length} 个稳定镜头
-          ID；资产引用批量绑定尚待服务端入口接入。
+          已选择 {selected.length} 个稳定镜头 ID；修改会创建统一的新故事板版本。
         </p>
         <div className="mt-4 grid gap-3">
           <label className="text-xs text-[#B8BECC]">
@@ -341,6 +357,38 @@ function BatchEditor({
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
             />
           </label>
+          <fieldset className="rounded-[10px] border border-[#3A3F4E] p-3">
+            <legend className="px-1 text-xs text-[#B8BECC]">绑定项目资产</legend>
+            <p className="mb-2 text-[11px] text-[#7E8494]">
+              勾选后以当前版本替换所选镜头的资产引用；全部取消可清空绑定。
+            </p>
+            <div className="max-h-40 space-y-2 overflow-auto">
+              {assets.filter((asset) => asset.currentVersionId).map((asset) => (
+                <label key={asset.id} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    aria-label={`绑定资产 ${asset.name}`}
+                    checked={assetIds.includes(asset.id)}
+                    onChange={() => {
+                      setAssetSelectionChanged(true);
+                      setAssetIds((current) =>
+                        current.includes(asset.id)
+                          ? current.filter((id) => id !== asset.id)
+                          : [...current, asset.id],
+                      );
+                    }}
+                  />
+                  <span>{asset.name}</span>
+                  <code className="ml-auto text-[10px] text-[#7E8494]">
+                    {asset.type} · {asset.currentVersionId}
+                  </code>
+                </label>
+              ))}
+              {assets.every((asset) => !asset.currentVersionId) ? (
+                <p className="text-xs text-[#7E8494]">当前项目没有可绑定的资产版本。</p>
+              ) : null}
+            </div>
+          </fieldset>
         </div>
         <button
           type="button"
@@ -1479,6 +1527,7 @@ export function StoryboardWorkspace({
     localNavigation?.source === view ? localNavigation.target : view;
   const [context, setContext] = useState<SessionContext>();
   const [shots, setShots] = useState<readonly ShotItem[]>();
+  const [assets, setAssets] = useState<readonly AssetItem[]>([]);
   const [collectionVersion, setCollectionVersion] = useState<number>();
   const [nextToken, setNextToken] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>(shotId ? [shotId] : []);
@@ -1510,15 +1559,21 @@ export function StoryboardWorkspace({
           setShots([]);
           return;
         }
-        const page = await api.listShots(scope, {
-          pageToken: append ? (nextToken ?? undefined) : undefined,
-        });
+        const [page, assetPage] = await Promise.all([
+          api.listShots(scope, {
+            pageToken: append ? (nextToken ?? undefined) : undefined,
+          }),
+          append
+            ? Promise.resolve(undefined)
+            : api.listAssets(scope, { pageSize: 100 }),
+        ]);
         setContext(session);
         setShots((current) =>
           append && current ? [...current, ...page.items] : page.items,
         );
         setNextToken(page.nextToken);
         setCollectionVersion(page.collectionVersion);
+        if (assetPage) setAssets(assetPage.items);
       } catch (cause) {
         if (forbidden(cause)) {
           setDenied(cause as AssetsStoryboardApiError);
@@ -1787,6 +1842,7 @@ export function StoryboardWorkspace({
       {activeView === "batch" && items.length ? (
         <BatchEditor
           shots={items}
+          assets={assets}
           selected={selected}
           canManage={canManage}
           busy={busy}
