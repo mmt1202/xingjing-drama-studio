@@ -1925,14 +1925,11 @@ wheels = [
 
 [[package]]
 name = "portalocker"
-version = "3.2.0"
+version = "4.3.2"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pywin32", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5e/77/65b857a69ed876e1951e88aaba60f5ce6120c33703f7cb61a3c894b8c1b6/portalocker-3.2.0.tar.gz", hash = "sha256:1f3002956a54a8c3730586c5c77bf18fae4149e07eaf1c29fc3faf4d5a3f89ac", size = 95644, upload-time = "2025-06-14T13:20:40.03Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/7a/6371904c17aba3c455eda47001db923d77ba02a858919424d52f56f1e618/portalocker-4.3.2.tar.gz", hash = "sha256:8de4a1330f55b3c9a1d50ab1b70a765f2f136d6399ae206411117ed98c3b8e2b", size = 302990, upload-time = "2026-09-14T01:01:22.79Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl", hash = "sha256:3cdc5f565312224bc570c49337bd21428bba0ef363bbcf58b9ef4a9f11779968", size = 22424, upload-time = "2025-06-14T13:20:38.083Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/b6/3ed645ea033d5eb16e42481fc2b4719bd3a4e36b818006f34e14cf938dce/portalocker-4.3.2-py3-none-any.whl", hash = "sha256:42f0362e7343af78b25eb095c0cde300e746a0ab6647a835cc30764918490c93", size = 128984, upload-time = "2026-09-14T01:01:21.376Z" },
 ]
 
 [[package]]
