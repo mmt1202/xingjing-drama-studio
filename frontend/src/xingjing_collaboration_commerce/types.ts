@@ -37,7 +37,7 @@ export interface CommerceActionDefinition {
 export interface CommerceColumnDefinition {
   readonly key: string;
   readonly labelKey: string;
-  readonly format?: "text" | "status" | "integer" | "minor" | "date" | "datetime" | "version";
+  readonly format?: "text" | "status" | "integer" | "minor" | "date" | "datetime" | "version" | "quantities";
 }
 
 export interface CollaborationCommerceRouteDefinition {
@@ -107,6 +107,8 @@ export interface CommercePageSnapshot {
   readonly workflow: readonly CommerceWorkflowNode[];
   readonly related?: readonly CommerceRelatedSnapshot[];
   readonly nextPageToken: string | null;
+  readonly availableActions?: readonly string[];
+  readonly paymentProviderReady?: boolean;
 }
 
 export interface CommercePageQuery {
@@ -115,6 +117,14 @@ export interface CommercePageQuery {
   readonly query?: string;
   readonly status?: string;
   readonly sort?: string;
+  readonly projectId?: string;
+  readonly source?: string;
+  readonly modelId?: string;
+  readonly actorId?: string;
+  readonly episodeId?: string;
+  readonly shotId?: string;
+  readonly dateFrom?: string;
+  readonly dateTo?: string;
 }
 
 export interface CommerceActionInput {
@@ -148,7 +158,7 @@ export interface CollaborationCommerceApi {
   downloadExport?(
     route: CollaborationCommerceRouteDefinition,
     context: CommercePageContext,
-    query?: string,
+    query?: string | CommercePageQuery,
     signal?: AbortSignal,
   ): Promise<{ readonly blob: Blob; readonly filename: string }>;
   executeAction(

@@ -143,11 +143,84 @@ const fieldsEn = { legalName: "Legal entity name", creditCode: "Unified social c
 const columnsVi = { member: "Thành viên", role: "Vai trò", dataScope: "Phạm vi dữ liệu", seat: "Chỗ ngồi", status: "Trạng thái", updatedAt: "Cập nhật", project: "Dự án", episode: "Tập", shot: "Cảnh quay", model: "Mô hình/trình chạy", task: "Tác vụ", processing: "Tác vụ đang chạy", failure: "Tác vụ lỗi", plan: "Gói", compute: "Hạn mức còn lại", businessNumber: "Số nghiệp vụ", amount: "Số tiền", relatedTask: "Tác vụ liên quan", occurredAt: "Thời điểm", reviewObject: "Đối tượng duyệt", visibleVersion: "Phiên bản hiển thị", expiresAt: "Hết hạn", accessPolicy: "Chính sách truy cập", approvalStatus: "Trạng thái nghiệm thu", template: "Mẫu", type: "Loại", version: "Phiên bản", scope: "Phạm vi cấp phép", price: "Giá", reviewStatus: "Trạng thái duyệt", commercialOrder: "Đơn thương mại", client: "Khách hàng", contractor: "Bên thực hiện", milestone: "Cột mốc", settlementStatus: "Trạng thái quyết toán" };
 const fieldsVi = { ...fieldsEn };
 
+const billingResources = {
+  "zh": {
+    "filters": "财务筛选",
+    "projectId": "项目编号",
+    "modelId": "模型编号",
+    "actorId": "成员编号",
+    "episodeId": "剧集编号",
+    "shotId": "镜头编号",
+    "source": "任务类型",
+    "allSources": "全部类型",
+    "generation": "图片 / 视频",
+    "audio": "音频 / 字幕",
+    "editing": "成片渲染",
+    "dateFrom": "开始时间（含）",
+    "dateTo": "结束时间（不含）",
+    "apply": "应用筛选",
+    "invalidRange": "结束时间必须晚于开始时间。",
+    "paymentUnavailable": "支付渠道尚未接入，暂不支持充值或退款。账单查询和发票申请可正常使用。",
+    "estimated": "预估成本",
+    "released": "释放额度",
+    "features": "套餐功能",
+    "quotas": "套餐总额度",
+    "quotaRemaining": "剩余额度"
+  },
+  "en": {
+    "filters": "Finance filters",
+    "projectId": "Project ID",
+    "modelId": "Model ID",
+    "actorId": "Member ID",
+    "episodeId": "Episode ID",
+    "shotId": "Shot ID",
+    "source": "Task type",
+    "allSources": "All types",
+    "generation": "Image / video",
+    "audio": "Audio / subtitles",
+    "editing": "Final render",
+    "dateFrom": "From (inclusive)",
+    "dateTo": "Until (exclusive)",
+    "apply": "Apply filters",
+    "invalidRange": "The end time must be later than the start time.",
+    "paymentUnavailable": "The payment channel is not connected. Top-ups and refunds are unavailable. Billing queries and invoice requests are available.",
+    "estimated": "Estimated cost",
+    "released": "Released credit",
+    "features": "Plan features",
+    "quotas": "Plan allowances",
+    "quotaRemaining": "Remaining allowances"
+  },
+  "vi": {
+    "filters": "Bộ lọc tài chính",
+    "projectId": "Mã dự án",
+    "modelId": "Mã mô hình",
+    "actorId": "Mã thành viên",
+    "episodeId": "Mã tập",
+    "shotId": "Mã cảnh quay",
+    "source": "Loại tác vụ",
+    "allSources": "Tất cả loại",
+    "generation": "Hình ảnh / video",
+    "audio": "Âm thanh / phụ đề",
+    "editing": "Kết xuất thành phẩm",
+    "dateFrom": "Từ (bao gồm)",
+    "dateTo": "Đến (không bao gồm)",
+    "apply": "Áp dụng bộ lọc",
+    "invalidRange": "Thời gian kết thúc phải sau thời gian bắt đầu.",
+    "paymentUnavailable": "Kênh thanh toán chưa được kết nối. Chưa thể nạp tiền hoặc hoàn tiền. Có thể xem hóa đơn và gửi yêu cầu xuất hóa đơn.",
+    "estimated": "Chi phí dự kiến",
+    "released": "Tín dụng đã giải phóng",
+    "features": "Tính năng gói",
+    "quotas": "Hạn mức gói",
+    "quotaRemaining": "Hạn mức còn lại"
+  }
+};
+
 function resource(language: "zh" | "en" | "vi") {
   const isZh = language === "zh";
   const common = language === "zh" ? commonZh : language === "en" ? commonEn : commonVi;
   return {
     common,
+    billing: billingResources[language],
     pages: pageResources(language, language === "zh" ? zhTitles : language === "en" ? enTitles : viTitles),
     actions: isZh ? actionsZh : language === "en" ? actionsEn : actionsVi,
     columns: isZh ? columnsZh : language === "en" ? columnsEn : columnsVi,

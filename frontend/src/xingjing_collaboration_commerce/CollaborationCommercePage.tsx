@@ -17,6 +17,7 @@ import {
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { BillingFilters } from "./BillingFilters";
 import { collaborationCommerceNamespace, ensureCollaborationCommerceI18n } from "./i18n";
 import { collaborationCommerceRouteMap, retryFailedAction } from "./routes";
 import type {
@@ -25,6 +26,7 @@ import type {
   CommerceActionDefinition,
   CommerceActionFailure,
   CommercePageContext,
+  CommercePageQuery,
   CommercePageSnapshot,
   CommerceRecord,
   SessionContext,
@@ -102,6 +104,7 @@ function formatValue(value: unknown, format: string | undefined, language: strin
     const date = new Date(value);
     if (!Number.isNaN(date.getTime())) return new Intl.DateTimeFormat(language, format === "date" ? { dateStyle: "medium" } : { dateStyle: "medium", timeStyle: "short" }).format(date);
   }
+  if (format === "quantities" && typeof value === "object") return Object.entries(value).map(([key, amount]) => `${key}: ${typeof amount === "number" ? new Intl.NumberFormat(language).format(amount) : String(amount)}`).join(" · ") || "—";
   if (format === "version") return typeof value === "number" ? `v${value}` : typeof value === "string" ? value : "—";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   return "—";
@@ -228,6 +231,11 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
   const [requestId, setRequestId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
+  const [billingFilters, setBillingFilters] = useState<CommercePageQuery>({});
+  const latestRead = useRef(0);
+  const pendingRead = useRef<AbortController | null>(null);
+  const isBilling = route.module === "M11";
+  const locale = i18nInstance.language;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dialogAction, setDialogAction] = useState<CommerceActionDefinition | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -236,41 +244,46 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
 
   const readServerState = useCallback(async (options: { readonly silent?: boolean; readonly pageToken?: string; readonly signal?: AbortSignal } = {}) => {
     if (!activeApi) return;
+    const readId = ++latestRead.current;
+    pendingRead.current?.abort();
+    const controller = new AbortController();
+    pendingRead.current = controller;
+    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
     if (!options.silent) setPhase("checking");
     try {
       let currentSession: SessionContext | null = null;
       if (route.audience !== "client") {
-        currentSession = await activeApi.getSessionContext(options.signal);
+        currentSession = await activeApi.getSessionContext(signal);
         if (!hasPermission(currentSession, route.viewPermission)) {
-          if (mounted.current) { setSession(currentSession); setRequestId(null); setPhase("denied"); }
+          if (mounted.current && readId === latestRead.current && !signal.aborted) { setSession(currentSession); setRequestId(null); setPhase("denied"); }
           return;
         }
       }
-      const data = await activeApi.loadPage(route, context, { pageSize: 25, query: submittedQuery || undefined, pageToken: options.pageToken }, options.signal);
-      if (!mounted.current) return;
+      const data = await activeApi.loadPage(route, context, { ...(isBilling ? billingFilters : {}), ...(isBilling && context.projectId ? { projectId: context.projectId } : {}), pageSize: 25, query: submittedQuery || undefined, pageToken: options.pageToken }, signal);
+      if (!mounted.current || readId !== latestRead.current || signal.aborted) return;
       setSession(currentSession);
       setSnapshot(data);
       setRequestId(data.requestId || null);
       setSelectedId((current) => current && data.items.some((item) => item.id === current) ? current : data.items[0]?.id ?? data.detail?.id ?? null);
       setPhase("ready");
     } catch (cause) {
-      if (options.signal?.aborted || (cause instanceof Error && cause.name === "AbortError") || !mounted.current) return;
+      if (signal.aborted || readId !== latestRead.current || (cause instanceof Error && cause.name === "AbortError") || !mounted.current) return;
       const info = errorInfo(cause);
       setRequestId(info.requestId);
       setPhase(info.status === 401 || info.status === 403 ? "denied" : "failed");
     }
-  }, [activeApi, context, route, submittedQuery]);
+  }, [activeApi, billingFilters, context, isBilling, route, submittedQuery]);
 
   useEffect(() => {
     if (!activeApi) return;
     mounted.current = true;
     const controller = new AbortController();
     const timer = window.setTimeout(() => { void readServerState({ signal: controller.signal }); }, 0);
-    return () => { mounted.current = false; window.clearTimeout(timer); controller.abort(); };
-  }, [activeApi, readServerState]);
+    return () => { mounted.current = false; window.clearTimeout(timer); controller.abort(); pendingRead.current?.abort(); latestRead.current += 1; };
+  }, [activeApi, locale, readServerState]);
 
   const selected = useMemo(() => snapshot?.items.find((item) => item.id === selectedId) ?? snapshot?.detail ?? null, [selectedId, snapshot]);
-  const allowedActions = route.actions.filter((action) => route.audience === "client" ? action.clientSafe : Boolean(session && hasPermission(session, action.permission)));
+  const allowedActions = route.actions.filter((action) => (!snapshot?.availableActions || snapshot.availableActions.includes(action.id))).filter((action) => route.audience === "client" ? action.clientSafe : Boolean(session && hasPermission(session, action.permission)));
 
   const runAction = useCallback(async (action: CommerceActionDefinition, payload: Readonly<Record<string, unknown>>, retryIds?: readonly string[]) => {
     setDialogAction(null);
@@ -296,7 +309,11 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
         setNotice({ kind: "failure", requestId: result.requestId });
         return;
       }
-      if (result.status === "processing") setNotice({ kind: "processing", requestId: result.requestId });
+      if (result.status === "processing") {
+        await readServerState({ silent: true });
+        if (mounted.current) setNotice({ kind: "processing", requestId: result.requestId });
+        return;
+      }
       await readServerState({ silent: true });
       if (mounted.current) setNotice({ kind: "success", requestId: result.requestId, object: result.object });
     } catch (cause) {
@@ -327,7 +344,7 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
     if (!activeApi?.downloadExport || !route.exportEndpoint || exporting) return;
     setExporting(true);
     try {
-      const result = await activeApi.downloadExport(route, context, submittedQuery || undefined);
+      const result = await activeApi.downloadExport(route, context, isBilling ? { ...billingFilters, ...(context.projectId ? { projectId: context.projectId } : {}), query: submittedQuery || undefined } : submittedQuery || undefined);
       const url = URL.createObjectURL(result.blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -374,6 +391,9 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
         </div>
       </section>
 
+      {isBilling && route.id !== "TM-014" && <BillingFilters value={billingFilters} projectId={context.projectId} costs={route.id === "TM-004" || route.id === "TM-015"} onApply={setBillingFilters} />}
+      {isBilling && snapshot.paymentProviderReady === false && <p className="xj-cc-muted" role="status">{t("billing.paymentUnavailable")}</p>}
+
       {snapshot.summary.length > 0 && <section className="xj-cc-metrics" aria-label={t("common.related")}>
         {snapshot.summary.map((metric) => <article key={metric.key}><span>{metric.label}</span><strong>{formatValue(metric.value, metric.format, i18nInstance.language, metric.currency)}</strong></article>)}
       </section>}
@@ -386,14 +406,15 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
           {snapshot.items.length === 0 && !snapshot.detail ? <div className="xj-cc-empty"><PanelsTopLeft aria-hidden="true" /><h2>{t(route.emptyKey)}</h2><p>{t(route.descriptionKey)}</p></div> : snapshot.items.length > 0 ? (
             <div className="xj-cc-table-wrap"><table><thead><tr>{route.columns.map((column) => <th key={column.key}>{t(column.labelKey)}</th>)}</tr></thead><tbody>{snapshot.items.map((item, index) => {
               const itemKey = item.id ?? `${route.id}-${index}`;
-              return <tr key={itemKey} className={item.id === selectedId ? "is-selected" : undefined} onClick={() => item.id && setSelectedId(item.id)}>{route.columns.map((column) => <td key={column.key}><span className={column.format === "status" ? "xj-cc-status" : undefined}>{formatValue(item[column.key], column.format, i18nInstance.language)}</span></td>)}</tr>;
+              return <tr key={itemKey} className={item.id === selectedId ? "is-selected" : undefined} onClick={() => item.id && setSelectedId(item.id)}>{route.columns.map((column) => <td key={column.key}><span className={column.format === "status" ? "xj-cc-status" : undefined}>{formatValue(item[column.key], column.format, i18nInstance.language, typeof item.currency === "string" ? item.currency : "CNY")}</span></td>)}</tr>;
             })}</tbody></table></div>
-          ) : detailRecord ? <dl className="xj-cc-detail-grid">{route.columns.map((column) => <div key={column.key}><dt>{t(column.labelKey)}</dt><dd>{formatValue(detailRecord[column.key], column.format, i18nInstance.language)}</dd></div>)}</dl> : null}
+          ) : detailRecord ? <dl className="xj-cc-detail-grid">{route.columns.map((column) => <div key={column.key}><dt>{t(column.labelKey)}</dt><dd>{formatValue(detailRecord[column.key], column.format, i18nInstance.language, typeof detailRecord.currency === "string" ? detailRecord.currency : "CNY")}</dd></div>)}</dl> : null}
           {snapshot.nextPageToken && <button type="button" className="xj-cc-button xj-cc-next" onClick={() => void readServerState({ silent: true, pageToken: snapshot.nextPageToken ?? undefined })}>{t("common.nextPage")}<ChevronRight aria-hidden="true" size={16} /></button>}
         </section>
 
         <aside className="xj-cc-evidence-panel">
           <div className="xj-cc-section-title"><div><span>{t("common.evidence")}</span><strong>{route.id}</strong></div><ShieldCheck aria-hidden="true" size={20} /></div>
+          {isBilling && selected && Array.isArray(selected.taskIds) && <div className="xj-cc-evidence-meta"><strong>{t("columns.relatedTask")}</strong>{selected.taskIds.filter((id): id is string => typeof id === "string").map((id) => <code key={id}>{id}</code>)}</div>}
           {snapshot.workflow.length > 0 ? <ol className="xj-cc-workflow">{snapshot.workflow.map((node) => <li key={node.id} className={`is-${node.status}`}><span className="xj-cc-node" /><div><strong>{node.label}</strong><small>{node.occurredAt ? formatValue(node.occurredAt, "datetime", i18nInstance.language) : t("common.status", { status: node.status })}</small></div></li>)}</ol> : <p className="xj-cc-muted">{t("common.noWorkflow")}</p>}
           <div className="xj-cc-evidence-meta"><span>{t("common.requestId", { id: snapshot.requestId || "—" })}</span>{snapshot.related && snapshot.related.length > 0 && <span>{t("common.related")} · {snapshot.related.length}</span>}</div>
         </aside>

@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+
 import type {
   CollaborationCommerceApi,
   CommerceActionFailure,
@@ -134,7 +136,7 @@ function itemsFrom(data: unknown): readonly CommerceRecord[] {
 
 function detailFrom(data: unknown): CommerceRecord | undefined {
   const normalized = normalizePayload(data);
-  if (!isRecord(normalized)) return undefined;
+  if (!isRecord(normalized) || Object.keys(normalized).length === 0) return undefined;
   const values = Object.values(normalized);
   if (values.length === 1 && isRecord(values[0])) return values[0];
   return normalized;
@@ -167,7 +169,7 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
   const reviewSessions = new Map<string, { id: string; ticket: string; deliveryVersion: number }>();
 
   function headers(context?: CommercePageContext, body = false, idempotencyKey?: string, version?: number): Record<string, string> {
-    const result: Record<string, string> = { Accept: "application/json" };
+    const result: Record<string, string> = { Accept: "application/json", "Accept-Language": i18n.resolvedLanguage ?? i18n.language };
     if (body) result["Content-Type"] = "application/json";
     if (options.accessToken) result.Authorization = `Bearer ${options.accessToken}`;
     if (context?.workspaceId) result["X-Workspace-Id"] = context.workspaceId;
@@ -234,7 +236,7 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
       });
       const [primary, ...related] = await Promise.all([
         get<unknown>(route.loadEndpoint, context, query, signal),
-        ...route.relatedEndpoints.map((endpoint) => get<unknown>(endpoint, context, query, signal)),
+        ...route.relatedEndpoints.map((endpoint) => get<unknown>(endpoint, context, route.module === "M11" ? { ...query, pageToken: undefined } : query, signal)),
       ]);
       let primaryData = primary.data;
       if (context.reviewToken && isRecord(primaryData)) {
@@ -261,11 +263,13 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
         requestId: primary.meta.requestId ?? "",
         serverTime: primary.meta.serverTime,
         items: itemsFrom(primaryData),
-        detail: detailFrom(primaryData),
+        detail: route.module === "M11" && route.responseKind === "list" ? undefined : detailFrom(primaryData),
         summary: summaryFrom(primaryData),
         workflow: workflowFrom(primaryData),
         related: relatedSnapshots,
         nextPageToken: primary.meta.page?.nextToken ?? null,
+        availableActions: isRecord(primaryData) && Array.isArray(primaryData.available_actions) ? primaryData.available_actions.filter((action): action is string => typeof action === "string") : undefined,
+        paymentProviderReady: isRecord(primaryData) && typeof primaryData.payment_provider_ready === "boolean" ? primaryData.payment_provider_ready : undefined,
       };
     },
 
@@ -275,7 +279,12 @@ export function createCollaborationCommerceApi(options: ClientOptions = {}): Col
       }
       const endpoint = resolveEndpoint(route.exportEndpoint, context);
       const separator = endpoint.includes("?") ? "&" : "?";
-      const url = query?.trim() ? `${baseUrl}${endpoint}${separator}query=${encodeURIComponent(query.trim())}` : `${baseUrl}${endpoint}`;
+      const filters = typeof query === "string" ? { query: query.trim() } : query ?? {};
+      const search = new URLSearchParams();
+      Object.entries(filters).forEach(([key, value]) => {
+        if (key !== "pageToken" && key !== "pageSize" && value !== undefined && value !== "") search.set(key, String(value));
+      });
+      const url = `${baseUrl}${endpoint}${search.size ? separator + search.toString() : ""}`;
       const response = await fetcher(url, {
         method: "GET",
         credentials: "include",

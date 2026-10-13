@@ -133,12 +133,15 @@ const costColumns: readonly CommerceColumnDefinition[] = [
   { key: "source", labelKey: "columns.type" },
   { key: "modelId", labelKey: "columns.model" },
   { key: "actorId", labelKey: "columns.member" },
-  { key: "estimatedMinor", labelKey: "columns.price", format: "minor" },
+  { key: "estimatedMinor", labelKey: "billing.estimated", format: "minor" },
   { key: "actualMinor", labelKey: "columns.amount", format: "minor" },
-  { key: "releasedMinor", labelKey: "columns.status", format: "minor" },
+  { key: "releasedMinor", labelKey: "billing.released", format: "minor" },
   { key: "taskCount", labelKey: "columns.relatedTask", format: "integer" },
 ];
 const planColumns: readonly CommerceColumnDefinition[] = [
+  { key: "features", labelKey: "billing.features" },
+  { key: "quotas", labelKey: "billing.quotas", format: "quantities" },
+  { key: "quotaRemaining", labelKey: "billing.quotaRemaining", format: "quantities" },
   { key: "planId", labelKey: "columns.type" },
   { key: "status", labelKey: "columns.status", format: "status" },
   { key: "seatLimit", labelKey: "columns.seat", format: "integer" },

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Annotated, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
+from sqlalchemy.exc import SQLAlchemyError
 
+from lib.i18n import Translator, get_translator
 from server.xingjing_billing_persistence import BillingIdempotencyConflict
 from server.xingjing_billing_runtime import (
     BillingPageQuery,
@@ -16,6 +19,8 @@ from server.xingjing_billing_runtime import (
     BillingRuntimeConfigurationError,
     BillingRuntimePermissionDenied,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BillingContractRoute(APIRoute):
@@ -29,8 +34,18 @@ class BillingContractRoute(APIRoute):
                 return _error(request, "PERMISSION_DENIED", status.HTTP_403_FORBIDDEN)
             except BillingIdempotencyConflict:
                 return _error(request, "IDEMPOTENCY_CONFLICT", status.HTTP_409_CONFLICT)
-            except BillingRuntimeConfigurationError:
+            except SQLAlchemyError:
+                logger.exception("Team billing persistence request failed")
                 return _error(request, "BILLING_RUNTIME_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE)
+            except BillingRuntimeConfigurationError as error:
+                code = (
+                    "PAYMENT_PROVIDER_NOT_CONFIGURED"
+                    if str(error) == "PAYMENT_PROVIDER_NOT_CONFIGURED"
+                    else "BILLING_RUNTIME_UNAVAILABLE"
+                )
+                return _error(request, code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            except LookupError:
+                return _error(request, "BILLING_OBJECT_NOT_FOUND", status.HTTP_404_NOT_FOUND)
             except HTTPException as error:
                 return _error(request, "REQUEST_REJECTED", error.status_code)
             except ValueError as error:
@@ -39,50 +54,56 @@ class BillingContractRoute(APIRoute):
         return handler
 
 
+def _page_query(
+    page_size: int = Query(25, alias="pageSize", ge=1, le=100),
+    page_token: str | None = Query(None, alias="pageToken"),
+    query: str | None = None,
+    project_id: str | None = Query(None, alias="projectId"),
+    source: str | None = None,
+    model_id: str | None = Query(None, alias="modelId"),
+    actor_id: str | None = Query(None, alias="actorId"),
+    episode_id: str | None = Query(None, alias="episodeId"),
+    shot_id: str | None = Query(None, alias="shotId"),
+    status: str | None = None,
+    date_from: datetime | None = Query(None, alias="dateFrom"),
+    date_to: datetime | None = Query(None, alias="dateTo"),
+) -> BillingPageQuery:
+    return BillingPageQuery(
+        page_size,
+        page_token,
+        query,
+        project_id,
+        source,
+        model_id,
+        actor_id,
+        episode_id,
+        shot_id,
+        status,
+        date_from,
+        date_to,
+    )
+
+
+BillingQuery = Annotated[BillingPageQuery, Depends(_page_query)]
+
+
 def create_billing_router(runtime: BillingRuntime) -> APIRouter:
     router = APIRouter(prefix="/api/v1/workspaces", tags=["xingjing-billing"], route_class=BillingContractRoute)
 
     @router.get("/{workspace_id}/billing")
-    async def billing(
-        request: Request,
-        workspace_id: str,
-        page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-        page_token: str | None = Query(None, alias="pageToken"),
-        query: str | None = None,
-    ) -> JSONResponse:
+    async def billing(request: Request, workspace_id: str, page: BillingQuery, _t: Translator) -> JSONResponse:
         context = await runtime.resolve(request, workspace_id, "billing.view")
-        return _paged_success(
-            context.request_id,
-            await runtime.billing(context, BillingPageQuery(page_size, page_token, query)),
-        )
+        return _paged_success(context.request_id, await runtime.billing(context, page), _t)
 
     @router.get("/{workspace_id}/billing/holds")
-    async def holds(
-        request: Request,
-        workspace_id: str,
-        page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-        page_token: str | None = Query(None, alias="pageToken"),
-        query: str | None = None,
-    ) -> JSONResponse:
+    async def holds(request: Request, workspace_id: str, page: BillingQuery, _t: Translator) -> JSONResponse:
         context = await runtime.resolve(request, workspace_id, "billing.view")
-        return _paged_success(
-            context.request_id,
-            await runtime.holds(context, BillingPageQuery(page_size, page_token, query)),
-        )
+        return _paged_success(context.request_id, await runtime.holds(context, page), _t)
 
     @router.get("/{workspace_id}/billing/journals")
-    async def journals(
-        request: Request,
-        workspace_id: str,
-        page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-        page_token: str | None = Query(None, alias="pageToken"),
-        query: str | None = None,
-    ) -> JSONResponse:
+    async def journals(request: Request, workspace_id: str, page: BillingQuery, _t: Translator) -> JSONResponse:
         context = await runtime.resolve(request, workspace_id, "billing.view")
-        return _paged_success(
-            context.request_id,
-            await runtime.journals(context, BillingPageQuery(page_size, page_token, query)),
-        )
+        return _paged_success(context.request_id, await runtime.journals(context, page), _t)
 
     @router.get("/{workspace_id}/credit-account")
     async def credit_account(request: Request, workspace_id: str) -> JSONResponse:
@@ -95,17 +116,10 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
 
     @router.get("/{workspace_id}/credit-transactions")
     async def credit_transactions(
-        request: Request,
-        workspace_id: str,
-        page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-        page_token: str | None = Query(None, alias="pageToken"),
-        query: str | None = None,
+        request: Request, workspace_id: str, page: BillingQuery, _t: Translator
     ) -> JSONResponse:
         context = await runtime.resolve(request, workspace_id, "billing.view")
-        return _paged_success(
-            context.request_id,
-            await runtime.journals(context, BillingPageQuery(page_size, page_token, query)),
-        )
+        return _paged_success(context.request_id, await runtime.journals(context, page), _t)
 
     @router.get("/{workspace_id}/billing/plan")
     async def plan(request: Request, workspace_id: str) -> JSONResponse:
@@ -113,37 +127,9 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
         return _success(context.request_id, await runtime.plan(context))
 
     @router.get("/{workspace_id}/costs")
-    async def costs(
-        request: Request,
-        workspace_id: str,
-        page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-        page_token: str | None = Query(None, alias="pageToken"),
-        query: str | None = None,
-        project_id: str | None = Query(None, alias="projectId"),
-        source: str | None = None,
-        model_id: str | None = Query(None, alias="modelId"),
-        actor_id: str | None = Query(None, alias="actorId"),
-        episode_id: str | None = Query(None, alias="episodeId"),
-        shot_id: str | None = Query(None, alias="shotId"),
-    ) -> JSONResponse:
+    async def costs(request: Request, workspace_id: str, page: BillingQuery, _t: Translator) -> JSONResponse:
         context = await runtime.resolve(request, workspace_id, "billing.view")
-        return _paged_success(
-            context.request_id,
-            await runtime.costs(
-                context,
-                BillingPageQuery(
-                    page_size,
-                    page_token,
-                    query,
-                    project_id,
-                    source,
-                    model_id,
-                    actor_id,
-                    episode_id,
-                    shot_id,
-                ),
-            ),
-        )
+        return _paged_success(context.request_id, await runtime.costs(context, page), _t)
 
     @router.get("/{workspace_id}/billing/audit-events")
     async def audit_events(
@@ -170,16 +156,10 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
 
     @router.get("/{workspace_id}/billing/export.csv")
     async def export_csv(
-        request: Request,
-        workspace_id: str,
-        dataset: str = Query("documents"),
-        query: str | None = None,
-        project_id: str | None = Query(None, alias="projectId"),
+        request: Request, workspace_id: str, page: BillingQuery, dataset: str = Query("documents")
     ) -> Response:
         context = await runtime.resolve(request, workspace_id, "billing.manage")
-        filename, content = await runtime.export_csv(
-            context, dataset=dataset, query=query, project_id=project_id
-        )
+        filename, content = await runtime.export_csv(context, dataset=dataset, query=page.query, filters=page)
         return Response(
             content=content,
             media_type="text/csv; charset=utf-8",
@@ -313,7 +293,7 @@ def _positive_integer(value: Mapping[str, object], key: str) -> int:
 
 def _idempotency_key(request: Request) -> str:
     value = request.headers.get("Idempotency-Key", "").strip()
-    if not value:
+    if not value or len(value) > 255:
         raise ValueError("IDEMPOTENCY_KEY_REQUIRED")
     return value
 
@@ -322,8 +302,11 @@ def _success(request_id: str, data: Mapping[str, object]) -> JSONResponse:
     return JSONResponse({"data": dict(data), "meta": {"requestId": request_id}})
 
 
-def _paged_success(request_id: str, data: Mapping[str, object]) -> JSONResponse:
+def _paged_success(request_id: str, data: Mapping[str, object], _t: Translator | None = None) -> JSONResponse:
     payload = dict(data)
+    summary = payload.get("summary")
+    if _t is not None and isinstance(summary, list):
+        payload["summary"] = [{**metric, "label": _t(metric["label"])} for metric in summary]
     next_token = payload.pop("next_page_token", None)
     page = {"nextToken": next_token} if isinstance(next_token, str) else {"nextToken": None}
     return JSONResponse({"data": payload, "meta": {"requestId": request_id, "page": page}})
@@ -331,7 +314,11 @@ def _paged_success(request_id: str, data: Mapping[str, object]) -> JSONResponse:
 
 def _error(request: Request, code: str, status_code: int) -> JSONResponse:
     request_id = request.headers.get("X-Request-Id", "unknown")
+    _t = get_translator(request)
+    message_key = (
+        "billing.payment_unavailable" if code == "PAYMENT_PROVIDER_NOT_CONFIGURED" else "billing.request_failed"
+    )
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "details": {}}, "meta": {"requestId": request_id}},
+        content={"error": {"code": code, "message": _t(message_key), "details": {}}, "meta": {"requestId": request_id}},
     )

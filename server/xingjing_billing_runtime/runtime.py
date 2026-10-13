@@ -4,13 +4,13 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from csv import DictWriter
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from inspect import isawaitable
 from io import StringIO
@@ -54,24 +54,11 @@ from server.xingjing_identity_context import (
     TrustedWorkspaceContextResolver,
 )
 
+from .query import BillingPageQuery, filter_records
+
 type ContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
 
-
-@dataclass(frozen=True, slots=True)
-class BillingPageQuery:
-    page_size: int = 25
-    page_token: str | None = None
-    query: str | None = None
-    project_id: str | None = None
-    source: str | None = None
-    model_id: str | None = None
-    actor_id: str | None = None
-    episode_id: str | None = None
-    shot_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.page_size < 1 or self.page_size > 100:
-            raise ValueError("PAGE_SIZE_INVALID")
+logger = logging.getLogger(__name__)
 
 
 class BillingRuntimeConfigurationError(RuntimeError):
@@ -107,8 +94,8 @@ class BillingRuntime:
                 await self.close_expired_payment_orders()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 - background loop retries without killing the app
-                pass
+            except Exception:
+                logger.exception("Payment order expiry reconciliation failed")
             await asyncio.sleep(60)
 
     async def close_expired_payment_orders(self) -> int:
@@ -178,17 +165,7 @@ class BillingRuntime:
         idempotency_key: str,
         expires_at: datetime,
     ) -> dict[str, object]:
-        return await self._finance_repository(context).create_payment_order(
-            order_id=order_id,
-            amount_minor=amount_minor,
-            currency=currency,
-            order_type=order_type,
-            actor_id=context.actor_id,
-            request_id=context.request_id,
-            idempotency_key=idempotency_key,
-            expires_at=expires_at,
-            occurred_at=datetime.now(UTC),
-        )
+        raise BillingRuntimeConfigurationError("PAYMENT_PROVIDER_NOT_CONFIGURED")
 
     async def refund_payment_order(
         self,
@@ -198,14 +175,7 @@ class BillingRuntime:
         amount_minor: int,
         idempotency_key: str,
     ) -> dict[str, object]:
-        return await self._finance_repository(context).refund_payment_order(
-            order_id=order_id,
-            amount_minor=amount_minor,
-            actor_id=context.actor_id,
-            request_id=context.request_id,
-            idempotency_key=idempotency_key,
-            occurred_at=datetime.now(UTC),
-        )
+        raise BillingRuntimeConfigurationError("PAYMENT_PROVIDER_NOT_CONFIGURED")
 
     async def resolve(self, request: Request, workspace_id: str, permission: str) -> TrustedWorkspaceContext:
         context = self._context_resolver(request)
@@ -218,58 +188,39 @@ class BillingRuntime:
         return context
 
     async def billing(self, context: TrustedWorkspaceContext, page: BillingPageQuery) -> dict[str, object]:
-        account, holds, journals = await self._billing_records(context)
-        repository = self._finance_repository(context)
-        invoices = await repository.invoices()
-        orders = await repository.orders()
-        plan = await repository.plan()
+        async with self._session_factory() as session:
+            account, holds, journals = await self._billing_records(context, session=session)
+            repository = self._finance_repository(context)
+            invoices = await repository.invoices(session=session)
+            orders = await repository.orders(session=session)
+            plan = await repository.plan(session=session)
         financial_documents = sorted(
             [*invoices, *orders],
             key=lambda item: (str(item["occurred_at"]), str(item["id"])),
             reverse=True,
         )
-        items, next_token = _page_records(financial_documents, page)
+        items, next_token = _page_records(filter_records(financial_documents, page), page)
         return {
             "items": items,
             "next_page_token": next_token,
             "account": account,
             "plan": plan,
+            "available_actions": ["requestInvoice"],
+            "payment_provider_ready": False,
             "hold_count": len(holds),
             "journal_count": len(journals),
-            "summary": [
-                {
-                    "key": "available",
-                    "label": "可用算力",
-                    "value": account["available_minor"],
-                    "format": "minor",
-                    "currency": account["currency"],
-                },
-                {
-                    "key": "held",
-                    "label": "冻结算力",
-                    "value": account["held_minor"],
-                    "format": "minor",
-                    "currency": account["currency"],
-                },
-                {
-                    "key": "spent",
-                    "label": "累计消耗",
-                    "value": account["spent_minor"],
-                    "format": "minor",
-                    "currency": account["currency"],
-                },
-            ],
+            "summary": _account_summary(account),
         }
 
     async def holds(self, context: TrustedWorkspaceContext, page: BillingPageQuery) -> dict[str, object]:
         account, holds, _ = await self._billing_records(context)
-        items, next_token = _page_records(holds, page)
-        return {"items": items, "account": account, "next_page_token": next_token}
+        items, next_token = _page_records(filter_records(holds, page), page)
+        return {"items": items, "account": account, "summary": _account_summary(account), "next_page_token": next_token}
 
     async def journals(self, context: TrustedWorkspaceContext, page: BillingPageQuery) -> dict[str, object]:
         account, _, journals = await self._billing_records(context)
-        items, next_token = _page_records(journals, page)
-        return {"items": items, "account": account, "next_page_token": next_token}
+        items, next_token = _page_records(filter_records(journals, page), page)
+        return {"items": items, "account": account, "summary": _account_summary(account), "next_page_token": next_token}
 
     async def plan(self, context: TrustedWorkspaceContext) -> dict[str, object]:
         plan = await self._finance_repository(context).plan()
@@ -277,46 +228,12 @@ class BillingRuntime:
 
     async def costs(self, context: TrustedWorkspaceContext, page: BillingPageQuery) -> dict[str, object]:
         account, holds, _ = await self._billing_records(context)
-        items = _cost_items(holds, str(account["currency"]))
-        filters = {
-            "project_id": page.project_id,
-            "source": page.source,
-            "model_id": page.model_id,
-            "actor_id": page.actor_id,
-            "episode_id": page.episode_id,
-            "shot_id": page.shot_id,
-        }
-        items = [
-            item
-            for item in items
-            if all(expected is None or item.get(key) == expected for key, expected in filters.items())
-        ]
+        items = _filtered_cost_items(holds, str(account["currency"]), page)
         paged_items, next_token = _page_records(items, page)
         return {
             "items": paged_items,
             "next_page_token": next_token,
-            "summary": [
-                {
-                    "key": "total",
-                    "label": "实际成本",
-                    "value": sum(_integer(item["actual_minor"]) for item in items),
-                    "format": "minor",
-                    "currency": account["currency"],
-                },
-                {
-                    "key": "released",
-                    "label": "已退回",
-                    "value": sum(_integer(item["released_minor"]) for item in items),
-                    "format": "minor",
-                    "currency": account["currency"],
-                },
-                {
-                    "key": "tasks",
-                    "label": "计费任务",
-                    "value": sum(_integer(item["task_count"]) for item in items),
-                    "format": "integer",
-                },
-            ],
+            "summary": _cost_summary(items),
         }
 
     async def audit_events(
@@ -335,7 +252,7 @@ class BillingRuntime:
                 object_id=object_id,
             )
         )
-        items, next_token = _page_records(records, page)
+        items, next_token = _page_records(filter_records(records, page), page)
         return {"items": items, "next_page_token": next_token}
 
     async def export_csv(
@@ -345,33 +262,21 @@ class BillingRuntime:
         dataset: str,
         query: str | None,
         project_id: str | None = None,
+        filters: BillingPageQuery | None = None,
     ) -> tuple[str, bytes]:
-        account, holds, journals = await self._billing_records(context)
+        page = filters or BillingPageQuery(query=query, project_id=project_id)
         repository = self._finance_repository(context)
         if dataset == "documents":
-            records = [*await repository.invoices(), *await repository.orders()]
-        elif dataset == "holds":
-            records = holds
-        elif dataset == "journals":
-            records = journals
-        elif dataset == "costs":
-            records = _cost_items(holds, str(account["currency"]))
-            if project_id is not None:
-                records = [record for record in records if record.get("project_id") == project_id]
+            async with self._session_factory() as session:
+                records = [*await repository.invoices(session=session), *await repository.orders(session=session)]
+        elif dataset in {"holds", "journals", "costs"}:
+            account, holds, journals = await self._billing_records(context)
+            records = holds if dataset == "holds" else journals
+            if dataset == "costs":
+                records = _filtered_cost_items(holds, str(account["currency"]), page)
         else:
             raise ValueError("BILLING_EXPORT_DATASET_INVALID")
-        BillingPageQuery(page_size=100, query=query)
-        # Export must not silently truncate; apply the same server-side filter
-        # without the interactive page limit.
-        query_text = (query or "").strip().casefold()
-        if query_text:
-            filtered = [
-                record
-                for record in records
-                if query_text in " ".join(str(value) for value in record.values()).casefold()
-            ]
-        else:
-            filtered = list(records)
+        filtered = records if dataset == "costs" else filter_records(records, page)
         csv_bytes = _csv_bytes(filtered)
         await repository.record_export(
             actor_id=context.actor_id,
@@ -380,7 +285,7 @@ class BillingRuntime:
             row_count=len(filtered),
             occurred_at=datetime.now(UTC),
         )
-        return f"xingjing-{dataset}-{context.workspace_id}.csv", csv_bytes
+        return f"xingjing-{dataset}.csv", csv_bytes
 
     async def request_invoice(
         self,
@@ -391,7 +296,16 @@ class BillingRuntime:
         currency: str,
         idempotency_key: str,
     ) -> dict[str, object]:
-        if amount_minor <= 0 or len(currency) != 3 or not invoice_title.strip():
+        if (
+            isinstance(amount_minor, bool)
+            or amount_minor <= 0
+            or amount_minor > 2**63 - 1
+            or len(currency) != 3
+            or not currency.isascii()
+            or not currency.isalpha()
+            or not invoice_title.strip()
+            or len(invoice_title.strip()) > 512
+        ):
             raise ValueError("INVALID_INVOICE_REQUEST")
         return await self._finance_repository(context).request_invoice(
             invoice_title=invoice_title.strip(),
@@ -404,110 +318,110 @@ class BillingRuntime:
         )
 
     async def _billing_records(
-        self, context: TrustedWorkspaceContext
+        self, context: TrustedWorkspaceContext, *, session: AsyncSession | None = None
     ) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
-        async with self._session_factory() as session:
-            account_row = await session.get(GenerationBillingAccountRow, context.workspace_id)
-            generation_holds = (
-                await session.scalars(
-                    select(GenerationBillingHoldRow).where(
-                        GenerationBillingHoldRow.workspace_id == context.workspace_id
-                    )
-                )
-            ).all()
-            generation_journals = (
-                await session.scalars(
-                    select(GenerationBillingJournalRow).where(
-                        GenerationBillingJournalRow.workspace_id == context.workspace_id
-                    )
-                )
-            ).all()
-            audio_holds = (
-                (
-                    await session.execute(
-                        select(audio_billing_holds).where(
-                            audio_billing_holds.c.tenant_id == context.tenant_id,
-                            audio_billing_holds.c.workspace_id == context.workspace_id,
-                        )
-                    )
-                )
-                .mappings()
-                .all()
+        if session is None:
+            async with self._session_factory() as owned_session:
+                return await self._billing_records(context, session=owned_session)
+        account_row = await session.get(GenerationBillingAccountRow, context.workspace_id)
+        generation_holds = (
+            await session.scalars(
+                select(GenerationBillingHoldRow).where(GenerationBillingHoldRow.workspace_id == context.workspace_id)
             )
-            audio_journals = (
-                (
-                    await session.execute(
-                        select(audio_billing_journals).where(
-                            audio_billing_journals.c.tenant_id == context.tenant_id,
-                            audio_billing_journals.c.workspace_id == context.workspace_id,
-                        )
-                    )
+        ).all()
+        generation_journals = (
+            await session.scalars(
+                select(GenerationBillingJournalRow).where(
+                    GenerationBillingJournalRow.workspace_id == context.workspace_id
                 )
-                .mappings()
-                .all()
             )
-            editing_holds = (
-                await session.scalars(
-                    select(EditingRenderBillingHoldRow).where(
-                        EditingRenderBillingHoldRow.tenant_id == context.tenant_id,
-                        EditingRenderBillingHoldRow.workspace_id == context.workspace_id,
+        ).all()
+        audio_holds = (
+            (
+                await session.execute(
+                    select(audio_billing_holds).where(
+                        audio_billing_holds.c.tenant_id == context.tenant_id,
+                        audio_billing_holds.c.workspace_id == context.workspace_id,
                     )
                 )
-            ).all()
-            editing_journals = (
-                await session.scalars(
-                    select(EditingRenderBillingJournalRow).where(
-                        EditingRenderBillingJournalRow.tenant_id == context.tenant_id,
-                        EditingRenderBillingJournalRow.workspace_id == context.workspace_id,
-                    )
-                )
-            ).all()
-            generation_tasks = (
-                await session.scalars(
-                    select(GenerationTaskRow).where(GenerationTaskRow.workspace_id == context.workspace_id)
-                )
-            ).all()
-            generation_audits = (
-                await session.scalars(
-                    select(GenerationAuditRow).where(GenerationAuditRow.workspace_id == context.workspace_id)
-                )
-            ).all()
-            audio_tasks = (
-                (
-                    await session.execute(
-                        select(audio_generation_tasks).where(
-                            audio_generation_tasks.c.tenant_id == context.tenant_id,
-                            audio_generation_tasks.c.workspace_id == context.workspace_id,
-                        )
-                    )
-                )
-                .mappings()
-                .all()
             )
-            editing_tasks = (
-                await session.scalars(
-                    select(RenderTaskRow).where(
-                        RenderTaskRow.tenant_id == context.tenant_id,
-                        RenderTaskRow.workspace_id == context.workspace_id,
+            .mappings()
+            .all()
+        )
+        audio_journals = (
+            (
+                await session.execute(
+                    select(audio_billing_journals).where(
+                        audio_billing_journals.c.tenant_id == context.tenant_id,
+                        audio_billing_journals.c.workspace_id == context.workspace_id,
                     )
                 )
-            ).all()
-            editing_audits = (
-                await session.scalars(
-                    select(EditingAuditRow).where(
-                        EditingAuditRow.tenant_id == context.tenant_id,
-                        EditingAuditRow.workspace_id == context.workspace_id,
+            )
+            .mappings()
+            .all()
+        )
+        editing_holds = (
+            await session.scalars(
+                select(EditingRenderBillingHoldRow).where(
+                    EditingRenderBillingHoldRow.tenant_id == context.tenant_id,
+                    EditingRenderBillingHoldRow.workspace_id == context.workspace_id,
+                )
+            )
+        ).all()
+        editing_journals = (
+            await session.scalars(
+                select(EditingRenderBillingJournalRow).where(
+                    EditingRenderBillingJournalRow.tenant_id == context.tenant_id,
+                    EditingRenderBillingJournalRow.workspace_id == context.workspace_id,
+                )
+            )
+        ).all()
+        generation_tasks = (
+            await session.scalars(
+                select(GenerationTaskRow).where(GenerationTaskRow.workspace_id == context.workspace_id)
+            )
+        ).all()
+        generation_audits = (
+            await session.scalars(
+                select(GenerationAuditRow).where(GenerationAuditRow.workspace_id == context.workspace_id)
+            )
+        ).all()
+        audio_tasks = (
+            (
+                await session.execute(
+                    select(audio_generation_tasks).where(
+                        audio_generation_tasks.c.tenant_id == context.tenant_id,
+                        audio_generation_tasks.c.workspace_id == context.workspace_id,
                     )
                 )
-            ).all()
-            editing_timelines = (
-                await session.scalars(
-                    select(TimelineVersionRow).where(
-                        TimelineVersionRow.tenant_id == context.tenant_id,
-                        TimelineVersionRow.workspace_id == context.workspace_id,
-                    )
+            )
+            .mappings()
+            .all()
+        )
+        editing_tasks = (
+            await session.scalars(
+                select(RenderTaskRow).where(
+                    RenderTaskRow.tenant_id == context.tenant_id,
+                    RenderTaskRow.workspace_id == context.workspace_id,
                 )
-            ).all()
+            )
+        ).all()
+        editing_audits = (
+            await session.scalars(
+                select(EditingAuditRow).where(
+                    EditingAuditRow.tenant_id == context.tenant_id,
+                    EditingAuditRow.workspace_id == context.workspace_id,
+                )
+            )
+        ).all()
+        editing_timelines = (
+            await session.scalars(
+                select(TimelineVersionRow).where(
+                    TimelineVersionRow.tenant_id == context.tenant_id,
+                    TimelineVersionRow.workspace_id == context.workspace_id,
+                )
+            )
+        ).all()
         account = {
             "workspace_id": context.workspace_id,
             "currency": "CNY" if account_row is None else account_row.currency,
@@ -535,6 +449,15 @@ class BillingRuntime:
             [_journal(row, source="generation") for row in generation_journals]
             + [_mapping_journal(row, source="audio") for row in audio_journals]
             + [_journal(row, source="editing") for row in editing_journals]
+        )
+        _enrich_cost_dimensions(
+            journals,
+            generation_tasks=generation_tasks,
+            generation_audits=generation_audits,
+            audio_tasks=audio_tasks,
+            editing_tasks=editing_tasks,
+            editing_audits=editing_audits,
+            editing_timelines=editing_timelines,
         )
         holds.sort(key=lambda item: (str(item["updated_at"]), str(item["id"])), reverse=True)
         journals.sort(key=lambda item: (str(item["occurred_at"]), str(item["id"])), reverse=True)
@@ -603,7 +526,7 @@ def _hold(row: Any, *, source: str) -> dict[str, object]:
         "project_id": row.project_id,
         "task_id": row.task_id,
         "source": source,
-        "amount_minor": row.actual_minor or row.estimated_minor,
+        "amount_minor": row.estimated_minor if row.status == "active" else row.actual_minor,
         "estimated_minor": row.estimated_minor,
         "actual_minor": row.actual_minor,
         "released_minor": row.released_minor,
@@ -621,7 +544,7 @@ def _mapping_hold(row: RowMapping, *, source: str) -> dict[str, object]:
         "project_id": row["project_id"],
         "task_id": row["task_id"],
         "source": source,
-        "amount_minor": row["actual_minor"] or row["estimated_minor"],
+        "amount_minor": row["estimated_minor"] if row["status"] == "active" else row["actual_minor"],
         "estimated_minor": row["estimated_minor"],
         "actual_minor": row["actual_minor"],
         "released_minor": row["released_minor"],
@@ -642,7 +565,7 @@ def _journal(row: Any, *, source: str) -> dict[str, object]:
         "amount_minor": row.amount_minor,
         "currency": row.currency,
         "status": row.action,
-        "occurred_at": getattr(row, "occurred_at", row.created_at).isoformat(),
+        "occurred_at": _iso(getattr(row, "occurred_at", None) or getattr(row, "created_at", None)),
     }
 
 
@@ -673,9 +596,10 @@ def _integer(value: object) -> int:
 
 
 def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str, object]]:
-    dimensions: defaultdict[tuple[str, str, str, str, str, str], dict[str, int]] = defaultdict(
+    dimensions: defaultdict[tuple[str, str, str, str, str, str, str], dict[str, int]] = defaultdict(
         lambda: {"estimated_minor": 0, "actual_minor": 0, "released_minor": 0, "task_count": 0}
     )
+    tasks: defaultdict[tuple[str, ...], list[str]] = defaultdict(list)
     for hold in holds:
         key = (
             str(hold["project_id"]),
@@ -684,7 +608,11 @@ def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str,
             str(hold.get("actor_id") or "unattributed"),
             str(hold.get("episode_id") or "unattributed"),
             str(hold.get("shot_id") or "unattributed"),
+            str(hold.get("currency") or currency),
         )
+        task_id = hold.get("task_id")
+        if isinstance(task_id, str):
+            tasks[key].append(task_id)
         values = dimensions[key]
         values["estimated_minor"] += _integer(hold["estimated_minor"])
         values["actual_minor"] += _integer(hold["actual_minor"])
@@ -692,18 +620,65 @@ def _cost_items(holds: list[dict[str, object]], currency: str) -> list[dict[str,
         values["task_count"] += 1
     return [
         {
-            "id": ":".join(key),
+            "id": hashlib.sha256(json.dumps(key).encode()).hexdigest(),
             "project_id": key[0],
             "source": key[1],
             "model_id": None if key[2] == "unattributed" else key[2],
             "actor_id": None if key[3] == "unattributed" else key[3],
             "episode_id": None if key[4] == "unattributed" else key[4],
             "shot_id": None if key[5] == "unattributed" else key[5],
-            "currency": currency,
+            "currency": key[6],
+            "task_ids": sorted(set(tasks[key])),
             **values,
         }
         for key, values in sorted(dimensions.items())
     ]
+
+
+def _filtered_cost_items(
+    holds: list[dict[str, object]], currency: str, page: BillingPageQuery
+) -> list[dict[str, object]]:
+    scoped_holds = filter_records(holds, page, include_text=False)
+    return filter_records(_cost_items(scoped_holds, currency), page, text_only=True)
+
+
+def _account_summary(account: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "key": key,
+            "label": f"billing.{key}",
+            "value": account[f"{key}_minor"],
+            "format": "minor",
+            "currency": account["currency"],
+        }
+        for key in ("available", "held", "spent")
+    ]
+
+
+def _cost_summary(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    currencies = sorted({str(item["currency"]) for item in items})
+    summary: list[dict[str, object]] = []
+    for currency in currencies:
+        rows = [item for item in items if item["currency"] == currency]
+        for key, field in (("total", "actual_minor"), ("released", "released_minor")):
+            summary.append(
+                {
+                    "key": f"{key}:{currency}",
+                    "label": f"billing.{key}",
+                    "value": sum(_integer(item[field]) for item in rows),
+                    "format": "minor",
+                    "currency": currency,
+                }
+            )
+    summary.append(
+        {
+            "key": "tasks",
+            "label": "billing.tasks",
+            "value": sum(_integer(item["task_count"]) for item in items),
+            "format": "integer",
+        }
+    )
+    return summary
 
 
 def _enrich_cost_dimensions(
@@ -798,17 +773,14 @@ def _csv_bytes(records: list[dict[str, object]]) -> bytes:
 def _csv_value(value: object) -> object:
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
     return value
 
 
 def _page_records(
     records: list[dict[str, object]], page: BillingPageQuery
 ) -> tuple[list[dict[str, object]], str | None]:
-    query = (page.query or "").strip().casefold()
-    if query:
-        records = [
-            record for record in records if query in " ".join(str(value) for value in record.values()).casefold()
-        ]
     start = 0
     cursor = _decode_cursor(page.page_token)
     if cursor is not None:
@@ -827,7 +799,7 @@ def _record_cursor(record: dict[str, object]) -> str:
     if not isinstance(identity, str) or not identity:
         raise BillingRuntimeConfigurationError("BILLING_CURSOR_ID_MISSING")
     sort_time = record.get("occurred_at") or record.get("updated_at") or ""
-    return f"{sort_time}\x1f{identity}"
+    return f"{sort_time}\x1f{record.get('source', '')}\x1f{identity}"
 
 
 def _encode_cursor(cursor: str) -> str:

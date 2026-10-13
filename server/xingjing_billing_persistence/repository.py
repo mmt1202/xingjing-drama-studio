@@ -32,9 +32,22 @@ class BillingFinanceRepository:
         self._tenant_id = tenant_id
         self._workspace_id = workspace_id
 
-    async def plan(self) -> dict[str, object] | None:
-        async with self._session_factory() as session:
-            row = await session.get(TeamPlanRow, (self._tenant_id, self._workspace_id))
+    async def _lock_workspace(self, session: AsyncSession) -> None:
+        if session.get_bind().dialect.name == "postgresql":
+            await session.connection(execution_options={"isolation_level": "READ COMMITTED"})
+            await session.execute(
+                select(
+                    func.pg_advisory_xact_lock(
+                        cast(_lock_key(self._tenant_id, self._workspace_id, "billing"), BigInteger)
+                    )
+                )
+            )
+
+    async def plan(self, *, session: AsyncSession | None = None) -> dict[str, object] | None:
+        if session is None:
+            async with self._session_factory() as owned_session:
+                return await self.plan(session=owned_session)
+        row = await session.get(TeamPlanRow, (self._tenant_id, self._workspace_id))
         if row is None:
             return None
         return {
@@ -48,32 +61,36 @@ class BillingFinanceRepository:
             "updated_at": _utc(row.updated_at).isoformat(),
         }
 
-    async def invoices(self) -> tuple[dict[str, object], ...]:
-        async with self._session_factory() as session:
-            rows = (
-                await session.scalars(
-                    select(InvoiceRequestRow)
-                    .where(
-                        InvoiceRequestRow.tenant_id == self._tenant_id,
-                        InvoiceRequestRow.workspace_id == self._workspace_id,
-                    )
-                    .order_by(InvoiceRequestRow.created_at.desc(), InvoiceRequestRow.invoice_id.desc())
+    async def invoices(self, *, session: AsyncSession | None = None) -> tuple[dict[str, object], ...]:
+        if session is None:
+            async with self._session_factory() as owned_session:
+                return await self.invoices(session=owned_session)
+        rows = (
+            await session.scalars(
+                select(InvoiceRequestRow)
+                .where(
+                    InvoiceRequestRow.tenant_id == self._tenant_id,
+                    InvoiceRequestRow.workspace_id == self._workspace_id,
                 )
-            ).all()
+                .order_by(InvoiceRequestRow.created_at.desc(), InvoiceRequestRow.invoice_id.desc())
+            )
+        ).all()
         return tuple(_invoice(row) for row in rows)
 
-    async def orders(self) -> tuple[dict[str, object], ...]:
-        async with self._session_factory() as session:
-            rows = (
-                await session.scalars(
-                    select(BillingOrderRow)
-                    .where(
-                        BillingOrderRow.tenant_id == self._tenant_id,
-                        BillingOrderRow.workspace_id == self._workspace_id,
-                    )
-                    .order_by(BillingOrderRow.created_at.desc(), BillingOrderRow.order_id.desc())
+    async def orders(self, *, session: AsyncSession | None = None) -> tuple[dict[str, object], ...]:
+        if session is None:
+            async with self._session_factory() as owned_session:
+                return await self.orders(session=owned_session)
+        rows = (
+            await session.scalars(
+                select(BillingOrderRow)
+                .where(
+                    BillingOrderRow.tenant_id == self._tenant_id,
+                    BillingOrderRow.workspace_id == self._workspace_id,
                 )
-            ).all()
+                .order_by(BillingOrderRow.created_at.desc(), BillingOrderRow.order_id.desc())
+            )
+        ).all()
         return tuple(_order(row) for row in rows)
 
     async def audit_events(
@@ -114,19 +131,29 @@ class BillingFinanceRepository:
         expires_at: datetime,
         occurred_at: datetime,
     ) -> dict[str, object]:
-        if amount_minor <= 0 or len(currency) != 3 or _utc(expires_at) <= _utc(occurred_at):
+        if (
+            isinstance(amount_minor, bool)
+            or not isinstance(amount_minor, int)
+            or amount_minor <= 0
+            or len(currency) != 3
+            or not currency.isascii()
+            or not currency.isalpha()
+            or order_type != "credit_top_up"
+            or not idempotency_key.strip()
+            or _utc(expires_at) <= _utc(occurred_at)
+        ):
             raise ValueError("PAYMENT_ORDER_INVALID")
         command = {
-            "order_id": order_id,
             "amount_minor": amount_minor,
             "currency": currency.upper(),
             "order_type": order_type,
             "actor_id": actor_id,
-            "expires_at": _utc(expires_at).isoformat(),
+            "expires_in_seconds": round((_utc(expires_at) - _utc(occurred_at)).total_seconds()),
         }
         digest = _digest(command)
         now = _utc(occurred_at)
         async with self._session_factory.begin() as session:
+            await self._lock_workspace(session)
             receipt = await session.get(
                 BillingActionReceiptRow,
                 (self._tenant_id, self._workspace_id, "payment.order.create", idempotency_key),
@@ -157,7 +184,11 @@ class BillingFinanceRepository:
             result = _order(row)
             session.add(row)
             session.add(self._receipt("payment.order.create", idempotency_key, digest, result, now))
-            session.add(self._audit_row(actor_id, "payment.order_created", "payment_order", order_id, request_id, {}, result, now))
+            session.add(
+                self._audit_row(
+                    actor_id, "payment.order_created", "payment_order", order_id, request_id, {}, result, now
+                )
+            )
         return result
 
     async def apply_payment_callback(
@@ -173,6 +204,7 @@ class BillingFinanceRepository:
         digest = _digest(command)
         now = _utc(occurred_at)
         async with self._session_factory.begin() as session:
+            await self._lock_workspace(session)
             receipt = await session.get(
                 BillingActionReceiptRow,
                 (self._tenant_id, self._workspace_id, "payment.callback", event_id),
@@ -193,9 +225,6 @@ class BillingFinanceRepository:
             before = _order(order)
             if order.status == "pending":
                 if _utc(order.expires_at) <= now:
-                    order.status, order.closed_at = "closed", now
-                    order.version += 1
-                    order.updated_at = now
                     raise ValueError("PAYMENT_ORDER_EXPIRED")
                 account = await session.get(GenerationBillingAccountRow, self._workspace_id, with_for_update=True)
                 if account is None:
@@ -221,7 +250,7 @@ class BillingFinanceRepository:
                 order.updated_at = now
                 session.add(
                     GenerationBillingJournalRow(
-                        event_id=f"payment:{event_id}",
+                        event_id=_journal_id("payment", self._tenant_id, self._workspace_id, event_id),
                         workspace_id=self._workspace_id,
                         project_id="",
                         task_id=None,
@@ -240,7 +269,11 @@ class BillingFinanceRepository:
                 raise ValueError("PAYMENT_ORDER_NOT_PAYABLE")
             result = _order(order)
             session.add(self._receipt("payment.callback", event_id, digest, result, now))
-            session.add(self._audit_row("payment-provider", "payment.order_paid", "payment_order", order_id, event_id, before, result, now))
+            session.add(
+                self._audit_row(
+                    "payment-provider", "payment.order_paid", "payment_order", order_id, event_id, before, result, now
+                )
+            )
         return result
 
     async def refund_payment_order(
@@ -253,11 +286,14 @@ class BillingFinanceRepository:
         idempotency_key: str,
         occurred_at: datetime,
     ) -> dict[str, object]:
-        if amount_minor <= 0:
+        if isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor <= 0:
             raise ValueError("PAYMENT_REFUND_AMOUNT_INVALID")
+        if not idempotency_key.strip():
+            raise ValueError("IDEMPOTENCY_KEY_REQUIRED")
         digest = _digest({"order_id": order_id, "amount_minor": amount_minor, "actor_id": actor_id})
         now = _utc(occurred_at)
         async with self._session_factory.begin() as session:
+            await self._lock_workspace(session)
             receipt = await session.get(
                 BillingActionReceiptRow,
                 (self._tenant_id, self._workspace_id, "payment.refund", idempotency_key),
@@ -266,7 +302,9 @@ class BillingFinanceRepository:
                 if receipt.command_digest != digest:
                     raise BillingIdempotencyConflict()
                 return dict(receipt.result_payload)
-            order = await session.get(BillingOrderRow, (self._tenant_id, self._workspace_id, order_id), with_for_update=True)
+            order = await session.get(
+                BillingOrderRow, (self._tenant_id, self._workspace_id, order_id), with_for_update=True
+            )
             if order is None or order.status != "paid" or order.refunded_minor + amount_minor > order.amount_minor:
                 raise ValueError("PAYMENT_ORDER_NOT_REFUNDABLE")
             account = await session.get(GenerationBillingAccountRow, self._workspace_id, with_for_update=True)
@@ -283,7 +321,7 @@ class BillingFinanceRepository:
             order.updated_at = now
             session.add(
                 GenerationBillingJournalRow(
-                    event_id=f"refund:{idempotency_key}",
+                    event_id=_journal_id("refund", self._tenant_id, self._workspace_id, idempotency_key),
                     workspace_id=self._workspace_id,
                     project_id="",
                     task_id=None,
@@ -300,7 +338,11 @@ class BillingFinanceRepository:
             )
             result = _order(order)
             session.add(self._receipt("payment.refund", idempotency_key, digest, result, now))
-            session.add(self._audit_row(actor_id, "payment.order_refunded", "payment_order", order_id, request_id, before, result, now))
+            session.add(
+                self._audit_row(
+                    actor_id, "payment.order_refunded", "payment_order", order_id, request_id, before, result, now
+                )
+            )
         return result
 
     async def available_credits(self) -> int:
@@ -407,18 +449,7 @@ class BillingFinanceRepository:
         digest = _digest(command)
         now = _utc(occurred_at)
         async with self._session_factory.begin() as session:
-            # Serialize the exact scoped idempotency key before checking it. This
-            # keeps invoice + receipt + audit atomic under concurrent retries.
-            await session.execute(
-                select(
-                    func.pg_advisory_xact_lock(
-                        cast(
-                            _lock_key(self._tenant_id, self._workspace_id, "invoice.request", idempotency_key),
-                            BigInteger,
-                        )
-                    )
-                )
-            )
+            await self._lock_workspace(session)
             receipt = await session.get(
                 BillingActionReceiptRow,
                 (self._tenant_id, self._workspace_id, "invoice.request", idempotency_key),
@@ -438,6 +469,7 @@ class BillingFinanceRepository:
                 status="pending",
                 requested_by=actor_id,
                 request_id=request_id,
+                version=1,
                 created_at=now,
                 updated_at=now,
             )
@@ -566,3 +598,8 @@ def _audit(row: BillingAuditRow) -> dict[str, object]:
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _journal_id(kind: str, tenant_id: str, workspace_id: str, key: str) -> str:
+    digest = _digest({"tenant_id": tenant_id, "workspace_id": workspace_id, "key": key})
+    return f"{kind}:{digest.removeprefix('sha256:')}"
