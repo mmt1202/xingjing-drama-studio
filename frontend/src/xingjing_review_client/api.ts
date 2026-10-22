@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+
 export type ReviewPermission = "review.view" | "review.comment" | "review.approve" | "review.download";
 
 export interface ReviewPolicy {
@@ -55,8 +57,9 @@ export interface PublicReviewContext {
   comments: ReviewComment[];
 }
 
-export interface ReviewPage { reviewLinks: ReviewLink[]; nextToken: string | null }
-export interface ListOptions { query?: string; pageToken?: string; pageSize?: number }
+export interface ReviewPage { reviewLinks: ReviewLink[]; nextToken: string | null; canManage: boolean }
+export interface ListOptions { query?: string; pageToken?: string; pageSize?: number; signal?: AbortSignal }
+export type PublicReviewResult = PublicReviewContext | { verificationRequired: true };
 
 export class ReviewApiError extends Error {
   constructor(readonly status: number, readonly code: string, readonly requestId?: string) {
@@ -69,7 +72,7 @@ interface ApiEnvelope<T> { data: T; meta?: { requestId?: string } }
 interface ApiErrorEnvelope { error?: { code?: string }; meta?: { requestId?: string } }
 
 export interface ReviewApi {
-  openPublicContext(token: string, accessSecret?: string): Promise<PublicReviewContext>;
+  openPublicContext(token: string, accessSecret?: string, options?: { sessionId?: string; signal?: AbortSignal }): Promise<PublicReviewResult>;
   publicAction(token: string, sessionId: string, payload: Record<string, unknown>): Promise<{ comment?: ReviewComment; delivery?: ReviewDelivery }>;
   uploadScreenshot(token: string, sessionId: string, file: File, timecodeMs: number): Promise<{ id: string }>;
   logout(token: string, sessionId: string): Promise<void>;
@@ -80,8 +83,9 @@ export interface ReviewApi {
   createProjectLink(projectId: string, input: CreateReviewLinkInput): Promise<ReviewLink>;
   createWorkspaceLink(workspaceId: string, input: CreateReviewLinkInput & { projectId: string }): Promise<ReviewLink>;
   revokeWorkspaceLink(workspaceId: string, linkId: string, version: number): Promise<ReviewLink>;
-  reviewDetail(workspaceId: string, linkId: string): Promise<{ reviewLink: ReviewLink; comments: ReviewComment[] }>;
+  reviewDetail(workspaceId: string, linkId: string, signal?: AbortSignal): Promise<{ reviewLink: ReviewLink; comments: ReviewComment[] }>;
   changeCommentStatus(workspaceId: string, commentId: string, status: string, version: number): Promise<ReviewComment>;
+  replyToComment(workspaceId: string, commentId: string, body: string): Promise<ReviewComment>;
 }
 
 export interface CreateReviewLinkInput {
@@ -97,19 +101,22 @@ function uniqueKey(): string {
 }
 
 export function createReviewApi({ accessToken, baseUrl = "/api/v1", fetcher = fetch }: { accessToken?: string; baseUrl?: string; fetcher?: typeof fetch } = {}): ReviewApi {
+  const retries = new Map<string, string>();
   async function request<T>(path: string, init: RequestInit = {}, options: { publicRequest?: boolean; sessionId?: string; accessSecret?: string } = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
+    headers.set("Accept-Language", i18n.resolvedLanguage ?? i18n.language);
     headers.set("X-Request-Id", uniqueKey());
-    if (init.body) headers.set("Content-Type", "application/json");
+    if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     if (!options.publicRequest && accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
     if (options.sessionId) headers.set("X-Review-Session-Id", options.sessionId);
     if (options.accessSecret) headers.set("X-Review-Access-Secret", options.accessSecret);
 
     let response: Response;
     try {
-      response = await fetcher(`${baseUrl}${path}`, { ...init, headers });
-    } catch {
+      response = await fetcher(`${baseUrl}${path}`, { ...init, headers, cache: "no-store", credentials: options.publicRequest ? "omit" : "same-origin", referrerPolicy: "no-referrer" });
+    } catch (error) {
+      if (init.signal?.aborted) throw error;
       throw new ReviewApiError(0, "NETWORK_UNAVAILABLE");
     }
     let parsed: ApiEnvelope<T> & ApiErrorEnvelope;
@@ -118,45 +125,47 @@ export function createReviewApi({ accessToken, baseUrl = "/api/v1", fetcher = fe
     } catch {
       throw new ReviewApiError(response.status, "INVALID_REVIEW_RESPONSE");
     }
-    if (!response.ok || !("data" in parsed)) {
-      throw new ReviewApiError(response.status, parsed.error?.code ?? "REVIEW_REQUEST_REJECTED", parsed.meta?.requestId);
+    if (!parsed || typeof parsed !== "object" || !response.ok || !("data" in parsed)) {
+      throw new ReviewApiError(response.status, parsed?.error?.code ?? "REVIEW_REQUEST_REJECTED", parsed?.meta?.requestId);
     }
     return parsed.data;
   }
 
+  async function mutate<T>(path: string, payload: Record<string, unknown>, options: { publicRequest?: boolean; sessionId?: string } = {}, version?: number): Promise<T> {
+    const body = JSON.stringify(payload);
+    const identity = JSON.stringify([path, options.sessionId, body, version]);
+    const key = retries.get(identity) ?? uniqueKey();
+    retries.set(identity, key);
+    try {
+      const result = await request<T>(path, { method: "POST", headers: { "Idempotency-Key": key, ...(version ? { "If-Match": String(version) } : {}) }, body }, options);
+      retries.delete(identity);
+      return result;
+    } catch (error) {
+      if (error instanceof ReviewApiError && error.status >= 400 && error.status < 500) retries.delete(identity);
+      throw error;
+    }
+  }
+
   return {
-    openPublicContext: (token, accessSecret) => request<PublicReviewContext>(`/review-links/${encodeURIComponent(token)}/context`, {}, { publicRequest: true, accessSecret }),
-    publicAction: (token, sessionId, payload) => request(`/review-links/${encodeURIComponent(token)}/actions`, {
-      method: "POST",
-      headers: { "Idempotency-Key": uniqueKey() },
-      body: JSON.stringify(payload),
-    }, { publicRequest: true, sessionId }),
+    openPublicContext: (token, accessSecret, options) => request<PublicReviewResult>(`/review-links/${encodeURIComponent(token)}/context`, { signal: options?.signal }, { publicRequest: true, accessSecret, sessionId: options?.sessionId }),
+    publicAction: (token, sessionId, payload) => mutate(`/review-links/${encodeURIComponent(token)}/actions`, payload, { publicRequest: true, sessionId }),
     uploadScreenshot: async (token, sessionId, file, timecodeMs) => {
-      const response = await fetcher(`${baseUrl}/review-links/${encodeURIComponent(token)}/screenshots?timecodeMs=${timecodeMs}`, {
-        method: "POST", headers: { "Content-Type": file.type, "X-Review-Session-Id": sessionId, "X-Request-Id": uniqueKey() }, body: file,
-      });
-      const parsed = await response.json() as ApiEnvelope<{ screenshot: { id: string } }> & ApiErrorEnvelope;
-      if (!response.ok || !("data" in parsed)) throw new ReviewApiError(response.status, parsed.error?.code ?? "SCREENSHOT_UPLOAD_FAILED", parsed.meta?.requestId);
-      return parsed.data.screenshot;
+      const result = await request<{ screenshot: { id: string } }>(`/review-links/${encodeURIComponent(token)}/screenshots?timecodeMs=${timecodeMs}`, {
+        method: "POST", headers: { "Content-Type": file.type }, body: file,
+      }, { publicRequest: true, sessionId });
+      return result.screenshot;
     },
     logout: async (token, sessionId) => { await request(`/review-links/${encodeURIComponent(token)}/logout`, { method: "POST" }, { publicRequest: true, sessionId }); },
     mediaUrl: (token, sessionId, ticket, download = false) => `${baseUrl}/review-links/${encodeURIComponent(token)}/media?session=${encodeURIComponent(sessionId)}&ticket=${encodeURIComponent(ticket)}${download ? "&download=true" : ""}`,
     screenshotUrl: (token, sessionId, ticket, screenshotId) => `${baseUrl}/review-links/${encodeURIComponent(token)}/screenshots/${encodeURIComponent(screenshotId)}?session=${encodeURIComponent(sessionId)}&ticket=${encodeURIComponent(ticket)}`,
-    projectLinks: (projectId, options) => request<ReviewPage>(`/projects/${encodeURIComponent(projectId)}/reviews${listQuery(options)}`),
-    workspaceLinks: (workspaceId, options) => request<ReviewPage>(`/workspaces/${encodeURIComponent(workspaceId)}/review-links${listQuery(options)}`),
-    createProjectLink: async (projectId, input) => (await request<{ reviewLink: ReviewLink }>(`/projects/${encodeURIComponent(projectId)}/review-links`, {
-      method: "POST", headers: { "Idempotency-Key": uniqueKey() }, body: JSON.stringify(input),
-    })).reviewLink,
-    createWorkspaceLink: async (workspaceId, input) => (await request<{ reviewLink: ReviewLink }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-links`, {
-      method: "POST", headers: { "Idempotency-Key": uniqueKey() }, body: JSON.stringify(input),
-    })).reviewLink,
-    revokeWorkspaceLink: async (workspaceId, linkId, version) => (await request<{ reviewLink: ReviewLink }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-links/${encodeURIComponent(linkId)}/revoke`, {
-      method: "POST", headers: { "Idempotency-Key": uniqueKey(), "If-Match": String(version) }, body: JSON.stringify({ version }),
-    })).reviewLink,
-    reviewDetail: (workspaceId, linkId) => request(`/workspaces/${encodeURIComponent(workspaceId)}/review-links/${encodeURIComponent(linkId)}`),
-    changeCommentStatus: async (workspaceId, commentId, status, version) => (await request<{ comment: ReviewComment }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-comments/${encodeURIComponent(commentId)}/status`, {
-      method: "POST", headers: { "Idempotency-Key": uniqueKey(), "If-Match": String(version) }, body: JSON.stringify({ status, version }),
-    })).comment,
+    projectLinks: (projectId, options) => request<ReviewPage>(`/projects/${encodeURIComponent(projectId)}/reviews${listQuery(options)}`, { signal: options?.signal }),
+    workspaceLinks: (workspaceId, options) => request<ReviewPage>(`/workspaces/${encodeURIComponent(workspaceId)}/review-links${listQuery(options)}`, { signal: options?.signal }),
+    createProjectLink: async (projectId, input) => (await mutate<{ reviewLink: ReviewLink }>(`/projects/${encodeURIComponent(projectId)}/review-links`, { ...input })).reviewLink,
+    createWorkspaceLink: async (workspaceId, input) => (await mutate<{ reviewLink: ReviewLink }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-links`, { ...input })).reviewLink,
+    revokeWorkspaceLink: async (workspaceId, linkId, version) => (await mutate<{ reviewLink: ReviewLink }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-links/${encodeURIComponent(linkId)}/revoke`, { version }, {}, version)).reviewLink,
+    reviewDetail: (workspaceId, linkId, signal) => request(`/workspaces/${encodeURIComponent(workspaceId)}/review-links/${encodeURIComponent(linkId)}`, { signal }),
+    changeCommentStatus: async (workspaceId, commentId, status, version) => (await mutate<{ comment: ReviewComment }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-comments/${encodeURIComponent(commentId)}/status`, { status, version }, {}, version)).comment,
+    replyToComment: async (workspaceId, commentId, body) => (await mutate<{ comment: ReviewComment }>(`/workspaces/${encodeURIComponent(workspaceId)}/review-comments/${encodeURIComponent(commentId)}/replies`, { body })).comment,
   };
 }
 

@@ -1,4 +1,4 @@
-"""M12 审片外链和内部链接管理的受控 HTTP 入口。"""
+"""审片外链和内部链接管理的受控 HTTP 入口。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
 
+from lib.i18n import get_translator
 from server.xingjing_review.errors import (
     InvalidTransition,
     LinkUnavailable,
@@ -21,6 +22,9 @@ from server.xingjing_review.errors import (
 from server.xingjing_review.models import AccessPolicy, IssueStatus
 from server.xingjing_review_runtime import ReviewRuntime, ReviewRuntimeConfigurationError
 from server.xingjing_review_runtime.runtime import ReviewPermissionDenied, ReviewProjectScopeDenied
+
+PRIVATE_HEADERS = {"Cache-Control": "no-store, private", "Referrer-Policy": "no-referrer"}
+SCREENSHOT_LIMIT = 10 * 1024 * 1024
 
 
 class ReviewHttpError(RuntimeError):
@@ -63,6 +67,9 @@ def create_review_router(runtime: ReviewRuntime) -> APIRouter:
 
     @router.get("/review-links/{token}/context")
     async def external_context(request: Request, token: str) -> JSONResponse:
+        session_id = request.headers.get("X-Review-Session-Id")
+        if session_id:
+            return _success(request, await runtime.refresh_public_context(token=token, session_id=session_id))
         try:
             result = await runtime.open_public_context(token=token, access_secret=_access_secret(request))
         except PermissionDenied:
@@ -88,41 +95,69 @@ def create_review_router(runtime: ReviewRuntime) -> APIRouter:
         return _success(request, result)
 
     @router.get("/review-links/{token}/media")
-    async def external_media(request: Request, token: str, session: str, ticket: str, download: bool = False) -> FileResponse:
+    async def external_media(
+        request: Request, token: str, session: str, ticket: str, download: bool = False
+    ) -> FileResponse:
         media = await runtime.public_media(token=token, session_id=session, ticket=ticket, download=download)
-        return FileResponse(media.path, media_type=media.media_type,
-                            filename=media.filename if download else None,
-                            content_disposition_type="attachment" if download else "inline")
+        return FileResponse(
+            media.path,
+            media_type=media.media_type,
+            filename=media.filename if download else None,
+            content_disposition_type="attachment" if download else "inline",
+            headers=PRIVATE_HEADERS,
+        )
 
     @router.post("/review-links/{token}/screenshots")
     async def upload_screenshot(request: Request, token: str, timecodeMs: int) -> JSONResponse:
         content_length = request.headers.get("Content-Length")
-        if content_length and int(content_length) > 10 * 1024 * 1024:
-            raise ReviewHttpError("REVIEW_SCREENSHOT_TOO_LARGE", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
-        result = await runtime.upload_screenshot(token=token,
+        if content_length and int(content_length) > SCREENSHOT_LIMIT:
+            raise ReviewHttpError("REVIEW_SCREENSHOT_TOO_LARGE", status.HTTP_413_CONTENT_TOO_LARGE)
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > SCREENSHOT_LIMIT:
+                raise ReviewHttpError("REVIEW_SCREENSHOT_TOO_LARGE", status.HTTP_413_CONTENT_TOO_LARGE)
+            content.extend(chunk)
+        result = await runtime.upload_screenshot(
+            token=token,
             session_id=_required_header(request, "X-Review-Session-Id", "REVIEW_SESSION_REQUIRED"),
-            content=await request.body(), media_type=request.headers.get("Content-Type", "").split(";", 1)[0].strip(),
-            timecode_ms=timecodeMs, request_id=_request_id(request))
+            content=bytes(content),
+            media_type=request.headers.get("Content-Type", "").split(";", 1)[0].strip(),
+            timecode_ms=timecodeMs,
+            request_id=_request_id(request),
+        )
         return _success(request, {"screenshot": result})
 
     @router.get("/review-links/{token}/screenshots/{screenshot_id}")
-    async def external_screenshot(request: Request, token: str, screenshot_id: str, session: str, ticket: str) -> FileResponse:
-        media = await runtime.public_screenshot(token=token, session_id=session, ticket=ticket, screenshot_id=screenshot_id)
-        return FileResponse(media.path, media_type=media.media_type, content_disposition_type="inline")
+    async def external_screenshot(
+        request: Request, token: str, screenshot_id: str, session: str, ticket: str
+    ) -> FileResponse:
+        media = await runtime.public_screenshot(
+            token=token, session_id=session, ticket=ticket, screenshot_id=screenshot_id
+        )
+        return FileResponse(
+            media.path, media_type=media.media_type, content_disposition_type="inline", headers=PRIVATE_HEADERS
+        )
 
     @router.post("/review-links/{token}/logout")
     async def external_logout(request: Request, token: str) -> JSONResponse:
-        await runtime.logout_public_session(token=token,
+        await runtime.logout_public_session(
+            token=token,
             session_id=_required_header(request, "X-Review-Session-Id", "REVIEW_SESSION_REQUIRED"),
-            request_id=_request_id(request))
+            request_id=_request_id(request),
+        )
         return _success(request, {"loggedOut": True})
 
     @router.get("/projects/{project_id}/reviews")
-    async def project_reviews(request: Request, project_id: str, q: str | None = None,
-                              pageSize: int = 20, pageToken: str | None = None) -> JSONResponse:
+    async def project_reviews(
+        request: Request, project_id: str, q: str | None = None, pageSize: int = 20, pageToken: str | None = None
+    ) -> JSONResponse:
         context = await runtime.staff_context(request, project_id=project_id, permission="review.view")
-        return _success(request, await runtime.list_reviews(context, project_id=project_id, query=q,
-                                                            page_size=pageSize, page_token=pageToken))
+        return _success(
+            request,
+            await runtime.list_reviews(
+                context, project_id=project_id, query=q, page_size=pageSize, page_token=pageToken
+            ),
+        )
 
     @router.post("/projects/{project_id}/review-links")
     async def create_project_link(request: Request, project_id: str) -> JSONResponse:
@@ -130,8 +165,9 @@ def create_review_router(runtime: ReviewRuntime) -> APIRouter:
         return _success(request, {"reviewLink": await _create_link(runtime, context, request, project_id)})
 
     @router.get("/workspaces/{workspace_id}/review-links")
-    async def workspace_reviews(request: Request, workspace_id: str, q: str | None = None,
-                                pageSize: int = 20, pageToken: str | None = None) -> JSONResponse:
+    async def workspace_reviews(
+        request: Request, workspace_id: str, q: str | None = None, pageSize: int = 20, pageToken: str | None = None
+    ) -> JSONResponse:
         context = await runtime.staff_context(request, project_id=None, permission="review.view")
         _require_workspace(context.trusted.workspace_id, workspace_id)
         return _success(request, await runtime.list_reviews(context, query=q, page_size=pageSize, page_token=pageToken))
@@ -168,9 +204,26 @@ def create_review_router(runtime: ReviewRuntime) -> APIRouter:
         body = await _json_object(request)
         context = await runtime.staff_context(request, project_id=None, permission="review.manage")
         _require_workspace(context.trusted.workspace_id, workspace_id)
-        result = await runtime.change_comment_status(context, comment_id=comment_id,
-            issue_status=IssueStatus(_text(body, "status")), expected_version=_version(request, body),
-            idempotency_key=_required_header(request, "Idempotency-Key", "IDEMPOTENCY_KEY_REQUIRED"))
+        result = await runtime.change_comment_status(
+            context,
+            comment_id=comment_id,
+            issue_status=IssueStatus(_text(body, "status")),
+            expected_version=_version(request, body),
+            idempotency_key=_required_header(request, "Idempotency-Key", "IDEMPOTENCY_KEY_REQUIRED"),
+        )
+        return _success(request, {"comment": result})
+
+    @router.post("/workspaces/{workspace_id}/review-comments/{comment_id}/replies")
+    async def reply_to_comment(request: Request, workspace_id: str, comment_id: str) -> JSONResponse:
+        body = await _json_object(request)
+        context = await runtime.staff_context(request, project_id=None, permission="review.manage")
+        _require_workspace(context.trusted.workspace_id, workspace_id)
+        result = await runtime.reply_to_comment(
+            context,
+            comment_id=comment_id,
+            body=_text(body, "body"),
+            idempotency_key=_required_header(request, "Idempotency-Key", "IDEMPOTENCY_KEY_REQUIRED"),
+        )
         return _success(request, {"comment": result})
 
     return router
@@ -199,14 +252,25 @@ def create_unavailable_review_router(code: str = "REVIEW_RUNTIME_NOT_CONFIGURED"
             "m12_review_revoke_unavailable",
         ),
         ("/workspaces/{workspace_id}/review-links/{link_id}", ["GET"], "m12_review_detail_unavailable"),
-        ("/workspaces/{workspace_id}/review-comments/{comment_id}/status", ["POST"], "m12_review_comment_status_unavailable"),
+        (
+            "/workspaces/{workspace_id}/review-comments/{comment_id}/status",
+            ["POST"],
+            "m12_review_comment_status_unavailable",
+        ),
+        (
+            "/workspaces/{workspace_id}/review-comments/{comment_id}/replies",
+            ["POST"],
+            "m12_review_comment_reply_unavailable",
+        ),
     )
     for path, methods, operation_id in routes:
         router.add_api_route(path, unavailable, methods=methods, operation_id=operation_id)
     return router
 
 
-async def _create_link(runtime: ReviewRuntime, context: Any, request: Request, project_id: str, body: Mapping[str, object] | None = None) -> dict[str, object]:
+async def _create_link(
+    runtime: ReviewRuntime, context: Any, request: Request, project_id: str, body: Mapping[str, object] | None = None
+) -> dict[str, object]:
     payload = body or await _json_object(request)
     policy_data = _object(payload, "policy")
     return await runtime.create_link(
@@ -292,7 +356,10 @@ def _version(request: Request, body: Mapping[str, object]) -> int:
 
 
 def _required_header(request: Request, name: str, code: str) -> str:
-    return _required_text(request.headers.get(name, ""), code)
+    value = _required_text(request.headers.get(name, ""), code)
+    if len(value) > 255:
+        raise ReviewHttpError(code)
+    return value
 
 
 def _access_secret(request: Request) -> str | None:
@@ -306,11 +373,19 @@ def _require_workspace(actual: str, expected: str) -> None:
 
 
 def _success(request: Request, data: Mapping[str, object]) -> JSONResponse:
-    return JSONResponse({"data": dict(data), "meta": {"requestId": _request_id(request)}})
+    return JSONResponse({"data": dict(data), "meta": {"requestId": _request_id(request)}}, headers=PRIVATE_HEADERS)
 
 
 def _error(request: Request, code: str, status_code: int) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"error": {"code": code, "details": {}}, "meta": {"requestId": _request_id(request)}})
+    message = get_translator(request)("review.request_failed")
+    return JSONResponse(
+        status_code=status_code,
+        headers=PRIVATE_HEADERS,
+        content={
+            "error": {"code": code, "message": message, "details": {}},
+            "meta": {"requestId": _request_id(request)},
+        },
+    )
 
 
 def _request_id(request: Request) -> str:

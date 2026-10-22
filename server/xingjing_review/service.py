@@ -152,6 +152,8 @@ class ReviewService:
                 access_secret is None
                 or not hmac.compare_digest(link.access_secret_digest, self._digest("access", access_secret))
             ):
+                if access_secret is None:
+                    raise PermissionDenied("REVIEW_VERIFICATION_REQUIRED")
                 raise LinkUnavailable()
             permissions = {"review.view"}
             if link.policy.comment:
@@ -185,14 +187,20 @@ class ReviewService:
         request_id: str,
         idempotency_key: str,
     ) -> ReviewComment:
-        self._require(actor, "review.comment")
-        if timecode_ms < 0 or not body.strip():
+        self._require(actor, "review.comment" if actor.customer else "review.manage")
+        if timecode_ms < 0 or not body.strip() or len(body.strip()) > 10_000:
             raise ValidationError("时间码和批注内容无效")
         with self.store.atomic() as uow:
             link = self._usable_link(uow, link_id)
+            if not actor.customer:
+                self._require(actor, "review.manage", link.workspace_id)
             if parent_comment_id is not None:
                 parent = uow.get_comment(parent_comment_id)
-                if parent is None or parent.review_link_id != link_id or parent.final_video_version_id != link.final_video_version_id:
+                if (
+                    parent is None
+                    or parent.review_link_id != link_id
+                    or parent.final_video_version_id != link.final_video_version_id
+                ):
                     raise ValidationError("回复目标不属于当前审片版本")
             cached = uow.get_idempotent(f"comment:{link_id}:{actor.actor_id}", idempotency_key)
             if cached is not None:
@@ -293,6 +301,8 @@ class ReviewService:
             delivery = uow.get_delivery(link_id)
             if delivery is None or delivery.version != expected_version:
                 raise VersionConflict()
+            if delivery.status is DeliveryStatus.CONFIRMED:
+                raise InvalidTransition("Confirmed delivery cannot change its approval decision")
             status = (
                 DeliveryStatus.APPROVED if decision is ApprovalDecision.APPROVED else DeliveryStatus.CHANGES_REQUESTED
             )

@@ -1,4 +1,5 @@
 MESSAGES = {
+    "review.request_failed": "The review request could not be completed. Retry or contact the project team.",
     "billing.available": "Available credit",
     "billing.held": "Held credit",
     "billing.spent": "Total spent",

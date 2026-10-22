@@ -1,4 +1,5 @@
 MESSAGES = {
+    "review.request_failed": "Không thể hoàn tất yêu cầu duyệt phim. Vui lòng thử lại hoặc liên hệ nhóm dự án.",
     "billing.available": "Tín dụng khả dụng",
     "billing.held": "Tín dụng tạm giữ",
     "billing.spent": "Tổng đã dùng",

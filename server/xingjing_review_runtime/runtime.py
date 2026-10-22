@@ -1,4 +1,4 @@
-"""M12 审片领域、PostgreSQL 仓储与可信身份上下文的生产组合。"""
+"""审片领域、PostgreSQL 仓储与可信身份上下文的生产组合。"""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ type TrustedContextResolver = Callable[[Request], TrustedWorkspaceContext | Awai
 
 
 class ReviewRuntimeConfigurationError(RuntimeError):
-    """M12 未配置生产依赖或遇到持久化故障时的稳定失败。"""
+    """未配置生产依赖或遇到持久化故障时的稳定失败。"""
 
 
 class ReviewProjectScopeDenied(LookupError):
@@ -113,9 +113,20 @@ class ReviewRuntime:
             scope=ReviewPersistenceScope(trusted.tenant_id, trusted.workspace_id),
         )
 
-    async def list_reviews(self, context: StaffReviewContext, *, project_id: str | None = None, query: str | None = None,
-                           page_size: int = 20, page_token: str | None = None) -> dict[str, object]:
-        return await asyncio.to_thread(self._list_reviews_sync, context.scope, project_id, query, page_size, page_token)
+    async def list_reviews(
+        self,
+        context: StaffReviewContext,
+        *,
+        project_id: str | None = None,
+        query: str | None = None,
+        page_size: int = 20,
+        page_token: str | None = None,
+    ) -> dict[str, object]:
+        result = await asyncio.to_thread(
+            self._list_reviews_sync, context.scope, project_id, query, page_size, page_token
+        )
+        result["canManage"] = "review.manage" in context.trusted.permissions
+        return result
 
     async def create_link(
         self,
@@ -141,19 +152,37 @@ class ReviewRuntime:
             idempotency_key,
         )
 
-    async def revoke_link(self, context: StaffReviewContext, *, link_id: str, expected_version: int, idempotency_key: str) -> dict[str, object]:
+    async def revoke_link(
+        self, context: StaffReviewContext, *, link_id: str, expected_version: int, idempotency_key: str
+    ) -> dict[str, object]:
         return await asyncio.to_thread(self._revoke_link_sync, context, link_id, expected_version, idempotency_key)
 
     async def staff_review_detail(self, context: StaffReviewContext, *, link_id: str) -> dict[str, object]:
         return await asyncio.to_thread(self._staff_review_detail_sync, context, link_id)
 
-    async def change_comment_status(self, context: StaffReviewContext, *, comment_id: str, issue_status: IssueStatus,
-                                    expected_version: int, idempotency_key: str) -> dict[str, object]:
-        return await asyncio.to_thread(self._change_comment_status_sync, context, comment_id, issue_status,
-                                       expected_version, idempotency_key)
+    async def change_comment_status(
+        self,
+        context: StaffReviewContext,
+        *,
+        comment_id: str,
+        issue_status: IssueStatus,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(
+            self._change_comment_status_sync, context, comment_id, issue_status, expected_version, idempotency_key
+        )
 
     async def open_public_context(self, *, token: str, access_secret: str | None) -> dict[str, object]:
         return await asyncio.to_thread(self._open_public_context_sync, token, access_secret)
+
+    async def refresh_public_context(self, *, token: str, session_id: str) -> dict[str, object]:
+        return await asyncio.to_thread(self._refresh_public_context_sync, token, session_id)
+
+    async def reply_to_comment(
+        self, context: StaffReviewContext, *, comment_id: str, body: str, idempotency_key: str
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(self._reply_to_comment_sync, context, comment_id, body, idempotency_key)
 
     async def public_action(
         self,
@@ -164,7 +193,9 @@ class ReviewRuntime:
         payload: Mapping[str, object],
         idempotency_key: str,
     ) -> dict[str, object]:
-        return await asyncio.to_thread(self._public_action_sync, token, session_id, action, dict(payload), idempotency_key)
+        return await asyncio.to_thread(
+            self._public_action_sync, token, session_id, action, dict(payload), idempotency_key
+        )
 
     async def public_media(self, *, token: str, session_id: str, ticket: str, download: bool) -> ReviewMedia:
         return await asyncio.to_thread(self._public_media_sync, token, session_id, ticket, download)
@@ -172,9 +203,12 @@ class ReviewRuntime:
     async def public_screenshot(self, *, token: str, session_id: str, ticket: str, screenshot_id: str) -> ReviewMedia:
         return await asyncio.to_thread(self._public_screenshot_sync, token, session_id, ticket, screenshot_id)
 
-    async def upload_screenshot(self, *, token: str, session_id: str, content: bytes, media_type: str,
-                                timecode_ms: int, request_id: str) -> dict[str, object]:
-        return await asyncio.to_thread(self._upload_screenshot_sync, token, session_id, content, media_type, timecode_ms, request_id)
+    async def upload_screenshot(
+        self, *, token: str, session_id: str, content: bytes, media_type: str, timecode_ms: int, request_id: str
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(
+            self._upload_screenshot_sync, token, session_id, content, media_type, timecode_ms, request_id
+        )
 
     async def logout_public_session(self, *, token: str, session_id: str, request_id: str) -> None:
         await asyncio.to_thread(self._logout_public_session_sync, token, session_id, request_id)
@@ -191,19 +225,28 @@ class ReviewRuntime:
     def _project_in_scope(self, trusted: TrustedWorkspaceContext, project_id: str) -> bool:
         try:
             with self._session_factory() as session:
-                return session.scalar(
-                    select(ProjectRow.id).where(
-                        ProjectRow.id == project_id,
-                        ProjectRow.tenant_id == trusted.tenant_id,
-                        ProjectRow.workspace_id == trusted.workspace_id,
-                        ProjectRow.deleted_at.is_(None),
+                return (
+                    session.scalar(
+                        select(ProjectRow.id).where(
+                            ProjectRow.id == project_id,
+                            ProjectRow.tenant_id == trusted.tenant_id,
+                            ProjectRow.workspace_id == trusted.workspace_id,
+                            ProjectRow.deleted_at.is_(None),
+                        )
                     )
-                ) is not None
+                    is not None
+                )
         except SQLAlchemyError as error:
             raise ReviewRuntimeConfigurationError("REVIEW_PROJECT_SCOPE_UNAVAILABLE") from error
 
-    def _list_reviews_sync(self, scope: ReviewPersistenceScope, project_id: str | None, search: str | None,
-                           page_size: int, page_token: str | None) -> dict[str, object]:
+    def _list_reviews_sync(
+        self,
+        scope: ReviewPersistenceScope,
+        project_id: str | None,
+        search: str | None,
+        page_size: int,
+        page_token: str | None,
+    ) -> dict[str, object]:
         try:
             with self._session_factory() as session:
                 query = select(ReviewLinkRow).where(
@@ -214,19 +257,35 @@ class ReviewRuntime:
                     query = query.where(ReviewLinkRow.project_id == project_id)
                 if search and search.strip():
                     pattern = f"%{search.strip()}%"
-                    query = query.where(or_(ReviewLinkRow.id.ilike(pattern), ReviewLinkRow.project_id.ilike(pattern),
-                                            ReviewLinkRow.final_video_version_id.ilike(pattern), ReviewLinkRow.state.ilike(pattern)))
+                    query = query.where(
+                        or_(
+                            ReviewLinkRow.id.ilike(pattern),
+                            ReviewLinkRow.project_id.ilike(pattern),
+                            ReviewLinkRow.final_video_version_id.ilike(pattern),
+                            ReviewLinkRow.state.ilike(pattern),
+                        )
+                    )
                 cursor = _decode_cursor(page_token) if page_token else None
                 if cursor is not None:
                     created_at, row_id = cursor
-                    query = query.where(or_(ReviewLinkRow.created_at < created_at,
-                                            (ReviewLinkRow.created_at == created_at) & (ReviewLinkRow.id > row_id)))
+                    query = query.where(
+                        or_(
+                            ReviewLinkRow.created_at < created_at,
+                            (ReviewLinkRow.created_at == created_at) & (ReviewLinkRow.id > row_id),
+                        )
+                    )
                 size = min(max(page_size, 1), 100)
-                rows = session.scalars(query.order_by(ReviewLinkRow.created_at.desc(), ReviewLinkRow.id).limit(size + 1)).all()
+                rows = session.scalars(
+                    query.order_by(ReviewLinkRow.created_at.desc(), ReviewLinkRow.id).limit(size + 1)
+                ).all()
                 next_token = _encode_cursor(rows[size - 1].created_at, rows[size - 1].id) if len(rows) > size else None
                 visible = rows[:size]
-                return {"reviewLinks": [self._link_payload(row, self._delivery_for(session, scope, row.id)) for row in visible],
-                        "nextToken": next_token}
+                return {
+                    "reviewLinks": [
+                        self._link_payload(row, self._delivery_for(session, scope, row.id)) for row in visible
+                    ],
+                    "nextToken": next_token,
+                }
         except SQLAlchemyError as error:
             raise ReviewRuntimeConfigurationError("REVIEW_LINK_READ_UNAVAILABLE") from error
 
@@ -261,7 +320,9 @@ class ReviewRuntime:
             payload["accessSecret"] = issued.access_secret
         return payload
 
-    def _revoke_link_sync(self, context: StaffReviewContext, link_id: str, expected_version: int, idempotency_key: str) -> dict[str, object]:
+    def _revoke_link_sync(
+        self, context: StaffReviewContext, link_id: str, expected_version: int, idempotency_key: str
+    ) -> dict[str, object]:
         link = self._service(context.scope).revoke_link(
             actor=context.actor,
             link_id=link_id,
@@ -274,31 +335,84 @@ class ReviewRuntime:
     def _staff_review_detail_sync(self, context: StaffReviewContext, link_id: str) -> dict[str, object]:
         try:
             with self._session_factory() as session:
-                link = session.scalar(select(ReviewLinkRow).where(ReviewLinkRow.tenant_id == context.scope.tenant_id,
-                    ReviewLinkRow.workspace_id == context.scope.workspace_id, ReviewLinkRow.id == link_id))
+                link = session.scalar(
+                    select(ReviewLinkRow).where(
+                        ReviewLinkRow.tenant_id == context.scope.tenant_id,
+                        ReviewLinkRow.workspace_id == context.scope.workspace_id,
+                        ReviewLinkRow.id == link_id,
+                    )
+                )
                 if link is None:
                     raise LinkUnavailable()
-                comments = session.scalars(select(ReviewCommentRow).where(
-                    ReviewCommentRow.tenant_id == context.scope.tenant_id,
-                    ReviewCommentRow.workspace_id == context.scope.workspace_id,
-                    ReviewCommentRow.review_link_id == link_id,
-                ).order_by(ReviewCommentRow.timecode_ms, ReviewCommentRow.created_at, ReviewCommentRow.id)).all()
-                return {"reviewLink": self._link_payload(link, self._delivery_for(session, context.scope, link_id)),
-                        "comments": [_comment_row_payload(item) for item in comments]}
+                comments = session.scalars(
+                    select(ReviewCommentRow)
+                    .where(
+                        ReviewCommentRow.tenant_id == context.scope.tenant_id,
+                        ReviewCommentRow.workspace_id == context.scope.workspace_id,
+                        ReviewCommentRow.review_link_id == link_id,
+                    )
+                    .order_by(ReviewCommentRow.timecode_ms, ReviewCommentRow.created_at, ReviewCommentRow.id)
+                ).all()
+                return {
+                    "reviewLink": self._link_payload(link, self._delivery_for(session, context.scope, link_id)),
+                    "comments": [_comment_row_payload(item) for item in comments],
+                }
         except SQLAlchemyError as error:
             raise ReviewRuntimeConfigurationError("REVIEW_DETAIL_READ_UNAVAILABLE") from error
 
-    def _change_comment_status_sync(self, context: StaffReviewContext, comment_id: str, issue_status: IssueStatus,
-                                    expected_version: int, idempotency_key: str) -> dict[str, object]:
-        result = self._service(context.scope).change_issue_status(actor=context.actor, comment_id=comment_id,
-            status=issue_status, expected_version=expected_version, request_id=context.trusted.request_id,
-            idempotency_key=idempotency_key)
+    def _change_comment_status_sync(
+        self,
+        context: StaffReviewContext,
+        comment_id: str,
+        issue_status: IssueStatus,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        result = self._service(context.scope).change_issue_status(
+            actor=context.actor,
+            comment_id=comment_id,
+            status=issue_status,
+            expected_version=expected_version,
+            request_id=context.trusted.request_id,
+            idempotency_key=idempotency_key,
+        )
         return _comment_payload(result)
 
     def _open_public_context_sync(self, token: str, access_secret: str | None) -> dict[str, object]:
         scope = self._scope_for_token(token)
         context = self._service(scope).verify_access(token=token, access_secret=access_secret)
         return self._public_context_payload(scope, context)
+
+    def _refresh_public_context_sync(self, token: str, session_id: str) -> dict[str, object]:
+        scope = self._scope_for_token(token)
+        context, _ = self._public_session(scope, token, session_id)
+        return self._public_context_payload(scope, context)
+
+    def _reply_to_comment_sync(
+        self, context: StaffReviewContext, comment_id: str, body: str, idempotency_key: str
+    ) -> dict[str, object]:
+        with self._session_factory() as session:
+            parent = session.scalar(
+                select(ReviewCommentRow).where(
+                    ReviewCommentRow.tenant_id == context.scope.tenant_id,
+                    ReviewCommentRow.workspace_id == context.scope.workspace_id,
+                    ReviewCommentRow.id == comment_id,
+                )
+            )
+            if parent is None:
+                raise LinkUnavailable()
+            link_id, timecode_ms, severity = parent.review_link_id, parent.timecode_ms, parent.severity
+        result = self._service(context.scope).add_comment(
+            actor=context.actor,
+            link_id=link_id,
+            timecode_ms=timecode_ms,
+            body=body,
+            severity=severity,
+            parent_comment_id=comment_id,
+            request_id=context.trusted.request_id,
+            idempotency_key=idempotency_key,
+        )
+        return _comment_payload(result)
 
     def _public_action_sync(
         self, token: str, session_id: str, action: str, payload: Mapping[str, object], idempotency_key: str
@@ -310,13 +424,15 @@ class ReviewRuntime:
             screenshot_id = _optional_text(payload.get("screenshotAssetId"))
             if screenshot_id is not None:
                 with self._session_factory() as session:
-                    screenshot = session.scalar(select(ReviewScreenshotRow).where(
-                        ReviewScreenshotRow.tenant_id == scope.tenant_id,
-                        ReviewScreenshotRow.workspace_id == scope.workspace_id,
-                        ReviewScreenshotRow.id == screenshot_id,
-                        ReviewScreenshotRow.review_link_id == context.link_id,
-                        ReviewScreenshotRow.final_video_version_id == context.final_video_version_id,
-                    ))
+                    screenshot = session.scalar(
+                        select(ReviewScreenshotRow).where(
+                            ReviewScreenshotRow.tenant_id == scope.tenant_id,
+                            ReviewScreenshotRow.workspace_id == scope.workspace_id,
+                            ReviewScreenshotRow.id == screenshot_id,
+                            ReviewScreenshotRow.review_link_id == context.link_id,
+                            ReviewScreenshotRow.final_video_version_id == context.final_video_version_id,
+                        )
+                    )
                     if screenshot is None:
                         raise ValueError("REVIEW_SCREENSHOT_SCOPE_INVALID")
             result = service.add_comment(
@@ -365,7 +481,9 @@ class ReviewRuntime:
         except SQLAlchemyError as error:
             raise ReviewRuntimeConfigurationError("REVIEW_LINK_LOOKUP_UNAVAILABLE") from error
 
-    def _public_session(self, scope: ReviewPersistenceScope, token: str, session_id: str) -> tuple[ReviewContext, Actor]:
+    def _public_session(
+        self, scope: ReviewPersistenceScope, token: str, session_id: str
+    ) -> tuple[ReviewContext, Actor]:
         digest = hmac.new(self._secret_key, f"token:{token}".encode(), hashlib.sha256).hexdigest()
         try:
             with self._session_factory() as session:
@@ -376,7 +494,11 @@ class ReviewRuntime:
                         ReviewLinkRow.token_digest == digest,
                     )
                 )
-                if link is None or link.state != "active" or (link.expires_at is not None and link.expires_at <= datetime.now(link.expires_at.tzinfo)):
+                if (
+                    link is None
+                    or link.state != "active"
+                    or (link.expires_at is not None and link.expires_at <= datetime.now(link.expires_at.tzinfo))
+                ):
                     raise LinkUnavailable()
                 row = session.scalar(
                     select(ReviewSessionRow).where(
@@ -430,13 +552,19 @@ class ReviewRuntime:
                     )
                     .order_by(ReviewCommentRow.timecode_ms, ReviewCommentRow.created_at, ReviewCommentRow.id)
                 ).all()
-                media = self._verified_media(scope, context.project_id, context.final_video_version_id, verify_digest=False)
+                media = self._verified_media(
+                    scope, context.project_id, context.final_video_version_id, verify_digest=False
+                )
                 ticket = self._media_ticket(context.link_id, context.session.id)
                 return {
                     "review": self._link_payload(link, self._delivery_for(session, scope, context.link_id)),
                     "session": {"id": context.session.id, "permissions": sorted(context.permissions), "ticket": ticket},
-                    "media": {"available": True, "mediaType": media.media_type, "filename": media.filename,
-                              "downloadAllowed": link.download_allowed},
+                    "media": {
+                        "available": True,
+                        "mediaType": media.media_type,
+                        "filename": media.filename,
+                        "downloadAllowed": link.download_allowed,
+                    },
                     "comments": [_comment_row_payload(item) for item in comments],
                 }
         except SQLAlchemyError as error:
@@ -452,12 +580,18 @@ class ReviewRuntime:
             )
         )
 
-    def _verified_media(self, scope: ReviewPersistenceScope, project_id: str, version_id: str, *, verify_digest: bool) -> ReviewMedia:
+    def _verified_media(
+        self, scope: ReviewPersistenceScope, project_id: str, version_id: str, *, verify_digest: bool
+    ) -> ReviewMedia:
         with self._session_factory() as session:
-            row = session.scalar(select(FinalVideoVersionRow).where(
-                FinalVideoVersionRow.tenant_id == scope.tenant_id, FinalVideoVersionRow.workspace_id == scope.workspace_id,
-                FinalVideoVersionRow.project_id == project_id, FinalVideoVersionRow.version_id == version_id,
-            ))
+            row = session.scalar(
+                select(FinalVideoVersionRow).where(
+                    FinalVideoVersionRow.tenant_id == scope.tenant_id,
+                    FinalVideoVersionRow.workspace_id == scope.workspace_id,
+                    FinalVideoVersionRow.project_id == project_id,
+                    FinalVideoVersionRow.version_id == version_id,
+                )
+            )
             if row is None:
                 raise LinkUnavailable()
             output = row.snapshot.get("output")
@@ -483,15 +617,21 @@ class ReviewRuntime:
         context, _ = self._public_session(scope, token, session_id)
         self._verify_media_ticket(context.link_id, session_id, ticket)
         with self._session_factory() as session:
-            link = session.scalar(select(ReviewLinkRow).where(ReviewLinkRow.tenant_id == scope.tenant_id,
-                ReviewLinkRow.workspace_id == scope.workspace_id, ReviewLinkRow.id == context.link_id))
+            link = session.scalar(
+                select(ReviewLinkRow).where(
+                    ReviewLinkRow.tenant_id == scope.tenant_id,
+                    ReviewLinkRow.workspace_id == scope.workspace_id,
+                    ReviewLinkRow.id == context.link_id,
+                )
+            )
             if link is None or (download and not link.download_allowed):
                 raise ReviewPermissionDenied("review.download")
         media = self._verified_media(scope, context.project_id, context.final_video_version_id, verify_digest=False)
         return ReviewMedia(media.path, media.media_type, media.filename, download)
 
-    def _upload_screenshot_sync(self, token: str, session_id: str, content: bytes, media_type: str,
-                                timecode_ms: int, request_id: str) -> dict[str, object]:
+    def _upload_screenshot_sync(
+        self, token: str, session_id: str, content: bytes, media_type: str, timecode_ms: int, request_id: str
+    ) -> dict[str, object]:
         if not _valid_image_bytes(media_type, content) or len(content) > 10 * 1024 * 1024:
             raise ValueError("REVIEW_SCREENSHOT_INVALID")
         scope = self._scope_for_token(token)
@@ -510,29 +650,67 @@ class ReviewRuntime:
         digest = hashlib.sha256(content).hexdigest()
         try:
             with self._session_factory() as session, session.begin():
-                session.add(ReviewScreenshotRow(tenant_id=scope.tenant_id, workspace_id=scope.workspace_id,
-                    id=screenshot_id, review_link_id=context.link_id, final_video_version_id=context.final_video_version_id,
-                    uploader_session_id=session_id, object_key=relative, content_sha256=digest, size_bytes=len(content),
-                    media_type=media_type, timecode_ms=timecode_ms, created_at=now))
-                session.add(ReviewAuditRow(tenant_id=scope.tenant_id, workspace_id=scope.workspace_id,
-                    event_id=str(uuid4()), event_type="review.screenshot.uploaded", occurred_at=now,
-                    actor_id=session_id, object_type="review_screenshot", object_id=screenshot_id, request_id=request_id,
-                    before=None, after={"reviewLinkId": context.link_id, "timecodeMs": timecode_ms,
-                    "contentSha256": digest, "sizeBytes": len(content)}, result="succeeded"))
+                session.add(
+                    ReviewScreenshotRow(
+                        tenant_id=scope.tenant_id,
+                        workspace_id=scope.workspace_id,
+                        id=screenshot_id,
+                        review_link_id=context.link_id,
+                        final_video_version_id=context.final_video_version_id,
+                        uploader_session_id=session_id,
+                        object_key=relative,
+                        content_sha256=digest,
+                        size_bytes=len(content),
+                        media_type=media_type,
+                        timecode_ms=timecode_ms,
+                        created_at=now,
+                    )
+                )
+                session.add(
+                    ReviewAuditRow(
+                        tenant_id=scope.tenant_id,
+                        workspace_id=scope.workspace_id,
+                        event_id=str(uuid4()),
+                        event_type="review.screenshot.uploaded",
+                        occurred_at=now,
+                        actor_id=session_id,
+                        object_type="review_screenshot",
+                        object_id=screenshot_id,
+                        request_id=request_id,
+                        before=None,
+                        after={
+                            "reviewLinkId": context.link_id,
+                            "timecodeMs": timecode_ms,
+                            "contentSha256": digest,
+                            "sizeBytes": len(content),
+                        },
+                        result="succeeded",
+                    )
+                )
         except BaseException:
             target.unlink(missing_ok=True)
             raise
-        return {"id": screenshot_id, "timecodeMs": timecode_ms, "mediaType": media_type,
-                "sizeBytes": len(content), "createdAt": now.isoformat()}
+        return {
+            "id": screenshot_id,
+            "timecodeMs": timecode_ms,
+            "mediaType": media_type,
+            "sizeBytes": len(content),
+            "createdAt": now.isoformat(),
+        }
 
     def _public_screenshot_sync(self, token: str, session_id: str, ticket: str, screenshot_id: str) -> ReviewMedia:
         scope = self._scope_for_token(token)
         context, _ = self._public_session(scope, token, session_id)
         self._verify_media_ticket(context.link_id, session_id, ticket)
         with self._session_factory() as session:
-            row = session.scalar(select(ReviewScreenshotRow).where(ReviewScreenshotRow.tenant_id == scope.tenant_id,
-                ReviewScreenshotRow.workspace_id == scope.workspace_id, ReviewScreenshotRow.id == screenshot_id,
-                ReviewScreenshotRow.review_link_id == context.link_id))
+            row = session.scalar(
+                select(ReviewScreenshotRow).where(
+                    ReviewScreenshotRow.tenant_id == scope.tenant_id,
+                    ReviewScreenshotRow.workspace_id == scope.workspace_id,
+                    ReviewScreenshotRow.id == screenshot_id,
+                    ReviewScreenshotRow.review_link_id == context.link_id,
+                )
+            )
             if row is None:
                 raise LinkUnavailable()
             path = self._scoped_path(self._screenshot_root, scope, row.object_key)
@@ -542,18 +720,58 @@ class ReviewRuntime:
 
     def _logout_public_session_sync(self, token: str, session_id: str, request_id: str) -> None:
         scope = self._scope_for_token(token)
-        context, _ = self._public_session(scope, token, session_id)
+        digest = hmac.new(self._secret_key, f"token:{token}".encode(), hashlib.sha256).hexdigest()
         now = datetime.now(UTC)
         with self._session_factory() as session, session.begin():
-            result = session.execute(update(ReviewSessionRow).where(ReviewSessionRow.tenant_id == scope.tenant_id,
-                ReviewSessionRow.workspace_id == scope.workspace_id, ReviewSessionRow.id == session_id,
-                ReviewSessionRow.revoked_at.is_(None)).values(revoked_at=now, last_seen_at=now))
+            link_id = session.scalar(
+                select(ReviewLinkRow.id).where(
+                    ReviewLinkRow.tenant_id == scope.tenant_id,
+                    ReviewLinkRow.workspace_id == scope.workspace_id,
+                    ReviewLinkRow.token_digest == digest,
+                )
+            )
+            row = session.scalar(
+                select(ReviewSessionRow)
+                .where(
+                    ReviewSessionRow.tenant_id == scope.tenant_id,
+                    ReviewSessionRow.workspace_id == scope.workspace_id,
+                    ReviewSessionRow.id == session_id,
+                    ReviewSessionRow.review_link_id == link_id,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                raise LinkUnavailable()
+            if row.revoked_at is not None:
+                return
+            result = session.execute(
+                update(ReviewSessionRow)
+                .where(
+                    ReviewSessionRow.tenant_id == scope.tenant_id,
+                    ReviewSessionRow.workspace_id == scope.workspace_id,
+                    ReviewSessionRow.id == session_id,
+                    ReviewSessionRow.revoked_at.is_(None),
+                )
+                .values(revoked_at=now, last_seen_at=now)
+            )
             if cast(object, getattr(result, "rowcount", None)) != 1:
                 raise LinkUnavailable()
-            session.add(ReviewAuditRow(tenant_id=scope.tenant_id, workspace_id=scope.workspace_id,
-                event_id=str(uuid4()), event_type="review.session.revoked", occurred_at=now, actor_id=session_id,
-                object_type="review_session", object_id=session_id, request_id=request_id, before=None,
-                after={"reviewLinkId": context.link_id, "revokedAt": now.isoformat()}, result="succeeded"))
+            session.add(
+                ReviewAuditRow(
+                    tenant_id=scope.tenant_id,
+                    workspace_id=scope.workspace_id,
+                    event_id=str(uuid4()),
+                    event_type="review.session.revoked",
+                    occurred_at=now,
+                    actor_id=session_id,
+                    object_type="review_session",
+                    object_id=session_id,
+                    request_id=request_id,
+                    before=None,
+                    after={"reviewLinkId": link_id, "revokedAt": now.isoformat()},
+                    result="succeeded",
+                )
+            )
 
     def _media_ticket(self, link_id: str, session_id: str) -> str:
         expires = int((datetime.now(UTC) + timedelta(minutes=15)).timestamp())
@@ -577,7 +795,11 @@ class ReviewRuntime:
         if not object_key or "\\" in object_key or Path(object_key).is_absolute():
             raise ReviewRuntimeConfigurationError("REVIEW_OBJECT_KEY_INVALID")
         parts = object_key.split("/")
-        if len(parts) < 3 or parts[:2] != [scope.tenant_id, scope.workspace_id] or any(part in {"", ".", ".."} for part in parts):
+        if (
+            len(parts) < 3
+            or parts[:2] != [scope.tenant_id, scope.workspace_id]
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
             raise ReviewRuntimeConfigurationError("REVIEW_OBJECT_SCOPE_INVALID")
         path = root.joinpath(*parts).resolve()
         scoped_root = (root / scope.tenant_id / scope.workspace_id).resolve()
@@ -592,7 +814,11 @@ class ReviewRuntime:
             "workspaceId": row.workspace_id,
             "projectId": row.project_id,
             "finalVideoVersionId": row.final_video_version_id,
-            "policy": {"comment": row.comment_allowed, "approve": row.approve_allowed, "download": row.download_allowed},
+            "policy": {
+                "comment": row.comment_allowed,
+                "approve": row.approve_allowed,
+                "download": row.download_allowed,
+            },
             "watermarkText": row.watermark_text,
             "expiresAt": None if row.expires_at is None else row.expires_at.isoformat(),
             "state": row.state,
@@ -613,8 +839,12 @@ class ReviewRuntime:
 
 
 def create_production_review_runtime(
-    *, database_url: str | None = None, secret: str | None = None, context_resolver: TrustedContextResolver | None = None,
-    media_root: str | Path | None = None, screenshot_root: str | Path | None = None,
+    *,
+    database_url: str | None = None,
+    secret: str | None = None,
+    context_resolver: TrustedContextResolver | None = None,
+    media_root: str | Path | None = None,
+    screenshot_root: str | Path | None = None,
 ) -> ReviewRuntime:
     url = (database_url or os.environ.get("XINGJING_REVIEW_DATABASE_URL", "")).strip()
     key = (secret or os.environ.get("XINGJING_REVIEW_HMAC_SECRET", "")).strip()
@@ -622,7 +852,10 @@ def create_production_review_runtime(
         raise ReviewRuntimeConfigurationError("XINGJING_REVIEW_DATABASE_URL_REQUIRED")
     if len(key) < 32:
         raise ReviewRuntimeConfigurationError("XINGJING_REVIEW_HMAC_SECRET_MINIMUM_32_REQUIRED")
-    media_path = Path(media_root or os.environ.get("XINGJING_EDITING_OBJECT_STORAGE_ROOT", "")).expanduser()
+    media_setting = media_root or os.environ.get("XINGJING_EDITING_OBJECT_STORAGE_ROOT", "")
+    if not str(media_setting).strip():
+        raise ReviewRuntimeConfigurationError("XINGJING_EDITING_OBJECT_STORAGE_ROOT_REQUIRED")
+    media_path = Path(media_setting).expanduser()
     screenshot_path = Path(screenshot_root or os.environ.get("XINGJING_REVIEW_SCREENSHOT_ROOT", "")).expanduser()
     if not media_path.is_dir():
         raise ReviewRuntimeConfigurationError("XINGJING_EDITING_OBJECT_STORAGE_ROOT_REQUIRED")
@@ -748,11 +981,22 @@ def _delivery_row_payload(value: ReviewDeliveryRow) -> dict[str, object]:
 
 def _camel_payload(data: Mapping[str, object], delivery: DeliveryRecord | None) -> dict[str, object]:
     names = {
-        "review_link_id": "reviewLinkId", "final_video_version_id": "finalVideoVersionId", "timecode_ms": "timecodeMs",
-        "screenshot_asset_id": "screenshotAssetId", "author_id": "authorId", "created_at": "createdAt",
-        "updated_at": "updatedAt", "confirmed_by": "confirmedBy", "confirmed_at": "confirmedAt", "workspace_id": "workspaceId",
-        "project_id": "projectId", "expires_at": "expiresAt", "revoked_at": "revokedAt", "access_secret": "accessSecret",
-        "watermark_text": "watermarkText", "parent_comment_id": "parentCommentId",
+        "review_link_id": "reviewLinkId",
+        "final_video_version_id": "finalVideoVersionId",
+        "timecode_ms": "timecodeMs",
+        "screenshot_asset_id": "screenshotAssetId",
+        "author_id": "authorId",
+        "created_at": "createdAt",
+        "updated_at": "updatedAt",
+        "confirmed_by": "confirmedBy",
+        "confirmed_at": "confirmedAt",
+        "workspace_id": "workspaceId",
+        "project_id": "projectId",
+        "expires_at": "expiresAt",
+        "revoked_at": "revokedAt",
+        "access_secret": "accessSecret",
+        "watermark_text": "watermarkText",
+        "parent_comment_id": "parentCommentId",
     }
     payload = {names.get(key, key): _serialize(value) for key, value in data.items()}
     if delivery is not None:
