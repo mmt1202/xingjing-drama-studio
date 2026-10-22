@@ -80,6 +80,7 @@ export interface ReviewApi {
   screenshotUrl(token: string, sessionId: string, ticket: string, screenshotId: string): string;
   projectLinks(projectId: string, options?: ListOptions): Promise<ReviewPage>;
   workspaceLinks(workspaceId: string, options?: ListOptions): Promise<ReviewPage>;
+  projectReviewDefaults?: (projectId: string, signal?: AbortSignal) => Promise<ReviewPolicy>;
   createProjectLink(projectId: string, input: CreateReviewLinkInput): Promise<ReviewLink>;
   createWorkspaceLink(workspaceId: string, input: CreateReviewLinkInput & { projectId: string }): Promise<ReviewLink>;
   revokeWorkspaceLink(workspaceId: string, linkId: string, version: number): Promise<ReviewLink>;
@@ -147,6 +148,10 @@ export function createReviewApi({ accessToken, baseUrl = "/api/v1", fetcher = fe
   }
 
   return {
+    projectReviewDefaults: async (projectId, signal) => {
+      const project = await request<{ configuration?: { clientCanComment?: boolean; clientCanApprove?: boolean; clientCanDownload?: boolean } }>(`/projects/${encodeURIComponent(projectId)}`, { signal });
+      return { comment: project.configuration?.clientCanComment ?? true, approve: project.configuration?.clientCanApprove ?? true, download: project.configuration?.clientCanDownload ?? false };
+    },
     openPublicContext: (token, accessSecret, options) => request<PublicReviewResult>(`/review-links/${encodeURIComponent(token)}/context`, { signal: options?.signal }, { publicRequest: true, accessSecret, sessionId: options?.sessionId }),
     publicAction: (token, sessionId, payload) => mutate(`/review-links/${encodeURIComponent(token)}/actions`, payload, { publicRequest: true, sessionId }),
     uploadScreenshot: async (token, sessionId, file, timecodeMs) => {

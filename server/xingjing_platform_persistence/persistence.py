@@ -6,7 +6,7 @@ import base64
 import json
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import JSON, DateTime, Index, Integer, String, Text, UniqueConstraint, and_, or_, select, update
@@ -46,6 +46,11 @@ class ProjectRow(ScopedMixin, Base):
     target_platform: Mapped[str] = mapped_column(String(64), nullable=False, default="web")
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
     production_status: Mapped[str] = mapped_column(String(64), nullable=False, default="draft")
+    setup_state: Mapped[str] = mapped_column(String(16), nullable=False, default="ready", server_default="ready")
+    configuration: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    creation_digest: Mapped[str | None] = mapped_column(String(64))
+    last_setup_key: Mapped[str | None] = mapped_column(String(128))
+    last_setup_digest: Mapped[str | None] = mapped_column(String(64))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
@@ -236,6 +241,11 @@ class Project:
     target_platform: str = "web"
     owner_id: str = "system"
     production_status: str = "draft"
+    setup_state: str = "ready"
+    configuration: dict[str, object] = field(default_factory=dict)
+    creation_digest: str | None = None
+    last_setup_key: str | None = None
+    last_setup_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -296,6 +306,11 @@ def _project(row: ProjectRow) -> Project:
         row.target_platform,
         row.owner_id,
         row.production_status,
+        row.setup_state,
+        dict(row.configuration or {}),
+        row.creation_digest,
+        row.last_setup_key,
+        row.last_setup_digest,
     )
 
 
@@ -322,6 +337,12 @@ class _ScopedRepository:
 
 
 class ProjectRepository(_ScopedRepository):
+    async def by_creation_key(self, key: str) -> Project | None:
+        row = await self._session.scalar(
+            select(ProjectRow).where(self._scope_clause(ProjectRow), ProjectRow.idempotency_key == key)
+        )
+        return _project(row) if row is not None else None
+
     async def create(
         self,
         idempotency_key: str,
@@ -330,6 +351,9 @@ class ProjectRepository(_ScopedRepository):
         project_type: str = "drama",
         target_platform: str = "web",
         owner_id: str = "system",
+        setup_state: str = "ready",
+        configuration: dict[str, object] | None = None,
+        creation_digest: str | None = None,
     ) -> Project:
         existing = await self._session.scalar(
             select(ProjectRow).where(self._scope_clause(ProjectRow), ProjectRow.idempotency_key == idempotency_key)
@@ -344,6 +368,9 @@ class ProjectRepository(_ScopedRepository):
             project_type=project_type,
             target_platform=target_platform,
             owner_id=owner_id,
+            setup_state=setup_state,
+            configuration=configuration or {},
+            creation_digest=creation_digest,
         )
         try:
             async with self._session.begin_nested():
@@ -367,6 +394,34 @@ class ProjectRepository(_ScopedRepository):
 
     async def rename(self, project_id: str, name: str, *, expected_version: int) -> Project:
         return await self._versioned_update(project_id, expected_version, name=name, updated_at=_now())
+
+    async def configure(
+        self,
+        project_id: str,
+        *,
+        expected_version: int,
+        name: str,
+        project_type: str,
+        target_platform: str,
+        owner_id: str,
+        configuration: dict[str, object],
+        setup_state: str,
+        last_setup_key: str,
+        last_setup_digest: str,
+    ) -> Project:
+        return await self._versioned_update(
+            project_id,
+            expected_version,
+            name=name,
+            project_type=project_type,
+            target_platform=target_platform,
+            owner_id=owner_id,
+            configuration=configuration,
+            setup_state=setup_state,
+            last_setup_key=last_setup_key,
+            last_setup_digest=last_setup_digest,
+            updated_at=_now(),
+        )
 
     async def soft_delete(self, project_id: str, *, expected_version: int) -> Project:
         return await self._versioned_update(project_id, expected_version, deleted_at=_now(), updated_at=_now())
@@ -638,6 +693,12 @@ class PersistenceUnitOfWork:
     async def commit(self) -> None:
         self._require_session()
         await self._session.commit()  # pyright: ignore[reportOptionalMemberAccess]
+
+    @property
+    def session(self) -> AsyncSession:
+        self._require_session()
+        assert self._session is not None
+        return self._session
 
     async def rollback(self) -> None:
         self._require_session()

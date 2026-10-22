@@ -45,6 +45,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
+      XINGJING_PROJECT_DATABASE_URL: postgresql+asyncpg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel
       # M03/M04/M05 use SQLAlchemy's synchronous repository boundary against
       # the same PostgreSQL database; they are not separate databases.
       XINGJING_CONTENT_DATABASE_URL: postgresql+psycopg://arcreel:${POSTGRES_PASSWORD}@postgres:5432/arcreel

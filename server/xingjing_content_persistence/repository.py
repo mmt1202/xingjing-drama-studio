@@ -403,6 +403,11 @@ class SqlAlchemyContentRepository:
         self._session_factory = session_factory
         self._audit_context = audit_context
 
+    def add_initial_document(self, session: Session, document: ScriptDocument, *, idempotency_key: str) -> None:
+        """Join the caller's transaction when a project and its source are created together."""
+        self._persist_document(session, document, None)
+        session.add(self._audit_row(document, None, idempotency_key))
+
     def transact(
         self,
         workspace_id: str,

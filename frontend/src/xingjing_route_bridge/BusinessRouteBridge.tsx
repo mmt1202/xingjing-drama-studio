@@ -220,6 +220,9 @@ export function ProjectBusinessRoute({
         <ProjectEditorPage
           api={creatorApi}
           mode={surface.mode}
+          projectId={projectId === "_new" ? undefined : projectId}
+          onDraftSaved={(id) => go(slug, id)}
+          onBack={() => navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects`)}
           onCreated={(id) => go("control", id)}
         />
       );

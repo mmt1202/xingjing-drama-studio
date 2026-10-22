@@ -1,5 +1,6 @@
 MESSAGES = {
     "review.request_failed": "审片请求未完成，请重试或联系项目方。",
+    "project.request_failed": "项目操作未完成，请检查输入或重新读取项目后重试。",
     "billing.available": "可用算力",
     "billing.held": "冻结算力",
     "billing.spent": "累计消耗",

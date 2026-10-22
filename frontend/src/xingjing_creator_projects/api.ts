@@ -1,4 +1,5 @@
-import type { CreatorProjectsPort, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ScriptAction, ScriptActionResult, ScriptDocument, SessionContext } from "./types";
+import type { CreatorProjectsPort, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, SessionContext } from "./types";
+import i18n from "@/i18n";
 
 interface Envelope<T> { data: T; meta?: { requestId?: string; total?: number; page?: { nextToken?: string | null } } }
 interface ErrorEnvelope { error?: { code?: string; message?: string; retryable?: boolean; details?: Record<string, unknown> }; meta?: { requestId?: string } }
@@ -28,7 +29,7 @@ export function createCreatorProjectsApi({ fetcher = fetch, createId = () => cry
   const retryKeys = new Map<string, string>();
 
   async function request<T>(path: string, init: RequestInit = {}, revision?: number): Promise<{ value: T; nextToken: string | null; total?: number }> {
-    const headers: Record<string, string> = { Accept: "application/json", ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}) };
+    const headers: Record<string, string> = { Accept: "application/json", "Accept-Language": i18n.resolvedLanguage ?? "zh", ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}) };
     const token = await getAccessToken?.();
     if (token) headers.Authorization = `Bearer ${token}`;
     if (revision !== undefined) headers["If-Match"] = `"${revision}"`;
@@ -79,6 +80,7 @@ export function createCreatorProjectsApi({ fetcher = fetch, createId = () => cry
       return request<ProjectSummary[]>(`/projects?${q}`).then((r): PageResult<ProjectSummary> => ({ items: r.value, nextToken: r.nextToken }));
     },
     getProject: (id) => request<ProjectDetail>(`/projects/${encodeURIComponent(id)}`).then((r) => r.value),
+    getProjectSetupOptions: () => request<ProjectSetupOptions>("/project-setup/options").then((r) => r.value),
     projectAction: (id, name: ProjectAction, payload, version) => action(`/projects/${encodeURIComponent(id)}/actions`, name, payload, version),
     listScripts: (id, params = {}) => {
       const offset = params.offset ?? 0;

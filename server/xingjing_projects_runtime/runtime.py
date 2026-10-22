@@ -1,4 +1,4 @@
-"""M02 project-management production composition.
+"""Project-management production composition.
 
 PostgreSQL owns identity, scope, versions and archive state. The existing project
 directory remains a media projection for legacy generation services.
@@ -7,6 +7,8 @@ directory remains a media projection for legacy generation services.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from collections.abc import Callable, Coroutine, Mapping
 from datetime import UTC, datetime
@@ -19,10 +21,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from lib.i18n import get_translator
 from lib.project_manager import get_project_manager
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
+from server.xingjing_model_control.runtime import ModelDefinitionRow
 from server.xingjing_platform_persistence import OptimisticConflict, PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import Project, ProjectRow
+from server.xingjing_team_persistence.repository import MemberRow
+
+from .initialization import initialize_source
+from .setup import ProjectSetup, SetupInvalid, create_projection, creation_digest, parse_setup
 
 
 class ProjectsRuntime:
@@ -46,6 +54,41 @@ class ProjectsRuntime:
 
     def _build_router(self) -> APIRouter:
         router = APIRouter(route_class=_ProjectsRoute)
+
+        @router.get("/project-setup/options")
+        async def setup_options(request: Request):
+            context = await self._context(request, "project.manage")
+            async with self._require_sessions()() as session:
+                members = (
+                    await session.scalars(
+                        select(MemberRow)
+                        .where(
+                            MemberRow.tenant_id == context.tenant_id,
+                            MemberRow.workspace_id == context.workspace_id,
+                            MemberRow.active.is_(True),
+                        )
+                        .order_by(MemberRow.email)
+                    )
+                ).all()
+                models = (
+                    await session.scalars(
+                        select(ModelDefinitionRow)
+                        .where(
+                            ModelDefinitionRow.active.is_(True),
+                        )
+                        .order_by(ModelDefinitionRow.display_name)
+                    )
+                ).all()
+            return {
+                "data": {
+                    "members": [{"id": member.member_id, "name": member.email} for member in members],
+                    "models": [
+                        {"key": model.registry_key, "name": model.display_name, "mediaTypes": model.media_types}
+                        for model in models
+                    ],
+                },
+                "meta": {"requestId": context.request_id},
+            }
 
         @router.get("/projects")
         async def list_projects(request: Request, archived: bool = False, pageToken: str | None = None):
@@ -77,7 +120,7 @@ class ProjectsRuntime:
             # ``data/meta`` is the formal M02 contract used by Xingjing pages.
             return {
                 "data": data,
-                "projects": [_legacy_summary(row) for row in visible],
+                "projects": [_legacy_summary(row) for row in visible if row.setup_state == "ready"],
                 "meta": {"requestId": context.request_id, "total": len(rows), "page": {"nextToken": next_token}},
             }
 
@@ -90,10 +133,10 @@ class ProjectsRuntime:
             data = _summary(row)
             legacy_project: dict[str, object] = {"title": row.name, "episodes": []}
             manager = get_project_manager()
-            if await asyncio.to_thread(manager.project_exists, row.id):
+            if row.setup_state == "ready" and await asyncio.to_thread(manager.project_exists, row.id):
                 legacy_project = await asyncio.to_thread(manager.load_project, row.id)
             return {
-                "data": {**data, "episodes": _episodes(legacy_project)},
+                "data": {**data, "configuration": row.configuration or {}, "episodes": _episodes(legacy_project)},
                 "project": legacy_project,
                 "scripts": {},
                 "asset_fingerprints": {},
@@ -111,16 +154,23 @@ class ProjectsRuntime:
             if not isinstance(payload, Mapping):
                 return _error(context.request_id, "INVALID_ACTION_PAYLOAD", status.HTTP_400_BAD_REQUEST)
             key = request.headers.get("Idempotency-Key", "").strip()
-            if not key:
+            if not key or len(key) > 128:
                 return _error(context.request_id, "IDEMPOTENCY_KEY_REQUIRED", status.HTTP_400_BAD_REQUEST)
             try:
-                if action == "create":
-                    project = await self._create(context, key, payload)
+                if action == "create" or action == "saveDraft" and project_id == "new":
+                    project = await self._create(context, key, payload, draft=action == "saveDraft")
+                elif action in {"saveDraft", "activate"} or action == "update" and "configuration" in payload:
+                    expected = _if_match(request)
+                    if expected is None:
+                        return _error(context.request_id, "VERSION_REQUIRED", status.HTTP_428_PRECONDITION_REQUIRED)
+                    project = await self._configure(context, project_id, action, payload, expected, key)
                 else:
                     expected = _if_match(request)
                     if expected is None:
                         return _error(context.request_id, "VERSION_REQUIRED", status.HTTP_428_PRECONDITION_REQUIRED)
                     project = await self._mutate(context, project_id, action, payload, expected, key)
+            except SetupInvalid as error:
+                return _error(context.request_id, "PROJECT_SETUP_INVALID", 422, {"fields": error.fields})
             except OptimisticConflict:
                 return _error(context.request_id, "VERSION_CONFLICT", status.HTTP_409_CONFLICT)
             except FileExistsError:
@@ -128,7 +178,8 @@ class ProjectsRuntime:
             except (SQLAlchemyError, OSError):
                 return _error(context.request_id, "PROJECT_RUNTIME_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE)
             except ValueError as error:
-                return _error(context.request_id, str(error) or "INVALID_PROJECT_ACTION", status.HTTP_400_BAD_REQUEST)
+                code = str(error) or "INVALID_PROJECT_ACTION"
+                return _error(context.request_id, code, 409 if code == "IDEMPOTENCY_CONFLICT" else 400)
             return {"data": _project(project), "meta": {"requestId": context.request_id}}
 
         return router
@@ -158,35 +209,141 @@ class ProjectsRuntime:
         async with sessions() as session:
             return await session.scalar(select(ProjectRow).where(*clauses))
 
-    async def _create(self, context, key: str, payload: Mapping[str, object]) -> Project:
+    async def _validate_setup_references(self, context, setup: ProjectSetup) -> None:
+        async with self._require_sessions()() as session:
+            if setup.owner_id != context.actor_id:
+                member = await session.scalar(
+                    select(MemberRow.member_id).where(
+                        MemberRow.tenant_id == context.tenant_id,
+                        MemberRow.workspace_id == context.workspace_id,
+                        MemberRow.member_id == setup.owner_id,
+                        MemberRow.active.is_(True),
+                    )
+                )
+                if member is None:
+                    raise SetupInvalid(["ownerId"])
+            for kind, key in (("image", setup.image_model_key), ("video", setup.video_model_key)):
+                if key:
+                    model = await session.get(ModelDefinitionRow, key)
+                    if model is None or not model.active or kind not in model.media_types:
+                        raise SetupInvalid([f"{kind}ModelKey"])
+
+    async def _create(self, context, key: str, payload: Mapping[str, object], *, draft: bool = False) -> Project:
         name = _text(payload.get("name"))
-        if not name:
+        if not name or len(name) > 255:
             raise ValueError("PROJECT_NAME_REQUIRED")
+        setup = (
+            parse_setup(payload.get("configuration"), actor_id=context.actor_id, draft=draft)
+            if "configuration" in payload or draft
+            else None
+        )
+        digest = creation_digest(name, setup, draft)
         scope = Scope(context.tenant_id, context.workspace_id)
         sessions = self._require_sessions()
         created_projection = False
         async with PersistenceUnitOfWork(sessions, scope) as uow:
+            claimed = await uow.inbox.claim("project.create", key)
+            existing = await uow.projects.by_creation_key(key)
+            if existing is not None:
+                if existing.creation_digest != digest:
+                    raise ValueError("IDEMPOTENCY_CONFLICT")
+                return existing
+            if not claimed:
+                raise ValueError("IDEMPOTENCY_CONFLICT")
+            if setup:
+                await self._validate_setup_references(context, setup)
             project = await uow.projects.create(
                 key,
                 name,
-                project_type=_text(payload.get("type")) or "drama",
-                target_platform=_text(payload.get("targetPlatform")) or "web",
-                owner_id=context.actor_id,
+                project_type=setup.project_type if setup else _text(payload.get("type")) or "drama",
+                target_platform=setup.primary_platform if setup else _text(payload.get("targetPlatform")) or "web",
+                owner_id=setup.owner_id if setup else context.actor_id,
+                configuration=setup.payload() if setup else {},
+                setup_state="draft" if draft else "ready",
+                creation_digest=digest,
             )
-            if project.name != name:
+            if project.creation_digest != digest:
                 raise ValueError("IDEMPOTENCY_CONFLICT")
             manager = get_project_manager()
-            if not await asyncio.to_thread(manager.project_exists, project.id):
-                await asyncio.to_thread(manager.create_project, project.id, content_mode="narration")
+            if not draft:
+                await initialize_source(uow.session, context, project.id, name, setup)
+            if not draft and not await asyncio.to_thread(manager.project_exists, project.id):
+                await asyncio.to_thread(create_projection, manager, project.id, name, setup)
                 created_projection = True
-                await asyncio.to_thread(manager.create_project_metadata, project.id, name, "", "narration")
-            await uow.audit.append(context.actor_id, "project.created", "project", project.id, {"requestId": context.request_id})
-            await uow.outbox.add("project.created", "project", project.id, {"name": name, "ownerId": context.actor_id})
             try:
+                event = "project.draft_saved" if draft else "project.created"
+                await uow.audit.append(
+                    context.actor_id, event, "project", project.id, {"requestId": context.request_id}
+                )
+                await uow.outbox.add(event, "project", project.id, {"name": name, "ownerId": project.owner_id})
                 await uow.commit()
             except Exception:
                 if created_projection:
                     await asyncio.to_thread(manager.delete_project_directory, project.id)
+                raise
+        return project
+
+    async def _configure(
+        self, context, project_id: str, action: str, payload: Mapping[str, object], expected: int, key: str
+    ) -> Project:
+        name = _text(payload.get("name"))
+        if not name or len(name) > 255:
+            raise ValueError("PROJECT_NAME_REQUIRED")
+        draft = action == "saveDraft"
+        setup = parse_setup(payload.get("configuration"), actor_id=context.actor_id, draft=draft)
+        digest = hashlib.sha256(
+            json.dumps(
+                {"action": action, "version": expected, "name": name, "configuration": setup.payload()}, sort_keys=True
+            ).encode()
+        ).hexdigest()
+        scope = Scope(context.tenant_id, context.workspace_id)
+        manager = get_project_manager()
+        created_projection = False
+        async with PersistenceUnitOfWork(self._require_sessions(), scope) as uow:
+            current = await uow.projects.get(project_id)
+            if current is None:
+                raise HTTPException(404, detail={"code": "PROJECT_NOT_FOUND"})
+            if current.last_setup_key == key:
+                if current.last_setup_digest != digest:
+                    raise ValueError("IDEMPOTENCY_CONFLICT")
+                return current
+            if current.setup_state != "draft":
+                raise ValueError("PROJECT_SETUP_ALREADY_ACTIVATED")
+            if action not in {"saveDraft", "activate"}:
+                raise ValueError("UNSUPPORTED_PROJECT_ACTION")
+            await self._validate_setup_references(context, setup)
+            project = await uow.projects.configure(
+                project_id,
+                expected_version=expected,
+                name=name,
+                project_type=setup.project_type,
+                target_platform=setup.primary_platform,
+                owner_id=setup.owner_id,
+                configuration=setup.payload(),
+                setup_state="draft" if draft else "ready",
+                last_setup_key=key,
+                last_setup_digest=digest,
+            )
+            try:
+                if not draft:
+                    await initialize_source(uow.session, context, project_id, name, setup)
+                    await asyncio.to_thread(create_projection, manager, project_id, name, setup)
+                    created_projection = True
+                event = "project.draft_saved" if draft else "project.created"
+                await uow.audit.append(
+                    context.actor_id,
+                    event,
+                    "project",
+                    project_id,
+                    {"requestId": context.request_id, "version": project.version},
+                )
+                await uow.outbox.add(
+                    event, "project", project_id, {"version": project.version, "ownerId": project.owner_id}
+                )
+                await uow.commit()
+            except Exception:
+                if created_projection:
+                    await asyncio.to_thread(manager.delete_project_directory, project_id)
                 raise
         return project
 
@@ -257,7 +414,7 @@ class _ProjectsRoute(APIRoute):
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         original = super().get_route_handler()
 
-        async def handler(request: Request) -> Response:
+        async def invoke(request: Request) -> Response:
             try:
                 return await original(request)
             except _RuntimeUnavailable as error:
@@ -281,6 +438,15 @@ class _ProjectsRoute(APIRoute):
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
 
+        async def handler(request: Request) -> Response:
+            response = await invoke(request)
+            if isinstance(response, JSONResponse) and response.status_code >= 400:
+                payload = json.loads(bytes(response.body))
+                if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+                    payload["error"]["message"] = get_translator(request)("project.request_failed")
+                    return JSONResponse(payload, status_code=response.status_code)
+            return response
+
         return handler
 
 
@@ -300,7 +466,12 @@ def create_production_projects_runtime(*, database_url: str | None = None) -> Pr
 
 async def _json(request: Request) -> Mapping[str, object] | JSONResponse:
     try:
-        body = await request.json()
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 4_194_304:
+                return _error(request.headers.get("X-Request-Id", ""), "PROJECT_REQUEST_TOO_LARGE", 413)
+            raw.extend(chunk)
+        body = json.loads(raw)
     except ValueError:
         return _error(request.headers.get("X-Request-Id", ""), "INVALID_JSON", status.HTTP_400_BAD_REQUEST)
     if not isinstance(body, Mapping):
@@ -328,6 +499,8 @@ def _summary(row: ProjectRow) -> dict[str, object]:
         "archived": row.deleted_at is not None,
         "version": row.version,
         "updatedAt": _iso(row.updated_at),
+        "setupState": row.setup_state,
+        "configuration": {key: value for key, value in (row.configuration or {}).items() if key != "sourceText"},
     }
 
 
@@ -343,6 +516,8 @@ def _project(project: Project) -> dict[str, object]:
         "version": project.version,
         "updatedAt": _iso(project.created_at),
         "episodes": [],
+        "setupState": project.setup_state,
+        "configuration": project.configuration,
     }
 
 
@@ -373,9 +548,7 @@ def _iso(value: datetime) -> str:
     return value.isoformat()
 
 
-def _error(
-    request_id: str, code: str, status_code: int, details: Mapping[str, object] | None = None
-) -> JSONResponse:
+def _error(request_id: str, code: str, status_code: int, details: Mapping[str, object] | None = None) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={

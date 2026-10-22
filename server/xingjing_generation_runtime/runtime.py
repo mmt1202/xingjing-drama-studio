@@ -55,6 +55,7 @@ from server.xingjing_identity_context import (
     TrustedWorkspaceContextResolver,
 )
 from server.xingjing_model_control import ModelRouteResolver
+from server.xingjing_model_control.runtime import ModelDefinitionRow
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import GeneratedArtifactStorageError, LocalGenerationArtifactStore
@@ -484,6 +485,7 @@ class GenerationRuntime:
         billing = self._billing_policy_or_raise()
         if request.workspace_id != context.workspace_id or request.project_id != project_id:
             raise ValueError("GENERATION_REQUEST_SCOPE_MISMATCH")
+        request = await self._project_model_default(context, project_id, request)
         await self._validate_input_assets(context, project_id, request)
         if self._model_route_resolver is None:
             raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
@@ -641,9 +643,7 @@ class GenerationRuntime:
             try:
                 if self._model_route_resolver is None:
                     raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
-                tenant_id = await self._tenant_for_project(
-                    queued.request.workspace_id, queued.request.project_id
-                )
+                tenant_id = await self._tenant_for_project(queued.request.workspace_id, queued.request.project_id)
                 route = await self._model_route_resolver.resolve(
                     tenant_id=tenant_id,
                     workspace_id=queued.request.workspace_id,
@@ -1102,6 +1102,41 @@ class GenerationRuntime:
             recorded_at=at,
         )
 
+    async def _project_model_default(
+        self,
+        context: TrustedWorkspaceContext,
+        project_id: str,
+        request: GenerationRequest,
+    ) -> GenerationRequest:
+        if self._session_factory is None:
+            return request
+        async with self._session_factory() as session:
+            project = await session.scalar(
+                select(ProjectRow).where(
+                    ProjectRow.id == project_id,
+                    ProjectRow.tenant_id == context.tenant_id,
+                    ProjectRow.workspace_id == context.workspace_id,
+                    ProjectRow.deleted_at.is_(None),
+                    ProjectRow.setup_state == "ready",
+                )
+            )
+            if project is None:
+                raise LookupError("PROJECT_NOT_FOUND")
+            if request.requested_provider_id or request.requested_model_id:
+                return request
+            key = project.configuration.get(f"{request.media_type.value}ModelKey") if project.configuration else None
+            if not isinstance(key, str) or not key:
+                return request
+            model = await session.get(ModelDefinitionRow, key)
+            if model is None or not model.active or request.media_type.value not in model.media_types:
+                raise ValueError("PROJECT_MODEL_UNAVAILABLE")
+            return request.model_copy(
+                update={
+                    "requested_provider_id": model.provider_id,
+                    "requested_model_id": model.provider_model_name,
+                }
+            )
+
     async def _project_exists(self, context: TrustedWorkspaceContext, project_id: str) -> bool:
         if self._session_factory is None:
             raise GenerationRuntimeUnavailable(self.unavailable_code or "GENERATION_RUNTIME_UNAVAILABLE")
@@ -1114,6 +1149,7 @@ class GenerationRuntime:
                             ProjectRow.tenant_id == context.tenant_id,
                             ProjectRow.workspace_id == context.workspace_id,
                             ProjectRow.deleted_at.is_(None),
+                            ProjectRow.setup_state == "ready",
                         )
                     )
                 ) is not None

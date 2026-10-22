@@ -6,6 +6,8 @@ export const reviewNamespace = "xingjingReview";
 const zh = {
   client: "客户审片",
   staff: "星镜剧创 · 项目协作",
+  loadingProjectDefaults: "正在读取建项时设置的外链权限…",
+  projectDefaultsError: "无法读取项目权限设置，请重试后创建外链。",
   reviewRoom: "交付审阅室",
   verifying: "正在验证审片链接",
   accessTitle: "输入访问口令继续审片",
@@ -118,6 +120,8 @@ const zh = {
 const en: Record<keyof typeof zh, string> = {
   client: "Client review",
   staff: "Xingjing · Project collaboration",
+  loadingProjectDefaults: "Loading the project's default link permissions…",
+  projectDefaultsError: "Project permissions could not be loaded. Retry before creating a link.",
   reviewRoom: "Delivery review",
   verifying: "Checking your review link",
   accessTitle: "Enter the access code to continue",
@@ -230,6 +234,8 @@ const en: Record<keyof typeof zh, string> = {
 const vi: Record<keyof typeof zh, string> = {
   client: "Khách hàng duyệt phim",
   staff: "Xingjing · Cộng tác dự án",
+  loadingProjectDefaults: "Đang tải quyền liên kết mặc định của dự án…",
+  projectDefaultsError: "Không thể tải quyền dự án. Hãy thử lại trước khi tạo liên kết.",
   reviewRoom: "Duyệt bản bàn giao",
   verifying: "Đang kiểm tra liên kết duyệt phim",
   accessTitle: "Nhập mã truy cập để tiếp tục",
