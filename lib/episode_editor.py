@@ -37,6 +37,14 @@ class EpisodeEditError(ValueError):
         self.status = status
 
 
+class EpisodeProduction(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    scriptVersionId: str = Field(default="", max_length=160)
+    assetSnapshotId: str = Field(default="", max_length=160)
+    finalVideoVersionId: str = Field(default="", max_length=128)
+
+
 class EpisodeEdit(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -48,6 +56,7 @@ class EpisodeEdit(BaseModel):
     targetDuration: int = Field(default=60, ge=1, le=3600)
     budgetMinor: int | None = Field(default=None, ge=0, le=1_000_000_000)
     sourceRange: SourceRange | None = None
+    production: EpisodeProduction | None = None
 
 
 def _digest(value: Any) -> str:
@@ -77,6 +86,7 @@ def _editable(entry: dict, default_duration: int = 60) -> dict[str, Any]:
         "targetDuration": entry.get("target_duration_seconds", default_duration),
         "budgetMinor": entry.get("budget_minor"),
         "sourceRange": entry.get("source_range"),
+        "production": EpisodeProduction.model_validate(entry.get("production", {})).model_dump(),
     }
 
 
@@ -92,7 +102,11 @@ def _revision(project: dict, sources: dict[str, str], locked: list[int]) -> str:
 
 
 def _locked(root: Path, entries: list[dict]) -> list[int]:
-    return [entry["episode"] for entry in entries if has_downstream_products(root, entry["episode"], entry)]
+    return [
+        entry["episode"]
+        for entry in entries
+        if entry.get("production", {}).get("scriptVersionId") or has_downstream_products(root, entry["episode"], entry)
+    ]
 
 
 def read_episodes(manager: ProjectManager, project_id: str) -> dict[str, Any]:
@@ -300,6 +314,8 @@ def _save_episodes_locked(
             }
             entry.setdefault("script_file", episode_script_relpath(edit.episode))
             entry.setdefault("ledger_status", "planned")
+            if edit.production is not None:
+                entry["production"] = edit.production.model_dump()
             if edit.sourceRange:
                 rel, start, end = edit.sourceRange.source_file, edit.sourceRange.start, edit.sourceRange.end
                 text = sources.get(rel)
@@ -335,7 +351,7 @@ def _save_episodes_locked(
             "digest": digest,
             "actor": actor,
             "before": before,
-            "after": _revision(project, sources, locked),
+            "after": _revision(project, sources, _locked(root, updated)),
             "episodes": numbers,
             "at": datetime.now(UTC).isoformat(),
         }

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -168,7 +168,8 @@ export function ProjectBusinessRoute({
   surface: string;
   itemId?: string;
 }) {
-  const [location, navigate] = useLocation();
+  const [, navigate] = useLocation();
+  const search = useSearch();
   const surface = resolveProjectSurface(slug, itemId);
   const token = useAuthStore((state) => state.token);
   const creatorApi = useMemo(
@@ -206,8 +207,8 @@ export function ProjectBusinessRoute({
     [workspaceId, token],
   );
   const complianceQuery = useMemo(
-    () => new URLSearchParams(location.split("?", 2)[1] ?? ""),
-    [location],
+    () => new URLSearchParams(search),
+    [search],
   );
   const go = (target: string, nextProjectId = projectId) =>
     navigate(
@@ -360,6 +361,7 @@ export function ProjectBusinessRoute({
           projectId={projectId}
           assetId={assetId}
           shotId={shotId}
+          episodeId={complianceQuery.get("episodeId") ?? undefined}
           api={assetsStoryboardApi}
           onNavigate={navigateAsset}
         />

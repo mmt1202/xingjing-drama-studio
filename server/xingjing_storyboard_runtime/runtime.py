@@ -112,9 +112,7 @@ def _validated_smart_drafts(
                 prompt=item.prompt,
                 model_strategy=f"{provider}/{model}",
                 cost_tier=item.cost_tier,
-                asset_references=tuple(
-                    references[asset_id] for asset_id in dict.fromkeys(item.asset_ids)
-                ),
+                asset_references=tuple(references[asset_id] for asset_id in dict.fromkeys(item.asset_ids)),
             )
         )
     return tuple(drafts)
@@ -255,11 +253,17 @@ class StoryboardRuntime:
         snapshot_assets = tuple(item for item in assets if item.frozen_snapshot.snapshot_id == asset_snapshot_id)
         if not snapshot_assets:
             raise ContractViolation("ASSET_SNAPSHOT_NOT_FOUND")
+        if any(
+            item.frozen_snapshot.script_version_id != script_version_id
+            or item.frozen_snapshot.workspace_id != context.workspace_id
+            or item.frozen_snapshot.project_id != context.project_id
+            or item.frozen_snapshot.content_sha256 != sha256(version.source_content.encode("utf-8")).hexdigest()
+            for item in snapshot_assets
+        ):
+            raise ContractViolation("ASSET_SNAPSHOT_SCRIPT_MISMATCH")
 
         references = {
-            item.asset_id: AssetReference(
-                item.asset_id, item.current_version_id, StoryboardAssetKind(item.kind.value)
-            )
+            item.asset_id: AssetReference(item.asset_id, item.current_version_id, StoryboardAssetKind(item.kind.value))
             for item in snapshot_assets
         }
         if not parsed.scenes:
@@ -275,8 +279,7 @@ class StoryboardRuntime:
                         "setting": scene.heading.setting,
                     },
                     "paragraphs": [
-                        {"speaker": paragraph.speaker, "text": paragraph.text}
-                        for paragraph in scene.paragraphs
+                        {"speaker": paragraph.speaker, "text": paragraph.text} for paragraph in scene.paragraphs
                     ],
                 }
                 for index, scene in enumerate(parsed.scenes, 1)
@@ -315,11 +318,7 @@ class StoryboardRuntime:
             generated_provider = str(claim.result_payload.get("provider") or "replayed")
             generated_model = str(claim.result_payload.get("model") or "replayed")
             output = _SmartStoryboard.model_validate(
-                {
-                    key: value
-                    for key, value in claim.result_payload.items()
-                    if key not in {"provider", "model"}
-                }
+                {key: value for key, value in claim.result_payload.items() if key not in {"provider", "model"}}
             )
         elif not claim.claimed:
             raise ContractViolation("SMART_STORYBOARD_REQUEST_IN_PROGRESS")
@@ -418,11 +417,19 @@ class PersistentAssetReferenceValidator:
             for reference in references:
                 asset = self._repository.get(scope, reference.asset_id)
                 if asset is None:
-                    failures.append(AssetReferenceFailure(reference.asset_id, reference.asset_version_id, "ASSET_NOT_FOUND"))
+                    failures.append(
+                        AssetReferenceFailure(reference.asset_id, reference.asset_version_id, "ASSET_NOT_FOUND")
+                    )
                 elif not any(version.version_id == reference.asset_version_id for version in asset.versions):
-                    failures.append(AssetReferenceFailure(reference.asset_id, reference.asset_version_id, "ASSET_VERSION_NOT_FOUND"))
-                elif asset.owner_project_id != project_id and not any(right.permits(project_id) for right in asset.rights):
-                    failures.append(AssetReferenceFailure(reference.asset_id, reference.asset_version_id, "ASSET_NOT_AUTHORIZED"))
+                    failures.append(
+                        AssetReferenceFailure(reference.asset_id, reference.asset_version_id, "ASSET_VERSION_NOT_FOUND")
+                    )
+                elif asset.owner_project_id != project_id and not any(
+                    right.permits(project_id) for right in asset.rights
+                ):
+                    failures.append(
+                        AssetReferenceFailure(reference.asset_id, reference.asset_version_id, "ASSET_NOT_AUTHORIZED")
+                    )
             return tuple(failures)
         except Exception as error:
             raise ContractViolation("ASSET_REFERENCE_VALIDATION_UNAVAILABLE") from error

@@ -18,6 +18,13 @@ from server.services.cost_estimation import CostEstimationService
 from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
+from .episode_production import (
+    prepare_production_batch,
+    production_catalog,
+    project_production,
+    validate_production_edits,
+)
+
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
 
@@ -79,6 +86,49 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
         )
         return {"data": data, "meta": {"requestId": context.request_id}}
 
+    @router.get("/projects/{project_id}/episodes/production")
+    async def production(request: Request, project_id: str):
+        context = await runtime._context(request, "project.view")
+        await ready(context, project_id)
+        snapshot = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        async with runtime._require_sessions()() as session:
+            catalog = await production_catalog(session, context, project_id)
+        data = project_production(snapshot, catalog)
+        data["permissions"] = sorted(context.permissions)
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
+    @router.post("/projects/{project_id}/episodes/production/prepare")
+    async def prepare(request: Request, project_id: str):
+        context = await runtime._context(request, "project.manage")
+        await ready(context, project_id)
+        revision = _revision_header(request)
+        body = await _body(request)
+        action, numbers, target = body.get("action"), body.get("episodes"), body.get("target", "")
+        if action not in {"storyboards", "packages"} or not isinstance(numbers, list) or not 1 <= len(numbers) <= 50:
+            raise EpisodeEditError("EPISODE_BATCH_INVALID")
+        if any(type(n) is not int or n < 1 for n in numbers) or len(set(numbers)) != len(numbers):
+            raise EpisodeEditError("EPISODE_BATCH_INVALID")
+        required = (
+            {"shot.manage", "shot.view", "script.view", "asset.view"}
+            if action == "storyboards"
+            else {
+                "export.manage",
+                "export.view",
+                "final.view",
+            }
+        )
+        if not required.issubset(context.permissions):
+            raise EpisodeEditError("FORBIDDEN", 403)
+        if not isinstance(target, str) or len(target) > 128 or (action == "packages" and not target.strip()):
+            raise EpisodeEditError("EPISODE_EXPORT_TARGET_REQUIRED")
+        snapshot = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        if snapshot["revision"] != revision:
+            raise EpisodeEditError("VERSION_CONFLICT", 409)
+        async with runtime._require_sessions()() as session:
+            catalog = await production_catalog(session, context, project_id)
+        data = prepare_production_batch(context, project_id, snapshot, catalog, numbers, action, target.strip())
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
     @router.put("/projects/{project_id}/episodes")
     async def save(request: Request, project_id: str):
         context = await runtime._context(request, "project.manage")
@@ -129,9 +179,14 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             if claimed_row is None:
                 raise EpisodeEditError("VERSION_CONFLICT", 409)
             claimed = await uow.inbox.claim(f"episodes.save:{project_id}", key)
+            manager = get_project_manager()
+            project = await asyncio.to_thread(manager.load_project, project_id)
+            if not any(receipt["key"] == key for receipt in project.get("episode_edit_receipts", [])):
+                snapshot = await asyncio.to_thread(read_episodes, manager, project_id)
+                await validate_production_edits(uow.session, context, project_id, edits, snapshot)
             receipt = await asyncio.to_thread(
                 save_episodes,
-                get_project_manager(),
+                manager,
                 project_id,
                 edits,
                 revision=revision,

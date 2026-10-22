@@ -224,7 +224,7 @@ class ExportConfigurationRow(CompliancePersistenceBase):
     project_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     target: Mapped[str] = mapped_column(String(128), primary_key=True)
     current_project_version: Mapped[str] = mapped_column(String(128), nullable=False)
-    snapshot_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    snapshot_version: Mapped[str] = mapped_column(String(128), primary_key=True)
     export_permitted: Mapped[bool] = mapped_column(Boolean, nullable=False)
     aigc_marking_satisfied: Mapped[bool] = mapped_column(Boolean, nullable=False)
     commercial_export_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -625,12 +625,15 @@ class SqlAlchemyComplianceAuthorityStore:
         audit: AuditContext,
     ) -> dict[str, object]:
         self._assert_audit(audit)
-        assessment_id = "assessment-" + hashlib.sha256(
-            (
-                f"{project_id}\0{project_version}\0{input_digest}\0{result.provider_id}\0"
-                f"{result.provider_version}\0{result.evidence_digest}"
-            ).encode()
-        ).hexdigest()
+        assessment_id = (
+            "assessment-"
+            + hashlib.sha256(
+                (
+                    f"{project_id}\0{project_version}\0{input_digest}\0{result.provider_id}\0"
+                    f"{result.provider_version}\0{result.evidence_digest}"
+                ).encode()
+            ).hexdigest()
+        )
         manual_status = (
             ManualReviewStatus.NOT_REQUIRED
             if result.conclusion is ReviewConclusion.APPROVED
@@ -686,9 +689,7 @@ class SqlAlchemyComplianceAuthorityStore:
                     rules_digest=result.policy_digest,
                     rules_payload=dict(result.policy_summary),
                 )
-                .on_conflict_do_nothing(
-                    index_elements=["tenant_id", "workspace_id", "policy_id", "version"]
-                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "workspace_id", "policy_id", "version"])
             )
             policy = await self._one(
                 session,
@@ -714,9 +715,7 @@ class SqlAlchemyComplianceAuthorityStore:
                     is_immutable=True,
                     created_at=_utc(audit.occurred_at),
                 )
-                .on_conflict_do_nothing(
-                    index_elements=["tenant_id", "workspace_id", "project_id", "project_version"]
-                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "workspace_id", "project_id", "project_version"])
             )
             snapshot = await self._one(
                 session,
@@ -837,7 +836,7 @@ class SqlAlchemyComplianceAuthorityStore:
                     **configuration_values,
                 )
                 .on_conflict_do_update(
-                    index_elements=["tenant_id", "workspace_id", "project_id", "target"],
+                    index_elements=["tenant_id", "workspace_id", "project_id", "target", "snapshot_version"],
                     set_=configuration_values,
                 )
             )
@@ -912,7 +911,7 @@ class SqlAlchemyComplianceAuthorityStore:
             **values,
         )
         statement = statement.on_conflict_do_update(
-            index_elements=["tenant_id", "workspace_id", "project_id", "target"], set_=values
+            index_elements=["tenant_id", "workspace_id", "project_id", "target", "snapshot_version"], set_=values
         )
         async with self._session_factory.begin() as session:
             await session.execute(statement)
@@ -986,9 +985,7 @@ class SqlAlchemyComplianceAuthorityStore:
                     settled_at=_utc(settled_at),
                     recorded_at=_utc(recorded_at),
                 )
-                .on_conflict_do_nothing(
-                    index_elements=["tenant_id", "workspace_id", "project_id", "project_version"]
-                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "workspace_id", "project_id", "project_version"])
             )
             stored = await self._one(
                 session,
@@ -1049,12 +1046,15 @@ class SqlAlchemyComplianceAuthorityStore:
         async with self._session_factory() as session:
             review = await self._one(
                 session,
-                select(ReviewRow).where(
+                select(ReviewRow)
+                .where(
                     ReviewRow.tenant_id == self._scope.tenant_id,
                     ReviewRow.workspace_id == self._scope.workspace_id,
                     ReviewRow.project_id == request.project_id,
                     ReviewRow.project_version == request.project_version,
-                ).order_by(ReviewRow.reviewed_at.desc(), ReviewRow.assessment_id.desc()).limit(1),
+                )
+                .order_by(ReviewRow.reviewed_at.desc(), ReviewRow.assessment_id.desc())
+                .limit(1),
                 "review",
             )
             await self._one(
@@ -1084,6 +1084,7 @@ class SqlAlchemyComplianceAuthorityStore:
                     ExportConfigurationRow.workspace_id == self._scope.workspace_id,
                     ExportConfigurationRow.project_id == request.project_id,
                     ExportConfigurationRow.target == request.target,
+                    ExportConfigurationRow.snapshot_version == request.project_version,
                 ),
                 "export configuration",
             )
@@ -1186,9 +1187,7 @@ class SqlAlchemyComplianceAuthorityStore:
                 "delivery record",
             )
         if row.manifest_digest != digest:
-            raise DeliveryIdempotencyConflict(
-                "formal export request_id was already recorded with a different manifest"
-            )
+            raise DeliveryIdempotencyConflict("formal export request_id was already recorded with a different manifest")
         return self._delivery(row)
 
     async def list_deliveries(self, *, tenant_id: str, project_id: str) -> tuple[DeliveryRecord, ...]:
