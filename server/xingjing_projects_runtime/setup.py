@@ -85,6 +85,8 @@ def parse_setup(value: object, *, actor_id: str, draft: bool) -> ProjectSetup:
         raise SetupInvalid([".".join(map(str, item["loc"])) or "configuration" for item in error.errors()]) from error
     setup.owner_id = setup.owner_id.strip() or actor_id
     if not draft:
+        if setup.source_kind not in {"novel", "script"}:
+            setup.source_text = ""
         missing = []
         if setup.source_kind in {"novel", "script"} and not setup.source_text.strip():
             missing.append("sourceText")
