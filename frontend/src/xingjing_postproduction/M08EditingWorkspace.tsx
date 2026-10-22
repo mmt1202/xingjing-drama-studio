@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useProjectNavigationBlocker } from "@/xingjing_creator_projects/ProjectFlowShell";
 
 import {
   EditingApiError,
@@ -26,6 +27,7 @@ export interface M08EditingWorkspaceProps {
   readonly api: EditingApi;
   readonly projectId: string;
   readonly timelineId?: string;
+  readonly initialEpisodeId?: string;
   readonly pageId?: string;
 }
 
@@ -108,6 +110,7 @@ export function M08EditingWorkspace({
   api,
   projectId,
   timelineId,
+  initialEpisodeId,
   pageId = "CR-028",
 }: M08EditingWorkspaceProps) {
   const copy = pageCopy[pageId as M08PageId] ?? pageCopy["CR-028"];
@@ -122,8 +125,9 @@ export function M08EditingWorkspace({
   const [deadlineMinutes, setDeadlineMinutes] = useState<60 | 360 | 1440>(360);
   const [task, setTask] = useState<EditingRenderTask>();
   const [busy, setBusy] = useState(false);
-  const [episodeId, setEpisodeId] = useState("");
-  const [episodeFilter, setEpisodeFilter] = useState("");
+  useProjectNavigationBlocker(busy);
+  const [episodeId, setEpisodeId] = useState(initialEpisodeId ?? "");
+  const [episodeFilter, setEpisodeFilter] = useState(initialEpisodeId ?? "");
   const [timelineOffset, setTimelineOffset] = useState(0);
   const [sourceVersionId, setSourceVersionId] = useState("");
   const [selectedTrackId, setSelectedTrackId] = useState("");

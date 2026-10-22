@@ -30,6 +30,8 @@ from server.xingjing_platform_persistence import OptimisticConflict, Persistence
 from server.xingjing_platform_persistence.persistence import Project, ProjectRow
 from server.xingjing_team_persistence.repository import MemberRow
 
+from .control import register_control_routes
+from .control_actions import transition
 from .episodes import register_episode_routes
 from .initialization import initialize_source
 from .setup import ProjectSetup, SetupInvalid, create_projection, creation_digest, parse_setup
@@ -159,7 +161,13 @@ class ProjectsRuntime:
             if not key or len(key) > 128:
                 return _error(context.request_id, "IDEMPOTENCY_KEY_REQUIRED", status.HTTP_400_BAD_REQUEST)
             try:
-                if action == "create" or action == "saveDraft" and project_id == "new":
+                if action in {"advance", "rollback", "updateOverview"}:
+                    expected = _if_match(request)
+                    if expected is None:
+                        return _error(context.request_id, "VERSION_REQUIRED", status.HTTP_428_PRECONDITION_REQUIRED)
+                    result = await transition(self, context, project_id, action, dict(payload), expected, key)
+                    return {"data": result, "meta": {"requestId": context.request_id}}
+                elif action == "create" or action == "saveDraft" and project_id == "new":
                     project = await self._create(context, key, payload, draft=action == "saveDraft")
                 elif action in {"saveDraft", "activate"} or action == "update" and "configuration" in payload:
                     expected = _if_match(request)
@@ -171,6 +179,8 @@ class ProjectsRuntime:
                     if expected is None:
                         return _error(context.request_id, "VERSION_REQUIRED", status.HTTP_428_PRECONDITION_REQUIRED)
                     project = await self._mutate(context, project_id, action, payload, expected, key)
+            except EpisodeEditError:
+                raise
             except SetupInvalid as error:
                 return _error(context.request_id, "PROJECT_SETUP_INVALID", 422, {"fields": error.fields})
             except OptimisticConflict:
@@ -185,12 +195,14 @@ class ProjectsRuntime:
             return {"data": _project(project), "meta": {"requestId": context.request_id}}
 
         register_episode_routes(self, router)
+        register_control_routes(self, router)
         return router
 
     async def _context(self, request: Request, permission: str):
         if self._unavailable_code:
             raise _RuntimeUnavailable(self._unavailable_code)
         context = await self._resolver(request)
+        request.state.project_request_id = context.request_id
         if permission not in context.permissions:
             raise _PermissionDenied(permission)
         return context
@@ -381,11 +393,6 @@ class ProjectsRuntime:
                 project = await uow.projects.soft_delete(project_id, expected_version=expected)
             elif action == "restore":
                 project = await uow.projects.restore(project_id, expected_version=expected)
-            elif action in {"advance", "rollback"}:
-                target = _text(payload.get("productionStatus"))
-                if not target:
-                    raise ValueError("PRODUCTION_STATUS_REQUIRED")
-                project = await uow.projects.set_production_status(project_id, target, expected_version=expected)
             else:
                 raise ValueError("UNSUPPORTED_PROJECT_ACTION")
             await uow.audit.append(
@@ -417,18 +424,21 @@ class _ProjectsRoute(APIRoute):
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         original = super().get_route_handler()
 
+        def request_id(request: Request) -> str:
+            return getattr(request.state, "project_request_id", request.headers.get("X-Request-Id", ""))
+
         async def invoke(request: Request) -> Response:
             try:
                 return await original(request)
             except _RuntimeUnavailable as error:
-                return _error(request.headers.get("X-Request-Id", ""), str(error), status.HTTP_503_SERVICE_UNAVAILABLE)
+                return _error(request_id(request), str(error), status.HTTP_503_SERVICE_UNAVAILABLE)
             except EpisodeEditError as error:
-                return _error(request.headers.get("X-Request-Id", ""), str(error), error.status)
+                return _error(request_id(request), str(error), error.status)
             except (OSError, ValueError):
-                return _error(request.headers.get("X-Request-Id", ""), "PROJECT_RUNTIME_UNAVAILABLE", 503)
+                return _error(request_id(request), "PROJECT_RUNTIME_UNAVAILABLE", 503)
             except _PermissionDenied as error:
                 return _error(
-                    request.headers.get("X-Request-Id", ""),
+                    request_id(request),
                     "PERMISSION_DENIED",
                     status.HTTP_403_FORBIDDEN,
                     {"permission": str(error)},
@@ -437,10 +447,10 @@ class _ProjectsRoute(APIRoute):
                 detail = error.detail if isinstance(error.detail, Mapping) else {}
                 raw_code = detail.get("code")
                 code = raw_code if isinstance(raw_code, str) else "REQUEST_REJECTED"
-                return _error(request.headers.get("X-Request-Id", ""), code, error.status_code)
+                return _error(request_id(request), code, error.status_code)
             except SQLAlchemyError:
                 return _error(
-                    request.headers.get("X-Request-Id", ""),
+                    request_id(request),
                     "PROJECT_RUNTIME_UNAVAILABLE",
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                 )

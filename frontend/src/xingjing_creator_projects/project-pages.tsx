@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionError, CreatorPage, StatePanel } from "./shared";
 import { useSetupTranslation } from "./setup-i18n";
-import { useEpisodesTranslation } from "./episodes-i18n";
-import type { CreatorProjectsPort, ProjectDetail, ProjectSummary } from "./types";
+import type { CreatorProjectsPort, ProjectSummary } from "./types";
 
 export function ProjectLibraryPage({ api, onNavigate }: { api: CreatorProjectsPort; onNavigate: (target: "create" | "guided-create" | "control", projectId?: string) => void }) {
   const { t } = useSetupTranslation();
@@ -15,16 +14,4 @@ export function ProjectLibraryPage({ api, onNavigate }: { api: CreatorProjectsPo
 
 export { ProjectEditorPage } from "./ProjectEditorPage";
 
-export function ProjectControlPage({ api, projectId, onNavigate }: { api: CreatorProjectsPort; projectId: string; onNavigate?: (target: string) => void }) {
-  const { t } = useEpisodesTranslation();
-  const [project, setProject] = useState<ProjectDetail>(); const [error, setError] = useState<Error>(); const load = useCallback(() => { void api.getProject(projectId).then(setProject).catch((e: Error) => setError(e)); }, [api, projectId]); useEffect(() => { void api.getProject(projectId).then(setProject).catch((e: Error) => setError(e)); }, [api, projectId]);
-  return <CreatorPage api={api} permission="project.view" title="项目总控">{() => <>
-    {error && <ActionError error={error} onRetry={load} />}
-    {!project && !error && <StatePanel title="正在加载项目生产状态…" />}
-    {project && <section className="grid gap-4 lg:grid-cols-3">
-      <article className="rounded-2xl bg-[#12141B] p-5 lg:col-span-3"><h2 className="text-xl font-semibold">{project.name}</h2><p className="mt-2 text-[#B8BECC]">当前阶段：{project.productionStatus} · 版本 {project.version}</p></article>
-      {[["episode-split-editor", "editor"], ["episodes", "library"]].map(([target, label]) => <button key={target} onClick={() => onNavigate?.(target)} className="rounded-xl border border-[#FF6B4A]/40 bg-[#171922] p-4 text-left transition hover:border-[#FF6B4A]"><strong>{t(label)}</strong><span className="mt-1 block text-xs text-[#7E8494]">{t("navigationHint")}</span></button>)}
-      {Object.entries({ "script-import": "剧本导入", "script-checkup": "内容体检", "script-lab": "结构化解析", "ai-director": "AI 导演", "director-assets": "角色场景资产", source: "原文管理", rewrite: "AI 改写", "source-mapping": "原文映射", versions: "版本对比" }).map(([target, label]) => <button key={target} onClick={() => onNavigate?.(target)} className="rounded-xl border border-[#2A2E3A] bg-[#171922] p-4 text-left transition hover:border-[#8B5CF6]"><strong>{label}</strong><span className="mt-1 block text-xs text-[#7E8494]">进入 M03 内容理解工作流</span></button>)}
-    </section>}
-  </>}</CreatorPage>;
-}
+export { ProjectControlPage } from "./ProjectControlPage";

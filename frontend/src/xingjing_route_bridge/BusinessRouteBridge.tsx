@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
+import { createProjectControlApi } from "@/xingjing_creator_projects/control-api";
+import { ProjectFlowShell } from "@/xingjing_creator_projects/ProjectFlowShell";
 import { useLocation, useSearch } from "wouter";
 
 import { useAuthStore } from "@/stores/auth-store";
@@ -158,6 +160,16 @@ export function WorkspaceAssetsRoute({
 }
 
 export function ProjectBusinessRoute({
+  workspaceId, projectId, surface, itemId,
+}: { workspaceId: string; projectId: string; surface: string; itemId?: string }) {
+  const token = useAuthStore((state) => state.token);
+  const controlApi = useMemo(() => createProjectControlApi(() => token), [token]);
+  const page = <ProjectBusinessContent workspaceId={workspaceId} projectId={projectId} surface={surface} itemId={itemId} />;
+  if (["create", "guided-create", "projects", "home"].includes(surface)) return page;
+  return <ProjectFlowShell key={`${workspaceId}:${projectId}:${token}`} api={controlApi} workspaceId={workspaceId} projectId={projectId} slug={surface} itemId={itemId}>{page}</ProjectFlowShell>;
+}
+
+function ProjectBusinessContent({
   workspaceId,
   projectId,
   surface: slug,
@@ -210,11 +222,15 @@ export function ProjectBusinessRoute({
     () => new URLSearchParams(search),
     [search],
   );
-  const go = (target: string, nextProjectId = projectId) =>
-    navigate(
-      `/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(nextProjectId)}/${target}`,
-    );
+  const go = (target: string, nextProjectId = projectId) => {
+    const [path, rawQuery = ""] = target.split("?");
+    const query = new URLSearchParams(rawQuery);
+    const episode = complianceQuery.get("episodeId");
+    if (nextProjectId === projectId && episode && !query.has("episodeId")) query.set("episodeId", episode);
+    navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(nextProjectId)}/${path}${query.size ? `?${query}` : ""}`);
+  };
 
+  if (slug === "collaboration") return <CollaborationBusinessContent workspaceId={workspaceId} projectId={projectId} pageId={itemId ?? "CR-085"} />;
   if (!surface) return <MissingSurface />;
   switch (surface.kind) {
     case "project-library":
@@ -234,12 +250,10 @@ export function ProjectBusinessRoute({
       return (
         <ProjectControlPage
           api={creatorApi}
-          projectId={projectId}
-          onNavigate={go}
         />
       );
     case "episodes":
-      return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} mode={surface.mode} onNavigate={go} />;
+      return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} initialEpisodeId={complianceQuery.has("episodeId") ? Number(complianceQuery.get("episodeId")) : undefined} mode={surface.mode} onNavigate={go} />;
     case "script-import":
       return <ScriptImportPage api={creatorApi} projectId={projectId} />;
     case "ai-director":
@@ -281,7 +295,8 @@ export function ProjectBusinessRoute({
         <M08EditingWorkspace
           api={editingApi}
           projectId={projectId}
-          timelineId={itemId}
+          timelineId={itemId ?? complianceQuery.get("timelineId") ?? undefined}
+          initialEpisodeId={complianceQuery.get("episodeId") ?? undefined}
           pageId={surface.pageId}
         />
       );
@@ -325,7 +340,7 @@ export function ProjectBusinessRoute({
         surface.pageId.startsWith("CR-0") &&
         ["CR-010", "CR-034", "CR-005"].includes(surface.pageId)
           ? itemId
-          : undefined;
+          : surface.pageId === "M04-ASSET-EDITOR" ? itemId : undefined;
       const shotId = surface.pageId === "CR-099" ? itemId : undefined;
       const navigateAsset = (
         view:
@@ -393,6 +408,13 @@ export function AdminBusinessRoute({
 }
 
 export function CollaborationBusinessRoute({
+  workspaceId, projectId, reviewToken, pageId,
+}: { workspaceId?: string; projectId?: string; reviewToken?: string; pageId: string }) {
+  if (workspaceId && projectId && !reviewToken) return <ProjectBusinessRoute workspaceId={workspaceId} projectId={projectId} surface="collaboration" itemId={pageId} />;
+  return <CollaborationBusinessContent workspaceId={workspaceId} projectId={projectId} reviewToken={reviewToken} pageId={pageId} />;
+}
+
+function CollaborationBusinessContent({
   workspaceId,
   projectId,
   reviewToken,

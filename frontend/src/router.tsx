@@ -1,6 +1,6 @@
 // router.tsx — Route definitions for the studio layout
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Route, Switch, Redirect, useParams } from "wouter";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
@@ -35,7 +35,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
-import { GenerationWorkbench, createGenerationCenterApi, type GenerationWorkbenchView } from "@/xingjing_generation_center";
+import { type GenerationWorkbenchView } from "@/xingjing_generation_center";
 import { AdminBusinessRoute, CollaborationBusinessRoute, ProjectBusinessRoute, WorkspaceAssetsRoute, WorkspaceProjectsRoute } from "@/xingjing_route_bridge";
 import { errMsg } from "@/utils/async";
 import {
@@ -211,9 +211,7 @@ function ProjectBusinessPage() {
 
 function GenerationBusinessPage({ view }: { view: GenerationWorkbenchView }) {
   const { workspaceId = "", projectId = "" } = useParams<{ workspaceId: string; projectId: string }>();
-  const token = useAuthStore((state) => state.token);
-  const api = useMemo(() => createGenerationCenterApi({ getAccessToken: () => token }), [token]);
-  return <GenerationWorkbench scope={{ workspaceId, projectId }} view={view} api={api} />;
+  return <ProjectBusinessRoute workspaceId={workspaceId} projectId={projectId} surface="generation" itemId={view === "center" ? undefined : view} />;
 }
 
 const generationViews: Readonly<Record<string, GenerationWorkbenchView>> = {

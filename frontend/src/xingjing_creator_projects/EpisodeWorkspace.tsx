@@ -8,8 +8,9 @@ import { useEpisodesTranslation } from "./episodes-i18n";
 import { EpisodeDetails, episodeButton as button, episodeInput as input } from "./EpisodeDetails";
 import { useEpisodeProductionTranslation } from "./episode-production-i18n";
 import { EpisodeProductionPanel } from "./EpisodeProductionPanel";
+import { useProjectNavigationBlocker } from "./ProjectFlowShell";
 
-interface Props { api: EpisodesApi; creatorApi: CreatorProjectsPort; projectId: string; mode: "editor" | "library"; onNavigate: (target: string) => void }
+interface Props { api: EpisodesApi; creatorApi: CreatorProjectsPort; projectId: string; initialEpisodeId?: number; mode: "editor" | "library"; onNavigate: (target: string) => void }
 export function EpisodeWorkspace(props: Props) {
   const { t } = useEpisodesTranslation();
   return <CreatorPage api={props.creatorApi} permission="project.view" title={t(props.mode)}>{(context) => <Workspace key={`${context.workspace.id}:${props.projectId}:${props.mode}`} {...props} canManage={context.permissions.includes("project.manage")} />}</CreatorPage>;
@@ -27,7 +28,7 @@ function totals(values: Record<string, Record<string, number>> | undefined) {
   return Object.entries(amounts).map(([currency, value]) => `${currency} ${value.toFixed(2)}`).join(" · ");
 }
 
-function Workspace({ api, projectId, mode, onNavigate, canManage }: Props & { canManage: boolean }) {
+function Workspace({ api, projectId, initialEpisodeId, mode, onNavigate, canManage }: Props & { canManage: boolean }) {
   const { t } = useEpisodesTranslation();
   const [data, setData] = useState<EpisodesSnapshot>();
   const [draft, setDraft] = useState<Episode[]>([]);
@@ -39,6 +40,7 @@ function Workspace({ api, projectId, mode, onNavigate, canManage }: Props & { ca
   const [productionCatalog, setProductionCatalog] = useState<ProductionCatalog>();
   const [productionBusy, setProductionBusy] = useState(false);
   const busy = workspaceBusy || productionBusy;
+  useProjectNavigationBlocker(dirty || busy);
   const [error, setError] = useState<Error>();
   const [search, setSearch] = useState(() => sessionStorage.getItem(`episodes:${projectId}:search`) ?? "");
   const [status, setStatus] = useState(() => sessionStorage.getItem(`episodes:${projectId}:status`) ?? "");
@@ -60,11 +62,11 @@ function Workspace({ api, projectId, mode, onNavigate, canManage }: Props & { ca
       setError(undefined);
       setData(result); setDraft(result.items); draftRef.current = result.items; setDirty(false);
       const remembered = Number(sessionStorage.getItem(`episodes:${projectId}:active`));
-      setActive(result.items.find((item) => item.episode === remembered)?.episode ?? result.items[0]?.episode);
+      setActive(result.items.find((item) => item.episode === initialEpisodeId)?.episode ?? result.items.find((item) => item.episode === remembered)?.episode ?? result.items[0]?.episode);
       setSource(result.sources[0]?.path ?? ""); setCount(Math.max(1, Math.min(200, result.plannedCount - result.items.length)));
       setPreview(undefined); setSelected([]); setChecking(false);
     }).catch((reason: Error) => { if (mounted.current) setError(reason); })
-      .finally(() => { if (mounted.current) setBusy(false); }), [api, projectId]);
+      .finally(() => { if (mounted.current) setBusy(false); }), [api, projectId, initialEpisodeId]);
   useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; }; }, [load]);
   useEffect(() => {
     if (!dirty && !busy) return;

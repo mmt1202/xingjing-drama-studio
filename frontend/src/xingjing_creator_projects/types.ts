@@ -19,7 +19,7 @@ export interface ScriptDocument { id: string; projectId: string; title: string; 
 export interface ScriptComparison { baselineVersion: number; candidateVersion: number; changedFields: string[] }
 export interface PageResult<T> { items: T[]; nextToken: string | null; total?: number; offset?: number; limit?: number }
 
-export type ProjectAction = "create" | "update" | "archive" | "restore" | "advance" | "rollback" | "saveDraft" | "activate";
+export type ProjectAction = "create" | "update" | "updateOverview" | "archive" | "restore" | "advance" | "rollback" | "saveDraft" | "activate";
 export type ScriptAction = "import" | "revise" | "setDirectorProfile" | "freeze" | "compareVersions" | "analyze" | "generateDirector" | "rewrite";
 export type ScriptActionResult = ScriptDocument | ScriptComparison;
 
