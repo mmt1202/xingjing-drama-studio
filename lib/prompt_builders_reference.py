@@ -46,6 +46,9 @@ def _format_outline_block(episode_outline: dict | None, next_episode_outline: di
         if not isinstance(outline, dict) or not outline:
             continue
         lines: list[str] = []
+        duration = outline.get("target_duration_seconds")
+        if type(duration) is int and duration > 0:
+            lines.append(f"单集目标时长：{duration} 秒；各视频单元的时长合计应围绕此目标规划。")
         title = outline.get("title")
         if isinstance(title, str) and title.strip():
             lines.append(f"标题：{title.strip()}")

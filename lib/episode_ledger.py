@@ -35,6 +35,20 @@ LedgerStatus = Literal["planned", "consumed", "stale"]
 #: 当前状态集，供校验层识别「不在当前状态集内」的取值（容忍放行，仅记诊断日志）
 LEDGER_STATUSES: tuple[str, ...] = get_args(LedgerStatus)
 
+
+def ordered_episode_entries(project: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Apply presentation order without changing stable episode/file identities."""
+    entries = project.get("episodes", [])
+    if not isinstance(entries, list):
+        return []
+    entries = [entry for entry in entries if isinstance(entry, dict)]
+    order = project.get("episode_order")
+    if not isinstance(order, list):
+        return entries
+    positions = {number: index for index, number in enumerate(order) if type(number) is int}
+    return sorted(entries, key=lambda entry: positions.get(entry.get("episode", -1), len(positions)))
+
+
 # 仅 ASCII 数字：\d 会放行全角等 Unicode 数字，把非流水线产物误判为派生集文件
 _EPISODE_FILE_RE = re.compile(r"episode_([0-9]+)\.txt")
 _SCRIPT_FILE_RE = re.compile(r"episode_([0-9]+)\.json")
@@ -147,11 +161,24 @@ def episode_outline_context(
             "story_beats": story_beats,
             "next_episode_teaser": outline.get("next_episode_teaser"),
         }
-        if not ctx["hook"] and not ctx["story_beats"] and not ctx["next_episode_teaser"]:
+        duration = entry.get("target_duration_seconds")
+        if type(duration) is int and duration > 0:
+            ctx["target_duration_seconds"] = duration
+        if (
+            not ctx["hook"]
+            and not ctx["story_beats"]
+            and not ctx["next_episode_teaser"]
+            and not ctx.get("target_duration_seconds")
+        ):
             return None
         return ctx
 
-    return _context(_entry(episode)), _context(_entry(episode + 1))
+    next_number = episode + 1
+    if isinstance(project.get("episode_order"), list):
+        entries = ordered_episode_entries(project)
+        position = next((i for i, entry in enumerate(entries) if entry.get("episode") == episode), -1)
+        next_number = entries[position + 1].get("episode", -1) if 0 <= position < len(entries) - 1 else -1
+    return _context(_entry(episode)), _context(_entry(next_number))
 
 
 def normalize_source_text(text: str) -> str:

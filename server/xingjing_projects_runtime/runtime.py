@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from lib.episode_editor import EpisodeEditError
 from lib.i18n import get_translator
 from lib.project_manager import get_project_manager
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
@@ -29,6 +30,7 @@ from server.xingjing_platform_persistence import OptimisticConflict, Persistence
 from server.xingjing_platform_persistence.persistence import Project, ProjectRow
 from server.xingjing_team_persistence.repository import MemberRow
 
+from .episodes import register_episode_routes
 from .initialization import initialize_source
 from .setup import ProjectSetup, SetupInvalid, create_projection, creation_digest, parse_setup
 
@@ -182,6 +184,7 @@ class ProjectsRuntime:
                 return _error(context.request_id, code, 409 if code == "IDEMPOTENCY_CONFLICT" else 400)
             return {"data": _project(project), "meta": {"requestId": context.request_id}}
 
+        register_episode_routes(self, router)
         return router
 
     async def _context(self, request: Request, permission: str):
@@ -419,6 +422,10 @@ class _ProjectsRoute(APIRoute):
                 return await original(request)
             except _RuntimeUnavailable as error:
                 return _error(request.headers.get("X-Request-Id", ""), str(error), status.HTTP_503_SERVICE_UNAVAILABLE)
+            except EpisodeEditError as error:
+                return _error(request.headers.get("X-Request-Id", ""), str(error), error.status)
+            except (OSError, ValueError):
+                return _error(request.headers.get("X-Request-Id", ""), "PROJECT_RUNTIME_UNAVAILABLE", 503)
             except _PermissionDenied as error:
                 return _error(
                     request.headers.get("X-Request-Id", ""),

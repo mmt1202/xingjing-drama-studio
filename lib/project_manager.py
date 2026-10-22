@@ -42,7 +42,7 @@ from lib.asset_types import (
     resolve_asset_key,
     validate_asset_name,
 )
-from lib.episode_ledger import SOURCE_TEXT_SUFFIXES
+from lib.episode_ledger import SOURCE_TEXT_SUFFIXES, ordered_episode_entries
 from lib.episode_paths import (
     REFERENCE_VIDEO_STEP1_FILENAME,
     REFERENCE_VIDEO_STEP1_QUARANTINE_FILENAME,
@@ -1444,6 +1444,8 @@ class ProjectManager:
                 project_name,
                 changed_paths=[self.PROJECT_FILE],
             )
+        if "episode_order" in project:
+            project["episodes"] = ordered_episode_entries(project)
         return project
 
     @contextmanager
@@ -1505,6 +1507,8 @@ class ProjectManager:
 
         self._migrate_legacy_resolution_on_save(project)
         self._touch_metadata(project)
+        if "episode_order" in project:
+            project["episodes"] = ordered_episode_entries(project)
 
         with self._project_lock(project_name):
             atomic_write_json(project_file, project)
@@ -1540,6 +1544,8 @@ class ProjectManager:
             with open(project_file, encoding="utf-8") as f:
                 project = json.load(f)
             mutate_fn(project)
+            if "episode_order" in project:
+                project["episodes"] = ordered_episode_entries(project)
             self._migrate_legacy_resolution_on_save(project)
             self._migrate_legacy_style(project)
             self._touch_metadata(project)
@@ -1944,7 +1950,7 @@ class ProjectManager:
             # 「不更坏」按 error set diff 判定：after 不应比 before 多任何 errors。
             #   - 改前合法、改后非法 → new_errors=全部 after errors → 拒
             #   - 改前已脏、改后相同脏 → new_errors=∅ → 放行（允许带历史脏数据的项目继续 patch）
-            #   - 改前已脏、改后引入新错误（如本次 entries 缺 description）→ new_errors≠∅ → 拒
+            #   - 改前已脏、改后引入新错误（如新增 entries 缺 description）→ new_errors≠∅ → 拒
             #   - 改前已脏、改后修复了部分 → new_errors=∅ → 放行（允许 patch 改进历史脏数据）
             # 比单纯比 valid 标志更严：堵住「带历史脏数据的项目里新 entry 的结构错误 piggyback 落盘」。
             new_errors = after_errors - before_errors

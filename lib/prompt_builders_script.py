@@ -90,6 +90,9 @@ def _format_aspect_ratio_desc(aspect_ratio: str) -> str:
 def _format_outline_lines(outline: dict) -> str:
     """渲染分集大纲条目：故事节点 / 集尾钩子 / 下集预告语，缺失的行省略。"""
     lines: list[str] = []
+    duration = outline.get("target_duration_seconds")
+    if type(duration) is int and duration > 0:
+        lines.append(f"单集目标时长：{duration} 秒；内容节奏与镜头时长合计应围绕此目标规划。")
     beats = outline.get("story_beats") or []
     if beats:
         lines.append("故事节点：")

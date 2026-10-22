@@ -5,6 +5,7 @@ export type ProjectSurface =
   | { kind: "project-library" }
   | { kind: "project-create"; mode: "quick" | "guided" }
   | { kind: "project-control" }
+  | { kind: "episodes"; mode: "editor" | "library" }
   | { kind: "script-import" }
   | { kind: "ai-director" }
   | { kind: "director-assets" }
@@ -26,6 +27,8 @@ const PROJECT_SURFACES: Readonly<Record<string, ProjectSurface>> = {
   create: { kind: "project-create", mode: "quick" },
   "guided-create": { kind: "project-create", mode: "guided" },
   control: { kind: "project-control" },
+  episodes: { kind: "episodes", mode: "library" },
+  "episode-split-editor": { kind: "episodes", mode: "editor" },
   "script-import": { kind: "script-import" },
   "ai-director": { kind: "ai-director" },
   "director-assets": { kind: "director-assets" },

@@ -1,0 +1,212 @@
+"""Trusted project scope and SQL audit/outbox adapter for the episode ledger."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import TYPE_CHECKING, Any
+
+from fastapi import APIRouter, Query, Request
+from pydantic import ValidationError
+from sqlalchemy import select, update
+
+from lib.config.resolver import ConfigResolver
+from lib.db import async_session_factory
+from lib.episode_editor import EpisodeEdit, EpisodeEditError, read_episodes, save_episodes, split_remaining
+from lib.project_manager import get_project_manager
+from server.services.cost_estimation import CostEstimationService
+from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
+from server.xingjing_platform_persistence.persistence import ProjectRow
+
+if TYPE_CHECKING:
+    from .runtime import ProjectsRuntime
+
+
+def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None:
+    async def ready(context, project_id: str):
+        row = await runtime._row(context.tenant_id, context.workspace_id, project_id, include_deleted=False)
+        if row is None:
+            raise EpisodeEditError("PROJECT_NOT_FOUND", 404)
+        if row.setup_state != "ready":
+            raise EpisodeEditError("PROJECT_SETUP_REQUIRED", 409)
+        return row
+
+    @router.get("/projects/{project_id}/episodes")
+    async def episodes(
+        request: Request,
+        project_id: str,
+        q: str = "",
+        productionStatus: str = "",
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ):
+        context = await runtime._context(request, "project.view")
+        row = await ready(context, project_id)
+        data = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        items = data["items"]
+        data["summary"] = {
+            "total": len(items),
+            "scripted": sum(e["scriptStatus"] == "generated" for e in items),
+            "inProduction": sum(e["status"] == "in_production" for e in items),
+            "completed": sum(e["status"] == "completed" for e in items),
+        }
+        filtered = [
+            e
+            for e in items
+            if (not productionStatus or e["status"] == productionStatus)
+            and (not q or q.casefold() in f"{e['episode']} {e['title']} {e['hook']}".casefold())
+        ]
+        data["items"] = filtered[offset : offset + limit]
+        data["projectName"] = row.name
+        data["total"] = len(filtered)
+        return {"data": data, "meta": {"requestId": context.request_id, "total": len(filtered)}}
+
+    @router.post("/projects/{project_id}/episodes/split-preview")
+    async def preview(request: Request, project_id: str):
+        context = await runtime._context(request, "project.manage")
+        await ready(context, project_id)
+        body = await _body(request)
+        revision = _revision_header(request)
+        if not isinstance(body.get("source"), str):
+            raise EpisodeEditError("EPISODE_SPLIT_INVALID")
+        data = await asyncio.to_thread(
+            split_remaining,
+            get_project_manager(),
+            project_id,
+            body.get("source", ""),
+            body.get("count", 0),
+            revision,
+        )
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
+    @router.put("/projects/{project_id}/episodes")
+    async def save(request: Request, project_id: str):
+        context = await runtime._context(request, "project.manage")
+        revision = _revision_header(request)
+        key = request.headers.get("Idempotency-Key", "").strip()
+        if not key or len(key) > 128:
+            raise EpisodeEditError("IDEMPOTENCY_KEY_REQUIRED", 400)
+        body = await _body(request)
+        raw = body.get("items")
+        if not isinstance(raw, list) or len(raw) > 500:
+            raise EpisodeEditError("EPISODE_SET_INVALID")
+        try:
+            edits = [EpisodeEdit.model_validate(item) for item in raw]
+        except ValidationError as error:
+            raise EpisodeEditError("EPISODE_FIELDS_INVALID") from error
+        async with PersistenceUnitOfWork(
+            runtime._require_sessions(), Scope(context.tenant_id, context.workspace_id)
+        ) as uow:
+            # Serialize with archive/configuration writes; scope always comes from the trusted session.
+            row = await uow.session.scalar(
+                select(ProjectRow)
+                .where(
+                    ProjectRow.id == project_id,
+                    ProjectRow.tenant_id == context.tenant_id,
+                    ProjectRow.workspace_id == context.workspace_id,
+                    ProjectRow.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if row is None:
+                raise EpisodeEditError("PROJECT_NOT_FOUND", 404)
+            if row.setup_state != "ready":
+                raise EpisodeEditError("PROJECT_SETUP_REQUIRED", 409)
+            # Start a real write transaction on SQLite before InboxRepository's
+            # savepoint. Otherwise a released savepoint can survive an audit rollback.
+            claimed_row = await uow.session.scalar(
+                update(ProjectRow)
+                .where(
+                    ProjectRow.id == project_id,
+                    ProjectRow.tenant_id == context.tenant_id,
+                    ProjectRow.workspace_id == context.workspace_id,
+                    ProjectRow.deleted_at.is_(None),
+                    ProjectRow.version == row.version,
+                )
+                .values(version=ProjectRow.version)
+                .returning(ProjectRow.id)
+            )
+            if claimed_row is None:
+                raise EpisodeEditError("VERSION_CONFLICT", 409)
+            claimed = await uow.inbox.claim(f"episodes.save:{project_id}", key)
+            receipt = await asyncio.to_thread(
+                save_episodes,
+                get_project_manager(),
+                project_id,
+                edits,
+                revision=revision,
+                key=key,
+                actor=context.actor_id,
+                replay_only=not claimed,
+            )
+            if claimed:
+                await uow.audit.append(
+                    context.actor_id,
+                    "episodes.updated",
+                    "project",
+                    project_id,
+                    {
+                        "requestId": context.request_id,
+                        "before": receipt["before"],
+                        "after": receipt["after"],
+                        "episodes": receipt["episodes"],
+                        "savedAt": receipt["at"],
+                    },
+                )
+                await uow.outbox.add(
+                    "episodes.updated",
+                    "project",
+                    project_id,
+                    {
+                        "revision": receipt["after"],
+                        "episodes": receipt["episodes"],
+                    },
+                )
+            await uow.commit()
+        data = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
+    @router.get("/projects/{project_id}/episodes/costs")
+    async def costs(request: Request, project_id: str):
+        context = await runtime._context(request, "project.view")
+        await ready(context, project_id)
+        manager = get_project_manager()
+
+        def load():
+            project = manager.load_project(project_id)
+            scripts = {}
+            for entry in project.get("episodes", []):
+                filename = entry.get("script_file")
+                if filename:
+                    try:
+                        scripts[filename] = manager.load_script(project_id, filename)
+                    except FileNotFoundError:
+                        continue
+            return project, scripts
+
+        project, scripts = await asyncio.to_thread(load)
+        service = CostEstimationService(ConfigResolver(async_session_factory), async_session_factory)
+        data = await service.compute(project, scripts, project_name=project_id)
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
+
+async def _body(request: Request) -> dict[str, Any]:
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 2_000_000:
+            raise EpisodeEditError("EPISODE_PAYLOAD_TOO_LARGE", 413)
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise EpisodeEditError("INVALID_JSON", 400) from error
+    if not isinstance(body, dict):
+        raise EpisodeEditError("INVALID_REQUEST_BODY", 400)
+    return body
+
+
+def _revision_header(request: Request) -> str:
+    revision = request.headers.get("If-Match", "").strip('"')
+    if len(revision) != 64 or any(char not in "0123456789abcdef" for char in revision):
+        raise EpisodeEditError("VERSION_REQUIRED", 428)
+    return revision

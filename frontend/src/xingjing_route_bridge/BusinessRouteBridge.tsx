@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
+import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
 import { useLocation } from "wouter";
 
 import { useAuthStore } from "@/stores/auth-store";
@@ -178,6 +180,7 @@ export function ProjectBusinessRoute({
     () => createGenerationAudioApi({ getAccessToken: () => token }),
     [token],
   );
+  const episodesApi = useMemo(() => createEpisodesApi(() => token), [token]);
   const generationCenterApi = useMemo(
     () => createGenerationCenterApi({ getAccessToken: () => token }),
     [token],
@@ -234,6 +237,8 @@ export function ProjectBusinessRoute({
           onNavigate={go}
         />
       );
+    case "episodes":
+      return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} mode={surface.mode} onNavigate={go} />;
     case "script-import":
       return <ScriptImportPage api={creatorApi} projectId={projectId} />;
     case "ai-director":
