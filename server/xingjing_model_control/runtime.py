@@ -1,4 +1,4 @@
-"""S05 persisted model catalog, routing, health, pricing and prompt control plane."""
+"""Persisted model catalog, routing, health, pricing and prompt control plane."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
+
+from .management_schema import FAILURE_CEILING
 
 
 def _now() -> datetime:
@@ -83,6 +85,7 @@ class ModelRoutingPolicyRow(ModelControlBase):
     preferred_registry_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     max_estimated_minor: Mapped[int | None] = mapped_column(Integer)
     allow_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    routing_options: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
@@ -134,6 +137,21 @@ class ModelRouteResolver:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
+    async def catalog(self, registry_key: str | None = None) -> list[dict[str, object]]:
+        from .management import current_price, price_payload
+
+        async with self._sessions() as session:
+            statement = select(ModelDefinitionRow).where(ModelDefinitionRow.active.is_(True))
+            if registry_key is not None:
+                statement = statement.where(ModelDefinitionRow.registry_key == registry_key)
+            rows = (await session.scalars(statement.order_by(ModelDefinitionRow.registry_key))).all()
+            result: list[dict[str, object]] = []
+            for row in rows:
+                price = await current_price(session, row.registry_key)
+                if row.credential_ref and price:
+                    result.append({**_model(row), "pricing": price_payload(price)})
+            return result
+
     async def resolve(
         self,
         *,
@@ -146,6 +164,8 @@ class ModelRouteResolver:
         parameters: Mapping[str, object],
         acquire: bool = False,
     ) -> ModelRouteDecision:
+        from .routing import choose_candidate
+
         now = _now()
         async with self._sessions() as session:
             policy = await session.scalar(
@@ -167,55 +187,30 @@ class ModelRouteResolver:
                         or_(ModelPricingRow.retired_at.is_(None), ModelPricingRow.retired_at > now),
                     ),
                 )
-                .where(
-                    ModelDefinitionRow.active.is_(True),
-                    ModelDefinitionRow.media_types.contains([media_type]),
-                    ModelDefinitionRow.capabilities.contains([capability]),
+                .where(ModelDefinitionRow.active.is_(True))
+                .order_by(
+                    ModelDefinitionRow.registry_key, ModelPricingRow.effective_at.desc(), ModelPricingRow.id.desc()
                 )
-                .order_by(ModelPricingRow.estimated_minor, ModelDefinitionRow.registry_key)
             )
-            rows = list((await session.execute(statement)).all())
-        candidates: list[tuple[ModelDefinitionRow, ModelHealthRow | None, ModelPricingRow]] = []
-        for model, health, pricing in rows:
-            if (
-                requested_provider_id
-                and model.provider_id != requested_provider_id
-                or requested_model_id
-                and model.provider_model_name != requested_model_id
-            ):
-                continue
-            if policy and model.registry_key not in policy.allowed_registry_keys:
-                continue
-            if health and (
-                health.status == "unhealthy"
-                or health.circuit_open_until
-                and _utc(health.circuit_open_until) > now
-                or health.active_calls >= model.max_concurrency
-            ):
-                continue
-            if (
-                policy
-                and policy.max_estimated_minor is not None
-                and pricing.estimated_minor > policy.max_estimated_minor
-            ):
-                continue
-            _validate_parameters(parameters, model.parameter_schema)
-            candidates.append((model, health, pricing))
-        if not candidates:
-            raise LookupError("MODEL_ROUTE_UNAVAILABLE")
-        preferred = policy.preferred_registry_keys if policy else []
-        candidates.sort(
-            key=lambda item: (
-                preferred.index(item[0].registry_key) if item[0].registry_key in preferred else len(preferred),
-                item[2].estimated_minor,
+            rows = [(model, health, price) for model, health, price in (await session.execute(statement)).all()]
+            selected, fallback = await choose_candidate(
+                session,
+                rows,
+                policy,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                capability=capability,
+                media_type=media_type,
+                requested_provider_id=requested_provider_id,
+                requested_model_id=requested_model_id,
+                parameters=parameters,
+                now=now,
             )
-        )
-        selected = candidates[0]
-        fallback = bool(preferred and selected[0].registry_key != preferred[0])
-        if fallback and policy and not policy.allow_fallback:
-            raise LookupError("MODEL_FALLBACK_NOT_ALLOWED")
         if acquire:
             async with self._sessions() as session, session.begin():
+                definition = await session.get(ModelDefinitionRow, selected[0].registry_key, with_for_update=True)
+                if definition is None or not definition.active or definition.version != selected[0].version:
+                    raise LookupError("MODEL_CONFIGURATION_CHANGED")
                 health = await session.get(ModelHealthRow, selected[0].registry_key, with_for_update=True)
                 if health is None:
                     health = ModelHealthRow(registry_key=selected[0].registry_key, status="unknown")
@@ -243,7 +238,6 @@ class ModelRouteResolver:
                 .where(
                     ModelDefinitionRow.provider_id == provider_id,
                     ModelDefinitionRow.provider_model_name == model_id,
-                    ModelDefinitionRow.active.is_(True),
                 )
                 .limit(1)
             )
@@ -257,10 +251,10 @@ class ModelRouteResolver:
                 health.status, health.consecutive_failures, health.circuit_open_until = "healthy", 0, None
             else:
                 health.consecutive_failures += 1
-                if health.consecutive_failures >= 3:
+                if health.consecutive_failures >= FAILURE_CEILING:
                     health.status = "unhealthy"
                     health.circuit_open_until = _now() + timedelta(
-                        seconds=min(900, 30 * 2 ** (health.consecutive_failures - 3))
+                        seconds=min(900, 30 * 2 ** (health.consecutive_failures - FAILURE_CEILING))
                     )
                 else:
                     health.status = "degraded"
@@ -334,8 +328,12 @@ class ModelControlRuntime:
             context = await self._context(request, "admin.model.manage")
             body = await _body(request)
             action = _required(body, "action")
+            if action in {"upsert_model", "set_model_active", "publish_pricing", "upsert_policy"}:
+                from .management import execute_command
+
+                return _ok(await execute_command(self, context, request, body), context.request_id)
             async with self._session() as session, session.begin():
-                result = await _apply_admin_action(session, action, body)
+                result = await _apply_prompt_action(session, action, body)
             return _ok(result, context.request_id)
 
         @router.post("/internal/model-control/health", operation_id="record_model_health")
@@ -348,16 +346,17 @@ class ModelControlRuntime:
             async with self._session() as session, session.begin():
                 row = await session.get(ModelHealthRow, key, with_for_update=True)
                 if row is None:
-                    row = ModelHealthRow(registry_key=key)
+                    row = ModelHealthRow(registry_key=key, consecutive_failures=0, active_calls=0)
                     session.add(row)
                 if outcome == "healthy":
                     row.status, row.consecutive_failures, row.circuit_open_until = "healthy", 0, None
                 else:
                     row.consecutive_failures += 1
-                    row.status = "unhealthy" if row.consecutive_failures >= 3 else "degraded"
+                    row.status = "unhealthy" if row.consecutive_failures >= FAILURE_CEILING else "degraded"
                     row.circuit_open_until = (
-                        _now() + timedelta(seconds=min(900, 30 * 2 ** max(0, row.consecutive_failures - 3)))
-                        if row.consecutive_failures >= 3
+                        _now()
+                        + timedelta(seconds=min(900, 30 * 2 ** max(0, row.consecutive_failures - FAILURE_CEILING)))
+                        if row.consecutive_failures >= FAILURE_CEILING
                         else None
                     )
                 row.latency_ms = _positive_int(body.get("latencyMs"), allow_zero=True)
@@ -394,13 +393,16 @@ class ModelControlRuntime:
                 session.add(row)
             return {"data": {"id": row.id}}
 
+        from .management import register_management_routes
+
+        register_management_routes(self, router)
         return router
 
     async def _context(self, request: Request, permission: str):
         if self.unavailable_code:
             raise HTTPException(503, detail={"code": self.unavailable_code})
         context = await self.resolver(request)
-        if permission not in context.permissions:
+        if permission not in context.permissions or permission.startswith("admin.") and context.role == "API_KEY":
             raise HTTPException(403, detail={"code": "PERMISSION_DENIED"})
         return context
 
@@ -431,75 +433,7 @@ def create_model_control_runtime(*, database_url: str | None = None) -> ModelCon
     return ModelControlRuntime(async_sessionmaker(engine, expire_on_commit=False), resolver, token, engine=engine)
 
 
-async def _apply_admin_action(session: AsyncSession, action: str, body: Mapping[str, object]) -> dict[str, object]:
-    if action == "upsert_model":
-        key = _required(body, "registryKey")
-        row = await session.get(ModelDefinitionRow, key, with_for_update=True)
-        values = {
-            "provider_id": _required(body, "providerId"),
-            "provider_model_name": _required(body, "providerModelName"),
-            "display_name": _required(body, "displayName"),
-            "model_version": _required(body, "modelVersion"),
-            "region": _required(body, "region"),
-            "media_types": _string_list(body.get("mediaTypes")),
-            "capabilities": _string_list(body.get("capabilities")),
-            "parameter_schema": _mapping(body.get("parameterSchema")),
-            "credential_ref": _optional(body.get("credentialRef")),
-            "max_concurrency": _positive_int(body.get("maxConcurrency")) or 10,
-            "active": body.get("active", True) is True,
-            "updated_at": _now(),
-        }
-        if row is None:
-            row = ModelDefinitionRow(registry_key=key, **values)
-            session.add(row)
-        else:
-            for name, value in values.items():
-                setattr(row, name, value)
-            row.version += 1
-        return _model(row)
-    if action == "publish_pricing":
-        row = ModelPricingRow(
-            registry_key=_required(body, "registryKey"),
-            pricing_version=_required(body, "pricingVersion"),
-            currency=_required(body, "currency").upper(),
-            estimated_minor=_positive_int(body.get("estimatedMinor")) or 0,
-            effective_at=_now(),
-        )
-        if len(row.currency) != 3 or row.estimated_minor <= 0:
-            raise HTTPException(400, detail={"code": "MODEL_PRICING_INVALID"})
-        session.add(row)
-        return {"id": row.id, "pricingVersion": row.pricing_version}
-    if action == "upsert_policy":
-        tenant, workspace, capability, media = (
-            _required(body, name) for name in ("tenantId", "workspaceId", "capability", "mediaType")
-        )
-        row = await session.scalar(
-            select(ModelRoutingPolicyRow)
-            .where(
-                ModelRoutingPolicyRow.tenant_id == tenant,
-                ModelRoutingPolicyRow.workspace_id == workspace,
-                ModelRoutingPolicyRow.capability == capability,
-                ModelRoutingPolicyRow.media_type == media,
-            )
-            .with_for_update()
-        )
-        values = {
-            "allowed_registry_keys": _string_list(body.get("allowedRegistryKeys")),
-            "preferred_registry_keys": _string_list(body.get("preferredRegistryKeys")),
-            "max_estimated_minor": _positive_int(body.get("maxEstimatedMinor")),
-            "allow_fallback": body.get("allowFallback", False) is True,
-            "updated_at": _now(),
-        }
-        if row is None:
-            row = ModelRoutingPolicyRow(
-                tenant_id=tenant, workspace_id=workspace, capability=capability, media_type=media, **values
-            )
-            session.add(row)
-        else:
-            for name, value in values.items():
-                setattr(row, name, value)
-            row.version += 1
-        return {"id": row.id, "version": row.version}
+async def _apply_prompt_action(session: AsyncSession, action: str, body: Mapping[str, object]) -> dict[str, object]:
     if action == "publish_prompt":
         key, source, content = _required(body, "templateKey"), _required(body, "source"), _required(body, "content")
         current = await session.scalar(
@@ -526,16 +460,38 @@ async def _apply_admin_action(session: AsyncSession, action: str, body: Mapping[
         target_version = _positive_int(body.get("targetVersion"))
         if target_version is None:
             raise HTTPException(400, detail={"code": "PROMPT_TARGET_VERSION_REQUIRED"})
-        target = await session.scalar(select(PromptTemplateRow).where(PromptTemplateRow.template_key == key, PromptTemplateRow.template_version == target_version))
+        target = await session.scalar(
+            select(PromptTemplateRow).where(
+                PromptTemplateRow.template_key == key, PromptTemplateRow.template_version == target_version
+            )
+        )
         if target is None:
             raise HTTPException(404, detail={"code": "PROMPT_TEMPLATE_VERSION_NOT_FOUND"})
-        current = await session.scalar(select(PromptTemplateRow).where(PromptTemplateRow.template_key == key).order_by(PromptTemplateRow.template_version.desc()).limit(1))
+        current = await session.scalar(
+            select(PromptTemplateRow)
+            .where(PromptTemplateRow.template_key == key)
+            .order_by(PromptTemplateRow.template_version.desc())
+            .limit(1)
+        )
         version = (current.template_version if current else 0) + 1
         if current:
             current.active = False
-        row = PromptTemplateRow(template_key=key, template_version=version, source=f"rollback:{target_version}", content=target.content, output_schema=target.output_schema, active=True)
+        row = PromptTemplateRow(
+            template_key=key,
+            template_version=version,
+            source=f"rollback:{target_version}",
+            content=target.content,
+            output_schema=target.output_schema,
+            active=True,
+        )
         session.add(row)
-        return {"id": row.id, "templateKey": key, "version": version, "rolledBackFrom": target_version, "digest": _digest(row.content)}
+        return {
+            "id": row.id,
+            "templateKey": key,
+            "version": version,
+            "rolledBackFrom": target_version,
+            "digest": _digest(row.content),
+        }
     raise HTTPException(400, detail={"code": "MODEL_CONTROL_ACTION_UNSUPPORTED"})
 
 
@@ -548,14 +504,9 @@ def _validate_parameters(parameters: Mapping[str, object], schema: Mapping[str, 
         if not isinstance(rule, Mapping):
             raise ValueError("MODEL_PARAMETER_SCHEMA_INVALID")
         kind = rule.get("type")
-        if (
-            kind == "string"
-            and not isinstance(value, str)
-            or kind == "integer"
-            and (not isinstance(value, int) or isinstance(value, bool))
-            or kind == "boolean"
-            and not isinstance(value, bool)
-        ):
+        from .management_schema import parameter_matches
+
+        if not parameter_matches(value, str(kind)):
             raise ValueError("MODEL_PARAMETER_TYPE_INVALID")
         allowed = rule.get("enum")
         if isinstance(allowed, list) and value not in allowed:
@@ -603,12 +554,6 @@ def _optional(value: object) -> str | None:
 
 def _mapping(value: object) -> dict[str, object]:
     return dict(cast(Mapping[str, object], value)) if isinstance(value, Mapping) else {}
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
-        raise HTTPException(400, detail={"code": "STRING_LIST_REQUIRED"})
-    return [cast(str, item).strip() for item in value]
 
 
 def _positive_int(value: object, *, allow_zero: bool = False) -> int | None:

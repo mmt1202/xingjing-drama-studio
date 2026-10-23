@@ -6,6 +6,8 @@ import { ProjectFlowShell } from "@/xingjing_creator_projects/ProjectFlowShell";
 import { Redirect, useLocation, useSearch } from "wouter";
 import { CreatorWorkspaceFrame } from "@/xingjing_creator_home/WorkspaceFrame";
 import { CreatorHomePage, WorkspaceTasks } from "@/xingjing_creator_home/CreatorHomePage";
+import { ModelOperationsPage } from "@/xingjing_model_operations/ModelOperationsPage";
+import { createModelOperationsApi } from "@/xingjing_model_operations/api";
 
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -410,11 +412,12 @@ export function AdminBusinessRoute({
 }) {
   const token = useAuthStore((state) => state.token) ?? "";
   const route = resolveAdminRoute(surface);
+  const modelApi = useMemo(() => createModelOperationsApi(workspaceId, token), [workspaceId, token]);
   const api = useMemo(
     () => createAdminApiClient({ sessionToken: token, workspaceId }),
     [token, workspaceId],
   );
-  return route?.id === "AD-002" ? (
+  return route?.id === "AD-023" ? <ModelOperationsPage key={`${workspaceId}:${token}`} workspaceId={workspaceId} api={modelApi} /> : route?.id === "AD-002" ? (
     <OpenPlatform api={api} />
   ) : route ? (
     <AdminPlatform routeId={route.id} api={api} />

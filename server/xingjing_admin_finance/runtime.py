@@ -444,8 +444,11 @@ def _model_records(
 
 
 def _apply_action(
-    session: Session, domain: str, payload: ActionPayload,
-    trusted: TrustedWorkspaceContext, now: datetime,
+    session: Session,
+    domain: str,
+    payload: ActionPayload,
+    trusted: TrustedWorkspaceContext,
+    now: datetime,
 ) -> tuple[dict[str, object], dict[str, object]]:
     if domain == "model":
         if payload.action in {"重新校验", "刷新统计"}:
@@ -454,28 +457,7 @@ def _apply_action(
                 "status": "revalidation_requested" if payload.action == "重新校验" else "statistics_refresh_requested",
                 "version": payload.version,
             }
-        registry_key = payload.objectId.strip()
-        if not registry_key:
-            raise HTTPException(422, detail={"code": "MODEL_OBJECT_ID_INVALID"})
-        model = session.execute(text("""
-            SELECT registry_key,active,version FROM xingjing_model_definitions
-             WHERE registry_key=:registry_key FOR UPDATE
-        """), {"registry_key": registry_key}).mappings().first()
-        if model is None:
-            raise HTTPException(404, detail={"code": "MODEL_NOT_FOUND"})
-        if int(model["version"]) != payload.version:
-            raise HTTPException(409, detail={"code": "VERSION_CONFLICT"})
-        before = {"status": "active" if model["active"] else "disabled", "version": payload.version}
-        if payload.action == "更新模型":
-            active = not bool(model["active"])
-            session.execute(text("""
-                UPDATE xingjing_model_definitions SET active=:active,version=version+1,updated_at=:now
-                 WHERE registry_key=:registry_key AND version=:version
-            """), {"active": active, "now": now, "registry_key": registry_key, "version": payload.version})
-        else:
-            raise HTTPException(422, detail={"code": "UNSUPPORTED_ACTION"})
-        return before, {"id": registry_key, "status": "active" if active else "disabled",
-                        "version": payload.version + 1}
+        raise HTTPException(409, detail={"code": "MODEL_CONFIGURATION_USE_CONTROL_PAGE"})
 
     if payload.action in {"发起调账", "确认对账", "执行退款审批"}:
         operation_type = {

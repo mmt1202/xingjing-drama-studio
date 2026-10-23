@@ -16,8 +16,9 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import uuid4
 
 from fastapi import Request
@@ -55,7 +56,6 @@ from server.xingjing_identity_context import (
     TrustedWorkspaceContextResolver,
 )
 from server.xingjing_model_control import ModelRouteResolver
-from server.xingjing_model_control.runtime import ModelDefinitionRow
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import GeneratedArtifactStorageError, LocalGenerationArtifactStore
@@ -236,6 +236,56 @@ class GenerationRuntime:
             estimated_cost_minor=billing.estimated_minor if billing else None,
             pricing_version=billing.pricing_version if billing else None,
             models=self._model_catalog,
+        )
+
+    async def read_model_availability(self) -> GenerationModelAvailability:
+        base = self.model_availability()
+        if self._model_route_resolver is None:
+            return base
+        try:
+            records = await self._model_route_resolver.catalog()
+        except SQLAlchemyError as error:
+            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE") from error
+        definitions: list[GenerationModelDefinition] = []
+        for record in records:
+            media = tuple(value for value in cast(list[str], record["mediaTypes"]) if value in {"image", "video"})
+            if not media:
+                continue
+            definitions.append(
+                GenerationModelDefinition(
+                    provider_id=str(record["providerId"]),
+                    model_id=str(record["providerModelName"]),
+                    display_name=str(record["displayName"]),
+                    version=str(record["modelVersion"]),
+                    region=str(record["region"]),
+                    media_types=media,
+                    capabilities=tuple(cast(list[str], record["capabilities"])),
+                    active=True,
+                )
+            )
+        gateway = self._provider_gateway
+        default = next(
+            (
+                record
+                for record in records
+                if gateway
+                and record["providerId"] == gateway.provider_id
+                and record["providerModelName"] == gateway.default_model_id
+            ),
+            None,
+        )
+        pricing = cast(dict[str, object], default["pricing"]) if default else {}
+        return replace(
+            base,
+            models=tuple(definitions),
+            submission_available=bool(
+                gateway
+                and self._billing_policy
+                and any(item.provider_id == gateway.provider_id for item in definitions)
+            ),
+            billing_currency=str(pricing["currency"]) if pricing else None,
+            estimated_cost_minor=int(cast(int, pricing["estimatedMinor"])) if pricing else None,
+            pricing_version=str(pricing["pricingVersion"]) if pricing else None,
         )
 
     async def get_task(self, context: TrustedWorkspaceContext, project_id: str, task_id: str) -> GenerationTask:
@@ -1127,15 +1177,20 @@ class GenerationRuntime:
             key = project.configuration.get(f"{request.media_type.value}ModelKey") if project.configuration else None
             if not isinstance(key, str) or not key:
                 return request
-            model = await session.get(ModelDefinitionRow, key)
-            if model is None or not model.active or request.media_type.value not in model.media_types:
-                raise ValueError("PROJECT_MODEL_UNAVAILABLE")
-            return request.model_copy(
-                update={
-                    "requested_provider_id": model.provider_id,
-                    "requested_model_id": model.provider_model_name,
-                }
-            )
+        if self._model_route_resolver is None:
+            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
+        try:
+            models = await self._model_route_resolver.catalog(key)
+        except SQLAlchemyError as error:
+            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE") from error
+        if not models or request.media_type.value not in cast(list[str], models[0]["mediaTypes"]):
+            raise ValueError("PROJECT_MODEL_UNAVAILABLE")
+        return request.model_copy(
+            update={
+                "requested_provider_id": models[0]["providerId"],
+                "requested_model_id": models[0]["providerModelName"],
+            }
+        )
 
     async def _project_exists(self, context: TrustedWorkspaceContext, project_id: str) -> bool:
         if self._session_factory is None:
@@ -1234,7 +1289,21 @@ def create_production_generation_runtime(
         engine = create_async_engine(url, pool_pre_ping=True)
     except (SQLAlchemyError, ValueError, ModuleNotFoundError):
         return _unavailable_runtime("GENERATION_RUNTIME_DEPENDENCY_UNAVAILABLE")
+    model_url = os.environ.get("XINGJING_MODEL_DATABASE_URL", "").strip() or url
+    if "+asyncpg" not in model_url and "+aiosqlite" not in model_url:
+        return _unavailable_runtime("XINGJING_MODEL_DATABASE_URL_MUST_BE_ASYNC")
+    try:
+        model_engine = engine if model_url == url else create_async_engine(model_url, pool_pre_ping=True)
+    except (SQLAlchemyError, ValueError, ModuleNotFoundError):
+        return _unavailable_runtime("MODEL_ROUTE_CONTROL_UNAVAILABLE")
     factory: SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+    model_factory = async_sessionmaker(model_engine, expire_on_commit=False)
+
+    async def close_engines() -> None:
+        await engine.dispose()
+        if model_engine is not engine:
+            await model_engine.dispose()
+
     provider_gateway = _provider_from_environment()
     artifact_root = os.environ.get("XINGJING_M06_ARTIFACT_ROOT", "").strip()
     provider_project_root = os.environ.get("XINGJING_M06_PROVIDER_PROJECT_ROOT", "").strip()
@@ -1248,10 +1317,6 @@ def create_production_generation_runtime(
     if provider_recovery_secret and len(provider_recovery_secret) < 32:
         return _unavailable_runtime("XINGJING_M06_PROVIDER_RECOVERY_SECRET_MINIMUM_32_REQUIRED")
     billing_policy = _billing_policy_from_environment()
-    try:
-        model_catalog = _model_catalog_from_environment()
-    except ValueError as error:
-        return _unavailable_runtime(str(error))
     return GenerationRuntime(
         repository=SqlAlchemyGenerationTaskRepository(factory),
         session_factory=factory,
@@ -1263,9 +1328,8 @@ def create_production_generation_runtime(
         billing_policy=billing_policy,
         billing_callback_secret=billing_callback_secret or None,
         provider_recovery_secret=provider_recovery_secret or None,
-        model_catalog=model_catalog,
-        model_route_resolver=ModelRouteResolver(factory),
-        close=engine.dispose,
+        model_route_resolver=ModelRouteResolver(model_factory),
+        close=close_engines,
     )
 
 
