@@ -19,6 +19,7 @@ from server.xingjing_billing_runtime import (
     BillingRuntimeConfigurationError,
     BillingRuntimePermissionDenied,
 )
+from server.xingjing_billing_runtime.billing_workspace import BillingWorkspaceUnavailable, WorkspacePageQuery
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +40,13 @@ class BillingContractRoute(APIRoute):
                 return _error(request, "BILLING_RUNTIME_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE)
             except BillingRuntimeConfigurationError as error:
                 code = (
-                    "PAYMENT_PROVIDER_NOT_CONFIGURED"
-                    if str(error) == "PAYMENT_PROVIDER_NOT_CONFIGURED"
+                    str(error)
+                    if str(error) in {"PAYMENT_PROVIDER_NOT_CONFIGURED", "PAYMENT_USE_UNIFIED_GATEWAY"}
                     else "BILLING_RUNTIME_UNAVAILABLE"
                 )
                 return _error(request, code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            except BillingWorkspaceUnavailable as error:
+                return _error(request, str(error), status.HTTP_503_SERVICE_UNAVAILABLE)
             except LookupError:
                 return _error(request, "BILLING_OBJECT_NOT_FOUND", status.HTTP_404_NOT_FOUND)
             except HTTPException as error:
@@ -87,8 +90,46 @@ def _page_query(
 BillingQuery = Annotated[BillingPageQuery, Depends(_page_query)]
 
 
+def _workspace_page_query(
+    page_size: int = Query(25, alias="pageSize", ge=1, le=100),
+    page_token: str | None = Query(None, alias="pageToken", max_length=2048),
+    query: str | None = Query(None, max_length=200),
+    project_id: str | None = Query(None, alias="projectId", max_length=128),
+    source: str | None = Query(None, max_length=32),
+    status: str | None = Query(None, max_length=64),
+    date_from: datetime | None = Query(None, alias="dateFrom"),
+    date_to: datetime | None = Query(None, alias="dateTo"),
+) -> WorkspacePageQuery:
+    return WorkspacePageQuery(
+        page_size=page_size,
+        page_token=page_token,
+        query=query,
+        project_id=project_id,
+        source=source,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+WorkspaceQuery = Annotated[WorkspacePageQuery, Depends(_workspace_page_query)]
+
+
 def create_billing_router(runtime: BillingRuntime) -> APIRouter:
     router = APIRouter(prefix="/api/v1/workspaces", tags=["xingjing-billing"], route_class=BillingContractRoute)
+
+    @router.get("/{workspace_id}/billing/workspace")
+    async def workspace(request: Request, workspace_id: str, page: WorkspaceQuery) -> JSONResponse:
+        if "X-Project-Id" in request.headers:
+            raise BillingRuntimePermissionDenied("WORKSPACE_CONTEXT_REQUIRED")
+        context = await runtime.resolve(request, workspace_id, "billing.view")
+        if request.headers.get("X-Workspace-Id") and request.headers["X-Workspace-Id"] != context.workspace_id:
+            raise BillingRuntimePermissionDenied("WORKSPACE_SCOPE_MISMATCH")
+        data = await runtime.workspace(context, page)
+        ledger = cast(Mapping[str, object], data["ledger"])
+        return JSONResponse(
+            {"data": data, "meta": {"requestId": context.request_id, "page": {"nextToken": ledger["nextToken"]}}}
+        )
 
     @router.get("/{workspace_id}/billing")
     async def billing(request: Request, workspace_id: str, page: BillingQuery, _t: Translator) -> JSONResponse:
@@ -212,13 +253,7 @@ def create_billing_router(runtime: BillingRuntime) -> APIRouter:
 
     @router.post("/{workspace_id}/billing/payment-callbacks")
     async def payment_callback(request: Request, workspace_id: str) -> JSONResponse:
-        raw_body = await request.body()
-        result = await runtime.apply_payment_callback(
-            raw_body=raw_body,
-            signature=request.headers.get("X-Xingjing-Payment-Signature", ""),
-            expected_workspace_id=workspace_id,
-        )
-        return _success(request.headers.get("X-Request-Id", "payment-callback"), {"object": result})
+        raise BillingRuntimeConfigurationError("PAYMENT_USE_UNIFIED_GATEWAY")
 
     return router
 
@@ -316,9 +351,18 @@ def _error(request: Request, code: str, status_code: int) -> JSONResponse:
     request_id = request.headers.get("X-Request-Id", "unknown")
     _t = get_translator(request)
     message_key = (
-        "billing.payment_unavailable" if code == "PAYMENT_PROVIDER_NOT_CONFIGURED" else "billing.request_failed"
+        "billing.payment_unavailable"
+        if code in {"PAYMENT_PROVIDER_NOT_CONFIGURED", "PAYMENT_USE_UNIFIED_GATEWAY"}
+        else "billing.request_failed"
     )
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": _t(message_key), "details": {}}, "meta": {"requestId": request_id}},
+        content={
+            "error": {
+                "code": code,
+                "message": _t(message_key),
+                "details": {"replacement": "unified_payments"} if code == "PAYMENT_USE_UNIFIED_GATEWAY" else {},
+            },
+            "meta": {"requestId": request_id},
+        },
     )

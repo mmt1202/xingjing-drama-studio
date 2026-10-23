@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, cast, func, select
+from sqlalchemy import BigInteger, cast, func, inspect, select, true
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from server.xingjing_generation_persistence.repository import (
@@ -351,10 +351,27 @@ class BillingFinanceRepository:
         return 0 if account is None else account.available_minor
 
     async def close_expired_payment_orders(self, *, now: datetime, limit: int = 100) -> int:
+        from server.xingjing_payments.models import PaymentOrderRow
+
         if limit < 1 or limit > 1_000:
             raise ValueError("PAYMENT_CLOSE_LIMIT_INVALID")
         instant = _utc(now)
         async with self._session_factory.begin() as session:
+            connection = await session.connection()
+            gateway_table_present = await connection.run_sync(
+                lambda sync_connection: inspect(sync_connection).has_table(PaymentOrderRow.__tablename__)
+            )
+            gateway_exclusion = (
+                ~select(PaymentOrderRow.order_id)
+                .where(
+                    PaymentOrderRow.order_id == BillingOrderRow.order_id,
+                    PaymentOrderRow.tenant_id == BillingOrderRow.tenant_id,
+                    PaymentOrderRow.workspace_id == BillingOrderRow.workspace_id,
+                )
+                .exists()
+                if gateway_table_present
+                else true()
+            )
             rows = list(
                 (
                     await session.scalars(
@@ -364,6 +381,7 @@ class BillingFinanceRepository:
                             BillingOrderRow.workspace_id == self._workspace_id,
                             BillingOrderRow.status == "pending",
                             BillingOrderRow.expires_at <= instant,
+                            gateway_exclusion,
                         )
                         .order_by(BillingOrderRow.expires_at, BillingOrderRow.order_id)
                         .limit(limit)

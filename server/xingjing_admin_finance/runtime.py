@@ -66,8 +66,9 @@ class FinanceOperationRow(Base):
 class CommandRow(Base):
     __tablename__ = "xingjing_admin_finance_commands"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "workspace_id", "actor_id", "idempotency_key",
-                         name="uq_xj_admin_finance_command_scope"),
+        UniqueConstraint(
+            "tenant_id", "workspace_id", "actor_id", "idempotency_key", name="uq_xj_admin_finance_command_scope"
+        ),
     )
     command_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -81,9 +82,7 @@ class CommandRow(Base):
 
 class AuditRow(Base):
     __tablename__ = "xingjing_admin_finance_audit"
-    __table_args__ = (
-        Index("ix_xj_admin_finance_audit_request", "request_id", "occurred_at"),
-    )
+    __table_args__ = (Index("ix_xj_admin_finance_audit_request", "request_id", "occurred_at"),)
     audit_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
     workspace_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -144,7 +143,9 @@ def create_unavailable_admin_finance_router(code: str) -> APIRouter:
 
 
 def create_production_admin_finance_runtime(
-    *, database_url: str | None = None, context_resolver: ContextResolver | None = None,
+    *,
+    database_url: str | None = None,
+    context_resolver: ContextResolver | None = None,
 ) -> AdminFinanceRuntime:
     url = (database_url or os.environ.get("XINGJING_FINANCE_DATABASE_URL", "")).strip()
     if not url:
@@ -180,98 +181,141 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
 
     @router.get("/finance")
     def finance(
-        resource: str = Query("billing"), page: int = Query(1, ge=1),
+        resource: str = Query("billing"),
+        page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
-        search: str = Query("", max_length=200), status: str | None = Query(None, max_length=128),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
         require(trusted, "admin.finance.view")
         with sessions() as session:
             records, total = _finance_records(
-                session, resource, trusted.tenant_id, trusted.workspace_id,
-                page=page, page_size=page_size,
-                search=search.strip(), status=status,
+                session,
+                resource,
+                trusted.tenant_id,
+                trusted.workspace_id,
+                page=page,
+                page_size=page_size,
+                search=search.strip(),
+                status=status,
             )
         return {"items": records, "page": page, "pageSize": page_size, "total": total}
 
     @router.get("/models")
     def models(
-        resource: str = Query("models"), page: int = Query(1, ge=1),
+        resource: str = Query("models"),
+        page: int = Query(1, ge=1),
         page_size: int = Query(20, alias="pageSize", ge=1, le=100),
-        search: str = Query("", max_length=200), status: str | None = Query(None, max_length=128),
+        search: str = Query("", max_length=200),
+        status: str | None = Query(None, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
         require(trusted, "admin.model.view")
         with sessions() as session:
             records, total = _model_records(
-                session, resource, trusted.tenant_id, trusted.workspace_id,
-                page=page, page_size=page_size,
-                search=search.strip(), status=status,
+                session,
+                resource,
+                trusted.tenant_id,
+                trusted.workspace_id,
+                page=page,
+                page_size=page_size,
+                search=search.strip(),
+                status=status,
             )
         return {"items": records, "page": page, "pageSize": page_size, "total": total}
 
     def execute_action(
-        domain: str, payload: ActionPayload, trusted: TrustedWorkspaceContext, idempotency_key: str,
+        domain: str,
+        payload: ActionPayload,
+        trusted: TrustedWorkspaceContext,
+        idempotency_key: str,
     ) -> dict[str, object]:
         require(trusted, f"admin.{domain}.manage")
         if not idempotency_key.strip() or payload.version < 0:
             raise HTTPException(422, detail={"code": "INVALID_COMMAND"})
-        fingerprint = "sha256:" + sha256(
-            json.dumps(payload.model_dump(), ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
+        fingerprint = (
+            "sha256:"
+            + sha256(json.dumps(payload.model_dump(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        )
         now = datetime.now(UTC)
         with sessions.begin() as session:
-            previous = session.scalar(select(CommandRow).where(
-                CommandRow.tenant_id == trusted.tenant_id,
-                CommandRow.workspace_id == trusted.workspace_id,
-                CommandRow.actor_id == trusted.actor_id,
-                CommandRow.idempotency_key == idempotency_key,
-            ))
+            previous = session.scalar(
+                select(CommandRow).where(
+                    CommandRow.tenant_id == trusted.tenant_id,
+                    CommandRow.workspace_id == trusted.workspace_id,
+                    CommandRow.actor_id == trusted.actor_id,
+                    CommandRow.idempotency_key == idempotency_key,
+                )
+            )
             if previous:
                 if previous.fingerprint != fingerprint:
                     raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"})
                 return cast(dict[str, object], json.loads(previous.result_json))
             before, after = _apply_action(session, domain, payload, trusted, now)
             result = {"requestId": trusted.request_id, "status": "succeeded", "object": after}
-            session.add(CommandRow(
-                command_id=str(uuid4()), tenant_id=trusted.tenant_id,
-                workspace_id=trusted.workspace_id, actor_id=trusted.actor_id,
-                idempotency_key=idempotency_key, fingerprint=fingerprint,
-                result_json=json.dumps(result, ensure_ascii=False), created_at=now,
-            ))
-            session.add(AuditRow(
-                audit_id=str(uuid4()), tenant_id=trusted.tenant_id,
-                workspace_id=trusted.workspace_id,
-                actor_id=trusted.actor_id, request_id=trusted.request_id,
-                domain=domain, action=payload.action, object_id=payload.objectId,
-                before_payload=before, after_payload=after, occurred_at=now,
-            ))
-            session.add(OutboxRow(
-                tenant_id=trusted.tenant_id, workspace_id=trusted.workspace_id,
-                event_type=f"admin.{domain}.changed", aggregate_type=domain,
-                aggregate_id=payload.objectId,
-                payload={"action": payload.action, "object": after, "requestId": trusted.request_id},
-                schema_version=1, created_at=now, published_at=None,
-            ))
+            session.add(
+                CommandRow(
+                    command_id=str(uuid4()),
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
+                    actor_id=trusted.actor_id,
+                    idempotency_key=idempotency_key,
+                    fingerprint=fingerprint,
+                    result_json=json.dumps(result, ensure_ascii=False),
+                    created_at=now,
+                )
+            )
+            session.add(
+                AuditRow(
+                    audit_id=str(uuid4()),
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
+                    actor_id=trusted.actor_id,
+                    request_id=trusted.request_id,
+                    domain=domain,
+                    action=payload.action,
+                    object_id=payload.objectId,
+                    before_payload=before,
+                    after_payload=after,
+                    occurred_at=now,
+                )
+            )
+            session.add(
+                OutboxRow(
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
+                    event_type=f"admin.{domain}.changed",
+                    aggregate_type=domain,
+                    aggregate_id=payload.objectId,
+                    payload={"action": payload.action, "object": after, "requestId": trusted.request_id},
+                    schema_version=1,
+                    created_at=now,
+                    published_at=None,
+                )
+            )
             return result
 
     @router.post("/finance/actions")
     def finance_action(
-        payload: ActionPayload, trusted: TrustedWorkspaceContext = Depends(resolve),
+        payload: ActionPayload,
+        trusted: TrustedWorkspaceContext = Depends(resolve),
         idempotency_key: str = Header("", alias="Idempotency-Key"),
     ) -> dict[str, object]:
         return execute_action("finance", payload, trusted, idempotency_key)
 
     @router.post("/models/actions")
     def model_action(
-        payload: ActionPayload, trusted: TrustedWorkspaceContext = Depends(resolve),
+        payload: ActionPayload,
+        trusted: TrustedWorkspaceContext = Depends(resolve),
         idempotency_key: str = Header("", alias="Idempotency-Key"),
     ) -> dict[str, object]:
         return execute_action("model", payload, trusted, idempotency_key)
 
     @router.get("/finance/exports/{export_id}")
     def download_finance_export(
-        export_id: str, trusted: TrustedWorkspaceContext = Depends(resolve),
+        export_id: str,
+        trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> Response:
         require(trusted, "admin.finance.view")
         with sessions() as session:
@@ -279,9 +323,12 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
             if export is None or export.tenant_id != trusted.tenant_id or export.workspace_id != trusted.workspace_id:
                 raise HTTPException(404, detail={"code": "FINANCE_EXPORT_NOT_FOUND"})
             return Response(
-                content=export.content_csv.encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
-                headers={"Content-Disposition": f'attachment; filename="{export.export_kind}-{export.export_id}.csv"',
-                         "X-Content-SHA256": export.content_sha256},
+                content=export.content_csv.encode("utf-8-sig"),
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{export.export_kind}-{export.export_id}.csv"',
+                    "X-Content-SHA256": export.content_sha256,
+                },
             )
 
     return router
@@ -291,8 +338,10 @@ def _row(item: object) -> dict[str, object]:
     mapping = cast(dict[str, object], item)
     updated = mapping.get("updated_at") or mapping.get("occurred_at") or mapping.get("created_at")
     return {
-        "id": str(mapping["id"]), "name": str(mapping["name"]),
-        "status": str(mapping["status"]), "version": _integer(mapping.get("version"), 1),
+        "id": str(mapping["id"]),
+        "name": str(mapping["name"]),
+        "status": str(mapping["status"]),
+        "version": _integer(mapping.get("version"), 1),
         "updatedAt": updated.isoformat() if isinstance(updated, datetime) else str(updated),
         "sensitive": mapping.get("sensitive") or {},
         "details": mapping.get("details") or {},
@@ -304,27 +353,46 @@ def _integer(value: object, default: int = 0) -> int:
 
 
 def _query(
-    session: Session, statement: str, tenant_id: str, workspace_id: str, *, page: int, page_size: int,
-    search: str, status: str | None,
+    session: Session,
+    statement: str,
+    tenant_id: str,
+    workspace_id: str,
+    *,
+    page: int,
+    page_size: int,
+    search: str,
+    status: str | None,
 ) -> tuple[list[dict[str, object]], int]:
     filtered = f"""SELECT * FROM ({statement}) source
       WHERE (:search='' OR lower(id::text) LIKE :needle OR lower(name) LIKE :needle)
         AND (:status IS NULL OR lower(status)=ANY(string_to_array(lower(:status),',')))"""
     parameters = {
-        "tenant": tenant_id, "ws": workspace_id, "search": search,
-        "needle": f"%{search.lower()}%", "status": status,
-        "limit": page_size, "offset": (page - 1) * page_size,
+        "tenant": tenant_id,
+        "ws": workspace_id,
+        "search": search,
+        "needle": f"%{search.lower()}%",
+        "status": status,
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
     }
     total = int(session.scalar(text(f"SELECT count(*) FROM ({filtered}) counted"), parameters) or 0)
     rows = session.execute(
-        text(f"{filtered} ORDER BY updated_at DESC, id DESC LIMIT :limit OFFSET :offset"), parameters,
+        text(f"{filtered} ORDER BY updated_at DESC, id DESC LIMIT :limit OFFSET :offset"),
+        parameters,
     ).mappings()
     return [_row(dict(item)) for item in rows], total
 
 
 def _finance_records(
-    session: Session, resource: str, tenant_id: str, workspace_id: str, *, page: int, page_size: int,
-    search: str, status: str | None,
+    session: Session,
+    resource: str,
+    tenant_id: str,
+    workspace_id: str,
+    *,
+    page: int,
+    page_size: int,
+    search: str,
+    status: str | None,
 ) -> tuple[list[dict[str, object]], int]:
     statements = {
         "billing": """SELECT workspace_id id, '算力账户 '||workspace_id name, 'active' status,
@@ -393,13 +461,21 @@ def _finance_records(
     statement = statements.get(resource)
     if statement is None:
         raise HTTPException(422, detail={"code": "UNSUPPORTED_RESOURCE"})
-    return _query(session, statement, tenant_id, workspace_id, page=page, page_size=page_size,
-                  search=search, status=status)
+    return _query(
+        session, statement, tenant_id, workspace_id, page=page, page_size=page_size, search=search, status=status
+    )
 
 
 def _model_records(
-    session: Session, resource: str, tenant_id: str, workspace_id: str, *, page: int, page_size: int,
-    search: str, status: str | None,
+    session: Session,
+    resource: str,
+    tenant_id: str,
+    workspace_id: str,
+    *,
+    page: int,
+    page_size: int,
+    search: str,
+    status: str | None,
 ) -> tuple[list[dict[str, object]], int]:
     statements = {
         "models": """SELECT definition.registry_key id, definition.display_name name,
@@ -439,8 +515,9 @@ def _model_records(
     statement = statements.get(resource)
     if statement is None:
         raise HTTPException(422, detail={"code": "UNSUPPORTED_RESOURCE"})
-    return _query(session, statement, tenant_id, workspace_id, page=page, page_size=page_size,
-                  search=search, status=status)
+    return _query(
+        session, statement, tenant_id, workspace_id, page=page, page_size=page_size, search=search, status=status
+    )
 
 
 def _apply_action(
@@ -461,13 +538,21 @@ def _apply_action(
 
     if payload.action in {"发起调账", "确认对账", "执行退款审批"}:
         operation_type = {
-            "发起调账": "adjustment", "确认对账": "reconciliation", "执行退款审批": "refund",
+            "发起调账": "adjustment",
+            "确认对账": "reconciliation",
+            "执行退款审批": "refund",
         }[payload.action]
-        operation = session.scalar(select(FinanceOperationRow).where(
-            FinanceOperationRow.operation_id == payload.objectId,
-            FinanceOperationRow.tenant_id == trusted.tenant_id,
-            FinanceOperationRow.workspace_id == trusted.workspace_id,
-        ))
+        operation = session.scalar(
+            select(FinanceOperationRow).where(
+                FinanceOperationRow.operation_id == payload.objectId,
+                FinanceOperationRow.tenant_id == trusted.tenant_id,
+                FinanceOperationRow.workspace_id == trusted.workspace_id,
+            )
+        )
+        if payload.action == "执行退款审批" and (
+            operation is None or operation.operation_type != "support_compensation"
+        ):
+            raise HTTPException(503, detail={"code": "PAYMENT_USE_UNIFIED_GATEWAY"})
         if operation:
             if operation.version != payload.version:
                 raise HTTPException(409, detail={"code": "VERSION_CONFLICT"})
@@ -488,7 +573,9 @@ def _apply_action(
             operation.version += 1
             operation.updated_at = now
             return {"status": "pending", "version": payload.version}, {
-                "id": operation.operation_id, "status": operation.status, "version": operation.version,
+                "id": operation.operation_id,
+                "status": operation.status,
+                "version": operation.version,
             }
         amount_minor, currency = (0, "CNY")
         if operation_type == "adjustment":
@@ -503,11 +590,17 @@ def _apply_action(
                 raise HTTPException(422, detail={"code": "ADJUSTMENT_REASON_REQUIRED"})
             amount_minor, currency = amount, requested_currency.strip().upper()
         if operation_type == "refund":
-            order = session.execute(text(
-                "SELECT amount_minor,currency,status FROM xingjing_team_billing_orders "
-                "WHERE tenant_id=:tenant AND workspace_id=:ws AND order_id=:id FOR UPDATE"
-            ), {"tenant": trusted.tenant_id, "ws": trusted.workspace_id,
-                "id": payload.objectId}).mappings().first()
+            order = (
+                session.execute(
+                    text(
+                        "SELECT amount_minor,currency,status FROM xingjing_team_billing_orders "
+                        "WHERE tenant_id=:tenant AND workspace_id=:ws AND order_id=:id FOR UPDATE"
+                    ),
+                    {"tenant": trusted.tenant_id, "ws": trusted.workspace_id, "id": payload.objectId},
+                )
+                .mappings()
+                .first()
+            )
             if order is None:
                 raise HTTPException(404, detail={"code": "ORDER_NOT_FOUND"})
             if str(order["status"]) != "paid":
@@ -519,13 +612,21 @@ def _apply_action(
             result_payload = _reconcile_supplier_lines(session, trusted, payload.payload)
             operation_status = "review_required" if result_payload["differences"] else "matched"
         operation = FinanceOperationRow(
-            operation_id=payload.objectId, tenant_id=trusted.tenant_id,
+            operation_id=payload.objectId,
+            tenant_id=trusted.tenant_id,
             workspace_id=trusted.workspace_id,
-            operation_type=operation_type, object_id=payload.objectId, amount_minor=amount_minor,
-            currency=currency, status=operation_status, reason=payload.reason or payload.action,
+            operation_type=operation_type,
+            object_id=payload.objectId,
+            amount_minor=amount_minor,
+            currency=currency,
+            status=operation_status,
+            reason=payload.reason or payload.action,
             result_payload=result_payload,
-            requested_by=trusted.actor_id, approved_by=None, version=1,
-            created_at=now, updated_at=now,
+            requested_by=trusted.actor_id,
+            approved_by=None,
+            version=1,
+            created_at=now,
+            updated_at=now,
         )
         session.add(operation)
         return {}, {
@@ -536,11 +637,17 @@ def _apply_action(
         }
 
     if payload.action in {"更新权益", "保存套餐", "发布套餐"}:
-        plan = session.execute(text(
-            "SELECT version,status,seat_limit,features,quotas,quota_remaining FROM xingjing_team_billing_plans "
-            "WHERE tenant_id=:tenant AND workspace_id=:ws AND (workspace_id=:id OR plan_id=:id) FOR UPDATE"
-        ), {"tenant": trusted.tenant_id, "ws": trusted.workspace_id,
-            "id": payload.objectId}).mappings().first()
+        plan = (
+            session.execute(
+                text(
+                    "SELECT version,status,seat_limit,features,quotas,quota_remaining FROM xingjing_team_billing_plans "
+                    "WHERE tenant_id=:tenant AND workspace_id=:ws AND (workspace_id=:id OR plan_id=:id) FOR UPDATE"
+                ),
+                {"tenant": trusted.tenant_id, "ws": trusted.workspace_id, "id": payload.objectId},
+            )
+            .mappings()
+            .first()
+        )
         if plan is None:
             raise HTTPException(404, detail={"code": "PLAN_NOT_FOUND"})
         if int(plan["version"]) != payload.version:
@@ -561,31 +668,62 @@ def _apply_action(
         remaining_map = cast(dict[str, int], quota_remaining)
         if any(remaining_map.get(key, 0) > value for key, value in quota_map.items()):
             raise HTTPException(422, detail={"code": "PLAN_QUOTA_REMAINING_EXCEEDS_LIMIT"})
-        session.execute(text(
-            "UPDATE xingjing_team_billing_plans SET status=:status,seat_limit=:seat_limit,"
-            "features=CAST(:features AS jsonb),quotas=CAST(:quotas AS jsonb),"
-            "quota_remaining=CAST(:quota_remaining AS jsonb),version=version+1,updated_at=:now "
-            "WHERE tenant_id=:tenant AND workspace_id=:ws "
-            "AND (workspace_id=:id OR plan_id=:id) AND version=:version"
-        ), {"status": status, "seat_limit": seat_limit,
-            "features": json.dumps(features), "quotas": json.dumps(quotas),
-            "quota_remaining": json.dumps(quota_remaining), "now": now, "ws": trusted.workspace_id,
-            "tenant": trusted.tenant_id, "id": payload.objectId, "version": payload.version})
-        return {"status": plan["status"], "version": payload.version,
-                "seatLimit": plan["seat_limit"], "features": plan["features"], "quotas": plan["quotas"]}, {
-            "id": payload.objectId, "status": status, "version": payload.version + 1,
-            "seatLimit": seat_limit, "features": features, "quotas": quotas,
+        session.execute(
+            text(
+                "UPDATE xingjing_team_billing_plans SET status=:status,seat_limit=:seat_limit,"
+                "features=CAST(:features AS jsonb),quotas=CAST(:quotas AS jsonb),"
+                "quota_remaining=CAST(:quota_remaining AS jsonb),version=version+1,updated_at=:now "
+                "WHERE tenant_id=:tenant AND workspace_id=:ws "
+                "AND (workspace_id=:id OR plan_id=:id) AND version=:version"
+            ),
+            {
+                "status": status,
+                "seat_limit": seat_limit,
+                "features": json.dumps(features),
+                "quotas": json.dumps(quotas),
+                "quota_remaining": json.dumps(quota_remaining),
+                "now": now,
+                "ws": trusted.workspace_id,
+                "tenant": trusted.tenant_id,
+                "id": payload.objectId,
+                "version": payload.version,
+            },
+        )
+        return {
+            "status": plan["status"],
+            "version": payload.version,
+            "seatLimit": plan["seat_limit"],
+            "features": plan["features"],
+            "quotas": plan["quotas"],
+        }, {
+            "id": payload.objectId,
+            "status": status,
+            "version": payload.version + 1,
+            "seatLimit": seat_limit,
+            "features": features,
+            "quotas": quotas,
         }
+
+    if payload.action == "更新订单":
+        raise HTTPException(503, detail={"code": "PAYMENT_USE_UNIFIED_GATEWAY"})
 
     if payload.action in {"执行审批", "更新订单"}:
         table = "xingjing_team_invoice_requests" if payload.action == "执行审批" else "xingjing_team_billing_orders"
         id_column = "invoice_id" if payload.action == "执行审批" else "order_id"
-        selected_fields = "status,version,requested_by" if id_column == "invoice_id" else "status,version,external_reference"
-        row = session.execute(text(
-            f"SELECT {selected_fields} FROM {table} "
-            f"WHERE tenant_id=:tenant AND workspace_id=:ws AND {id_column}=:id FOR UPDATE"
-        ), {"tenant": trusted.tenant_id, "ws": trusted.workspace_id,
-            "id": payload.objectId}).mappings().first()
+        selected_fields = (
+            "status,version,requested_by" if id_column == "invoice_id" else "status,version,external_reference"
+        )
+        row = (
+            session.execute(
+                text(
+                    f"SELECT {selected_fields} FROM {table} "
+                    f"WHERE tenant_id=:tenant AND workspace_id=:ws AND {id_column}=:id FOR UPDATE"
+                ),
+                {"tenant": trusted.tenant_id, "ws": trusted.workspace_id, "id": payload.objectId},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             raise HTTPException(404, detail={"code": "FINANCE_OBJECT_NOT_FOUND"})
         current_version = int(row["version"])
@@ -599,13 +737,21 @@ def _apply_action(
             if str(row["status"]) != "pending":
                 raise HTTPException(409, detail={"code": "INVOICE_NOT_APPROVABLE"})
             next_status = "approved"
-            session.execute(text(
-                "UPDATE xingjing_team_invoice_requests SET status='approved',approved_by=:actor,"
-                "version=version+1,updated_at=:now WHERE tenant_id=:tenant AND workspace_id=:ws "
-                "AND invoice_id=:id AND version=:version"
-            ), {"actor": trusted.actor_id, "now": now, "tenant": trusted.tenant_id,
-                "ws": trusted.workspace_id,
-                "id": payload.objectId, "version": payload.version})
+            session.execute(
+                text(
+                    "UPDATE xingjing_team_invoice_requests SET status='approved',approved_by=:actor,"
+                    "version=version+1,updated_at=:now WHERE tenant_id=:tenant AND workspace_id=:ws "
+                    "AND invoice_id=:id AND version=:version"
+                ),
+                {
+                    "actor": trusted.actor_id,
+                    "now": now,
+                    "tenant": trusted.tenant_id,
+                    "ws": trusted.workspace_id,
+                    "id": payload.objectId,
+                    "version": payload.version,
+                },
+            )
         else:
             values = payload.payload or {}
             requested_status = values.get("status", row["status"])
@@ -617,16 +763,27 @@ def _apply_action(
             if external_reference is not None and not isinstance(external_reference, str):
                 raise HTTPException(422, detail={"code": "ORDER_EXTERNAL_REFERENCE_INVALID"})
             next_status = str(requested_status)
-            session.execute(text(
-                "UPDATE xingjing_team_billing_orders SET status=:status,external_reference=:external_reference,"
-                "closed_at=CASE WHEN :status='closed' THEN :now ELSE closed_at END,"
-                "version=version+1,updated_at=:now WHERE tenant_id=:tenant AND workspace_id=:ws "
-                "AND order_id=:id AND version=:version"
-            ), {"status": next_status, "external_reference": external_reference, "now": now,
-                "tenant": trusted.tenant_id, "ws": trusted.workspace_id,
-                "id": payload.objectId, "version": payload.version})
+            session.execute(
+                text(
+                    "UPDATE xingjing_team_billing_orders SET status=:status,external_reference=:external_reference,"
+                    "closed_at=CASE WHEN :status='closed' THEN :now ELSE closed_at END,"
+                    "version=version+1,updated_at=:now WHERE tenant_id=:tenant AND workspace_id=:ws "
+                    "AND order_id=:id AND version=:version"
+                ),
+                {
+                    "status": next_status,
+                    "external_reference": external_reference,
+                    "now": now,
+                    "tenant": trusted.tenant_id,
+                    "ws": trusted.workspace_id,
+                    "id": payload.objectId,
+                    "version": payload.version,
+                },
+            )
         return {"status": row["status"], "version": current_version}, {
-            "id": payload.objectId, "status": next_status, "version": current_version + 1,
+            "id": payload.objectId,
+            "status": next_status,
+            "version": current_version + 1,
         }
 
     if payload.action in {"导出对账", "导出收入"}:
@@ -636,25 +793,40 @@ def _apply_action(
 
 def _valid_quota_map(value: object) -> bool:
     return isinstance(value, dict) and all(
-        isinstance(key, str) and key.strip() and isinstance(amount, int)
-        and not isinstance(amount, bool) and amount >= 0
+        isinstance(key, str)
+        and key.strip()
+        and isinstance(amount, int)
+        and not isinstance(amount, bool)
+        and amount >= 0
         for key, amount in value.items()
     )
 
 
 def _create_finance_export(
-    session: Session, trusted: TrustedWorkspaceContext, action: str, now: datetime,
+    session: Session,
+    trusted: TrustedWorkspaceContext,
+    action: str,
+    now: datetime,
 ) -> dict[str, object]:
     export_kind = "reconciliation" if action == "导出对账" else "revenue"
     if export_kind == "reconciliation":
-        rows = session.execute(text("""
+        rows = (
+            session.execute(
+                text("""
             SELECT operation_id id,operation_type type,object_id,status,amount_minor,currency,
                    reason,updated_at FROM xingjing_admin_finance_operations
              WHERE tenant_id=:tenant AND workspace_id=:workspace ORDER BY updated_at,operation_id
-        """), {"tenant": trusted.tenant_id, "workspace": trusted.workspace_id}).mappings().all()
+        """),
+                {"tenant": trusted.tenant_id, "workspace": trusted.workspace_id},
+            )
+            .mappings()
+            .all()
+        )
         fields = ("id", "type", "object_id", "status", "amount_minor", "currency", "reason", "updated_at")
     else:
-        rows = session.execute(text("""
+        rows = (
+            session.execute(
+                text("""
             SELECT order_id id,'credit_order' source,status,amount_minor gross_minor,
                    refunded_minor,amount_minor-refunded_minor net_minor,currency,updated_at
               FROM xingjing_team_billing_orders
@@ -667,23 +839,44 @@ def _create_finance_export(
               CROSS JOIN LATERAL jsonb_array_elements(COALESCE(orders.aggregate->'settlements','[]'::jsonb)) settlement
              WHERE orders.owner_workspace_id=:workspace AND settlement->>'status'='paid'
              ORDER BY updated_at,id
-        """), {"tenant": trusted.tenant_id, "workspace": trusted.workspace_id}).mappings().all()
+        """),
+                {"tenant": trusted.tenant_id, "workspace": trusted.workspace_id},
+            )
+            .mappings()
+            .all()
+        )
         fields = ("id", "source", "status", "gross_minor", "refunded_minor", "net_minor", "currency", "updated_at")
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow({field: row[field].isoformat() if isinstance(row[field], datetime) else row[field] for field in fields})
+        writer.writerow(
+            {field: row[field].isoformat() if isinstance(row[field], datetime) else row[field] for field in fields}
+        )
     content = output.getvalue()
     export_id = str(uuid4())
     digest = "sha256:" + sha256(content.encode()).hexdigest()
-    session.add(FinanceExportRow(
-        export_id=export_id, tenant_id=trusted.tenant_id, workspace_id=trusted.workspace_id,
-        export_kind=export_kind, content_csv=content, content_sha256=digest,
-        row_count=len(rows), created_by=trusted.actor_id, created_at=now,
-    ))
-    return {"id": export_id, "status": "ready", "version": 1, "rowCount": len(rows),
-            "contentSha256": digest, "downloadUrl": f"/api/v1/admin/finance/exports/{export_id}"}
+    session.add(
+        FinanceExportRow(
+            export_id=export_id,
+            tenant_id=trusted.tenant_id,
+            workspace_id=trusted.workspace_id,
+            export_kind=export_kind,
+            content_csv=content,
+            content_sha256=digest,
+            row_count=len(rows),
+            created_by=trusted.actor_id,
+            created_at=now,
+        )
+    )
+    return {
+        "id": export_id,
+        "status": "ready",
+        "version": 1,
+        "rowCount": len(rows),
+        "contentSha256": digest,
+        "downloadUrl": f"/api/v1/admin/finance/exports/{export_id}",
+    }
 
 
 def _reconcile_supplier_lines(
@@ -738,7 +931,13 @@ def _reconcile_supplier_lines(
         external_minor = external.get((reference, currency))
         if internal_minor == external_minor:
             continue
-        kind = "missing_external" if external_minor is None else "unexpected_external" if internal_minor is None else "amount_mismatch"
+        kind = (
+            "missing_external"
+            if external_minor is None
+            else "unexpected_external"
+            if internal_minor is None
+            else "amount_mismatch"
+        )
         differences.append(
             {
                 "kind": kind,
@@ -766,140 +965,127 @@ def _approve_adjustment(
         raise HTTPException(403, detail={"code": "ADJUSTMENT_APPROVAL_PERMISSION_REQUIRED"})
     if operation.operation_type != "adjustment" or operation.status != "pending":
         raise HTTPException(409, detail={"code": "ADJUSTMENT_NOT_APPROVABLE"})
-    account = session.execute(text(
-        "SELECT available_minor,currency FROM xingjing_generation_billing_accounts "
-        "WHERE workspace_id=:ws FOR UPDATE"
-    ), {"ws": operation.workspace_id}).mappings().first()
+    account = (
+        session.execute(
+            text(
+                "SELECT available_minor,currency FROM xingjing_generation_billing_accounts "
+                "WHERE workspace_id=:ws FOR UPDATE"
+            ),
+            {"ws": operation.workspace_id},
+        )
+        .mappings()
+        .first()
+    )
     if account is None or str(account["currency"]) != operation.currency:
         raise HTTPException(409, detail={"code": "CREDIT_ACCOUNT_NOT_FOUND_OR_CURRENCY_MISMATCH"})
     next_available = int(account["available_minor"]) + operation.amount_minor
     if next_available < 0:
         raise HTTPException(409, detail={"code": "ADJUSTMENT_BALANCE_INSUFFICIENT"})
-    session.execute(text(
-        "UPDATE xingjing_generation_billing_accounts SET available_minor=:available,"
-        "version=version+1,updated_at=:now WHERE workspace_id=:ws"
-    ), {"available": next_available, "now": now, "ws": operation.workspace_id})
-    session.execute(text("""
+    session.execute(
+        text(
+            "UPDATE xingjing_generation_billing_accounts SET available_minor=:available,"
+            "version=version+1,updated_at=:now WHERE workspace_id=:ws"
+        ),
+        {"available": next_available, "now": now, "ws": operation.workspace_id},
+    )
+    session.execute(
+        text("""
         INSERT INTO xingjing_generation_billing_journals
           (event_id,workspace_id,project_id,task_id,action,currency,amount_minor,
            postings,reference,occurred_at)
         VALUES
           (:event_id,:workspace_id,'platform',NULL,'admin_adjustment',:currency,:amount_minor,
            CAST(:postings AS jsonb),:reference,:occurred_at)
-    """), {
-        "event_id": f"adjustment:{operation.operation_id}",
-        "workspace_id": operation.workspace_id,
-        "currency": operation.currency,
-        "amount_minor": operation.amount_minor,
-        "postings": json.dumps([
-            {"account": "platform.adjustment", "amountMinor": -operation.amount_minor},
-            {"account": "credit.available", "amountMinor": operation.amount_minor},
-        ]),
-        "reference": f"adjustment:{operation.object_id}:{trusted.request_id}",
-        "occurred_at": now,
-    })
+    """),
+        {
+            "event_id": f"adjustment:{operation.operation_id}",
+            "workspace_id": operation.workspace_id,
+            "currency": operation.currency,
+            "amount_minor": operation.amount_minor,
+            "postings": json.dumps(
+                [
+                    {"account": "platform.adjustment", "amountMinor": -operation.amount_minor},
+                    {"account": "credit.available", "amountMinor": operation.amount_minor},
+                ]
+            ),
+            "reference": f"adjustment:{operation.object_id}:{trusted.request_id}",
+            "occurred_at": now,
+        },
+    )
 
 
 def _approve_refund(
-    session: Session, operation: FinanceOperationRow,
-    trusted: TrustedWorkspaceContext, now: datetime,
+    session: Session,
+    operation: FinanceOperationRow,
+    trusted: TrustedWorkspaceContext,
+    now: datetime,
 ) -> None:
     if "admin.finance.approve" not in trusted.permissions:
         raise HTTPException(403, detail={"code": "REFUND_APPROVAL_PERMISSION_REQUIRED"})
     if operation.operation_type == "support_compensation":
         if operation.status != "pending_approval":
             raise HTTPException(409, detail={"code": "COMPENSATION_NOT_APPROVABLE"})
-        account = session.execute(text(
-            "SELECT available_minor,version FROM xingjing_generation_billing_accounts "
-            "WHERE workspace_id=:ws FOR UPDATE"
-        ), {"ws": operation.workspace_id}).mappings().first()
+        account = (
+            session.execute(
+                text(
+                    "SELECT available_minor,version FROM xingjing_generation_billing_accounts "
+                    "WHERE workspace_id=:ws FOR UPDATE"
+                ),
+                {"ws": operation.workspace_id},
+            )
+            .mappings()
+            .first()
+        )
         if account is None:
             raise HTTPException(409, detail={"code": "CREDIT_ACCOUNT_NOT_FOUND"})
-        session.execute(text(
-            "UPDATE xingjing_generation_billing_accounts SET available_minor=available_minor+:amount,"
-            "version=version+1,updated_at=:now WHERE workspace_id=:ws"
-        ), {"amount": operation.amount_minor, "now": now, "ws": operation.workspace_id})
-        session.execute(text("""
+        session.execute(
+            text(
+                "UPDATE xingjing_generation_billing_accounts SET available_minor=available_minor+:amount,"
+                "version=version+1,updated_at=:now WHERE workspace_id=:ws"
+            ),
+            {"amount": operation.amount_minor, "now": now, "ws": operation.workspace_id},
+        )
+        session.execute(
+            text("""
             INSERT INTO xingjing_generation_billing_journals
               (event_id,workspace_id,project_id,task_id,action,currency,amount_minor,
                postings,reference,occurred_at)
             VALUES
               (:event_id,:workspace_id,'platform',NULL,'support_compensation',
                :currency,:amount_minor,CAST(:postings AS jsonb),:reference,:occurred_at)
-        """), {
-            "event_id": f"support-compensation:{operation.operation_id}",
-            "workspace_id": operation.workspace_id,
-            "currency": operation.currency,
-            "amount_minor": operation.amount_minor,
-            "postings": json.dumps([
-                {"account": "support.compensation_expense", "direction": "debit",
-                 "amountMinor": operation.amount_minor},
-                {"account": "credit.available", "direction": "credit",
-                 "amountMinor": operation.amount_minor},
-            ]),
-            "reference": f"support:{operation.object_id}:{trusted.request_id}",
-            "occurred_at": now,
-        })
-        session.execute(text(
-            "UPDATE xingjing_admin_governance_objects "
-            "SET status='completed',version=version+1,updated_by=:actor,updated_at=:now "
-            "WHERE tenant_id=:tenant AND workspace_id=:ws AND resource='tickets' AND object_id=:ticket"
-        ), {
-            "actor": trusted.actor_id,
-            "now": now,
-            "tenant": operation.tenant_id,
-            "ws": operation.workspace_id,
-            "ticket": operation.object_id,
-        })
+        """),
+            {
+                "event_id": f"support-compensation:{operation.operation_id}",
+                "workspace_id": operation.workspace_id,
+                "currency": operation.currency,
+                "amount_minor": operation.amount_minor,
+                "postings": json.dumps(
+                    [
+                        {
+                            "account": "support.compensation_expense",
+                            "direction": "debit",
+                            "amountMinor": operation.amount_minor,
+                        },
+                        {"account": "credit.available", "direction": "credit", "amountMinor": operation.amount_minor},
+                    ]
+                ),
+                "reference": f"support:{operation.object_id}:{trusted.request_id}",
+                "occurred_at": now,
+            },
+        )
+        session.execute(
+            text(
+                "UPDATE xingjing_admin_governance_objects "
+                "SET status='completed',version=version+1,updated_by=:actor,updated_at=:now "
+                "WHERE tenant_id=:tenant AND workspace_id=:ws AND resource='tickets' AND object_id=:ticket"
+            ),
+            {
+                "actor": trusted.actor_id,
+                "now": now,
+                "tenant": operation.tenant_id,
+                "ws": operation.workspace_id,
+                "ticket": operation.object_id,
+            },
+        )
         return
-    if operation.operation_type != "refund" or operation.status != "pending":
-        raise HTTPException(409, detail={"code": "REFUND_NOT_APPROVABLE"})
-    order = session.execute(text(
-        "SELECT amount_minor,currency,status,version,refunded_minor FROM xingjing_team_billing_orders "
-        "WHERE tenant_id=:tenant AND workspace_id=:ws AND order_id=:id FOR UPDATE"
-    ), {"tenant": operation.tenant_id, "ws": operation.workspace_id,
-        "id": operation.object_id}).mappings().first()
-    if (
-        order is None
-        or str(order["status"]) != "paid"
-        or int(order["refunded_minor"]) + operation.amount_minor > int(order["amount_minor"])
-    ):
-        raise HTTPException(409, detail={"code": "ORDER_NOT_REFUNDABLE"})
-    account = session.execute(text(
-        "SELECT available_minor,version FROM xingjing_generation_billing_accounts "
-        "WHERE workspace_id=:ws FOR UPDATE"
-    ), {"ws": operation.workspace_id}).mappings().first()
-    if account is None:
-        raise HTTPException(409, detail={"code": "CREDIT_ACCOUNT_NOT_FOUND"})
-    if int(account["available_minor"]) < operation.amount_minor:
-        raise HTTPException(409, detail={"code": "REFUND_BALANCE_INSUFFICIENT"})
-    session.execute(text(
-        "UPDATE xingjing_generation_billing_accounts SET available_minor=available_minor-:amount,"
-        "version=version+1,updated_at=:now WHERE workspace_id=:ws"
-    ), {"amount": operation.amount_minor, "now": now, "ws": operation.workspace_id})
-    session.execute(text(
-        "UPDATE xingjing_team_billing_orders SET "
-        "refunded_minor=refunded_minor+:amount,"
-        "status=CASE WHEN refunded_minor+:amount=amount_minor THEN 'refunded' ELSE 'paid' END,"
-        "version=version+1,updated_at=:now "
-        "WHERE tenant_id=:tenant AND workspace_id=:ws AND order_id=:id"
-    ), {"amount": operation.amount_minor, "now": now, "tenant": operation.tenant_id,
-        "ws": operation.workspace_id, "id": operation.object_id})
-    session.execute(text("""
-        INSERT INTO xingjing_generation_billing_journals
-          (event_id,workspace_id,project_id,task_id,action,currency,amount_minor,postings,reference,occurred_at)
-        VALUES
-          (:event_id,:workspace_id,'platform',NULL,'refund',:currency,:amount_minor,
-           CAST(:postings AS jsonb),:reference,:occurred_at)
-    """), {
-        "event_id": f"refund:{operation.operation_id}",
-        "workspace_id": operation.workspace_id,
-        "currency": operation.currency,
-        "amount_minor": operation.amount_minor,
-        "postings": json.dumps([
-            {"account": "credit.available", "direction": "debit", "amountMinor": operation.amount_minor},
-            {"account": "refund.payable", "direction": "credit", "amountMinor": operation.amount_minor},
-        ]),
-        "reference": f"refund:{operation.object_id}:{trusted.request_id}",
-        "occurred_at": now,
-    })
+    raise HTTPException(503, detail={"code": "PAYMENT_USE_UNIFIED_GATEWAY"})

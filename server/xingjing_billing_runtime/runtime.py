@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -9,7 +8,6 @@ import os
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import suppress
 from csv import DictWriter
 from datetime import UTC, datetime
 from inspect import isawaitable
@@ -29,7 +27,6 @@ from server.xingjing_audio_persistence.models import (
     generation_tasks as audio_generation_tasks,
 )
 from server.xingjing_billing_persistence import BillingFinanceRepository
-from server.xingjing_billing_persistence.models import BillingOrderRow
 from server.xingjing_editing_persistence.models import (
     EditingAuditRow,
     EditingRenderBillingHoldRow,
@@ -53,7 +50,15 @@ from server.xingjing_identity_context import (
     TrustedWorkspaceContext,
     TrustedWorkspaceContextResolver,
 )
+from server.xingjing_team_persistence.repository import WorkspaceRow
 
+from .billing_workspace import (
+    BillingWorkspaceUnavailable,
+    available_delta,
+    ledger_item,
+    project_workspace,
+    require_workspace_database,
+)
 from .query import BillingPageQuery, filter_records
 
 type ContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
@@ -82,48 +87,20 @@ class BillingRuntime:
         self._engine: AsyncEngine | None = engine
         self._context_resolver = context_resolver
         self._payment_callback_secret = payment_callback_secret
-        self._payment_sweeper: asyncio.Task[None] | None = None
+        self._payment_status: Callable[[], dict[str, object]] | None = None
 
     async def start(self) -> None:
-        if self._payment_sweeper is None:
-            self._payment_sweeper = asyncio.create_task(self._payment_sweeper_loop())
-
-    async def _payment_sweeper_loop(self) -> None:
-        while True:
-            try:
-                await self.close_expired_payment_orders()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Payment order expiry reconciliation failed")
-            await asyncio.sleep(60)
+        # The unified payment runtime owns expiry and reconciliation.
+        return None
 
     async def close_expired_payment_orders(self) -> int:
-        now = datetime.now(UTC)
-        async with self._session_factory() as session:
-            scopes = list(
-                (
-                    await session.execute(
-                        select(BillingOrderRow.tenant_id, BillingOrderRow.workspace_id)
-                        .where(BillingOrderRow.status == "pending", BillingOrderRow.expires_at <= now)
-                        .distinct()
-                    )
-                ).all()
-            )
-        return sum(
-            [
-                await BillingFinanceRepository(
-                    self._session_factory,
-                    tenant_id=tenant_id,
-                    workspace_id=workspace_id,
-                ).close_expired_payment_orders(now=now)
-                for tenant_id, workspace_id in scopes
-            ]
-        )
+        raise BillingRuntimeConfigurationError("PAYMENT_USE_UNIFIED_GATEWAY")
 
     async def apply_payment_callback(
         self, *, raw_body: bytes, signature: str, expected_workspace_id: str | None = None
     ) -> dict[str, object]:
+        # Only explicitly injected internal adapters retain this compatibility path.
+        # Production HTTP callbacks are served by the unified payment runtime.
         secret = self._payment_callback_secret
         if not secret:
             raise BillingRuntimeConfigurationError("PAYMENT_CALLBACK_NOT_CONFIGURED")
@@ -165,7 +142,7 @@ class BillingRuntime:
         idempotency_key: str,
         expires_at: datetime,
     ) -> dict[str, object]:
-        raise BillingRuntimeConfigurationError("PAYMENT_PROVIDER_NOT_CONFIGURED")
+        raise BillingRuntimeConfigurationError("PAYMENT_USE_UNIFIED_GATEWAY")
 
     async def refund_payment_order(
         self,
@@ -175,7 +152,7 @@ class BillingRuntime:
         amount_minor: int,
         idempotency_key: str,
     ) -> dict[str, object]:
-        raise BillingRuntimeConfigurationError("PAYMENT_PROVIDER_NOT_CONFIGURED")
+        raise BillingRuntimeConfigurationError("PAYMENT_USE_UNIFIED_GATEWAY")
 
     async def resolve(self, request: Request, workspace_id: str, permission: str) -> TrustedWorkspaceContext:
         context = self._context_resolver(request)
@@ -186,6 +163,56 @@ class BillingRuntime:
         if permission not in context.permissions:
             raise BillingRuntimePermissionDenied(permission)
         return context
+
+    def set_payment_status(self, callback: Callable[[], dict[str, object]]) -> None:
+        self._payment_status = callback
+
+    async def workspace(
+        self,
+        context: TrustedWorkspaceContext,
+        page: BillingPageQuery,
+    ) -> dict[str, object]:
+        if context.role.casefold() == "api_key" or "billing.view" not in context.permissions:
+            raise BillingRuntimePermissionDenied("BILLING_INTERACTIVE_SESSION_REQUIRED")
+        payment = (
+            self._payment_status()
+            if self._payment_status is not None
+            else {
+                "configured": False,
+                "reason": "PAYMENT_PROVIDER_NOT_CONFIGURED",
+            }
+        )
+        async with self._session_factory() as session, session.begin():
+            require_workspace_database(session.get_bind().engine.url)
+            tenants = list(
+                (
+                    await session.scalars(
+                        select(WorkspaceRow.tenant_id).where(
+                            WorkspaceRow.workspace_id == context.workspace_id,
+                        )
+                    )
+                ).all()
+            )
+            if tenants != [context.tenant_id]:
+                raise BillingWorkspaceUnavailable("BILLING_WORKSPACE_SCOPE_UNVERIFIED")
+            account, _holds, journals = await self._billing_records(context, session=session)
+            plan = await self._finance_repository(context).plan(session=session)
+            result, records = project_workspace(
+                context,
+                account,
+                journals,
+                plan,
+                page,
+                payment,
+                now=datetime.now(UTC),
+            )
+            selected, token = _page_records(records, page)
+            result["ledger"] = {
+                "items": [ledger_item(row) for row in selected],
+                "nextToken": token,
+                "pageSize": page.page_size,
+            }
+        return result
 
     async def billing(self, context: TrustedWorkspaceContext, page: BillingPageQuery) -> dict[str, object]:
         async with self._session_factory() as session:
@@ -429,7 +456,7 @@ class BillingRuntime:
             "held_minor": 0 if account_row is None else account_row.held_minor,
             "spent_minor": 0 if account_row is None else account_row.spent_minor,
             "version": 0 if account_row is None else account_row.version,
-            "updated_at": None if account_row is None else account_row.updated_at.isoformat(),
+            "updated_at": None if account_row is None else _iso(account_row.updated_at),
         }
         holds = (
             [_hold(row, source="generation") for row in generation_holds]
@@ -469,11 +496,6 @@ class BillingRuntime:
         )
 
     async def close(self) -> None:
-        if self._payment_sweeper is not None:
-            self._payment_sweeper.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._payment_sweeper
-            self._payment_sweeper = None
         if self._engine is not None:
             engine, self._engine = self._engine, None
             await engine.dispose()
@@ -490,7 +512,6 @@ def create_production_billing_runtime() -> BillingRuntime:
         session_factory=async_sessionmaker(engine, expire_on_commit=False),
         engine=engine,
         context_resolver=TrustedWorkspaceContextResolver(PlatformSessionGateway()),
-        payment_callback_secret=os.environ.get("XINGJING_PAYMENT_CALLBACK_SECRET", "").strip() or None,
     )
 
 
@@ -565,6 +586,7 @@ def _journal(row: Any, *, source: str) -> dict[str, object]:
         "amount_minor": row.amount_minor,
         "currency": row.currency,
         "status": row.action,
+        "available_delta_minor": available_delta(row.postings),
         "occurred_at": _iso(getattr(row, "occurred_at", None) or getattr(row, "created_at", None)),
     }
 
@@ -579,6 +601,7 @@ def _mapping_journal(row: RowMapping, *, source: str) -> dict[str, object]:
         "amount_minor": row["amount_minor"],
         "currency": row["currency"],
         "status": row["action"],
+        "available_delta_minor": available_delta(row["postings"]),
         "occurred_at": _iso(row.get("occurred_at", row.get("created_at"))),
     }
 
@@ -586,7 +609,7 @@ def _mapping_journal(row: RowMapping, *, source: str) -> dict[str, object]:
 def _iso(value: object) -> str:
     if not isinstance(value, datetime):
         raise BillingRuntimeConfigurationError("BILLING_TIMESTAMP_INVALID")
-    return value.isoformat()
+    return (value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)).isoformat()
 
 
 def _integer(value: object) -> int:

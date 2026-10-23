@@ -1,3 +1,5 @@
+import { paymentButton, usePaymentTranslation } from "@/xingjing_payments/i18n";
+import { PaymentsWorkspace } from "@/xingjing_payments/PaymentsWorkspace";
 import { VersionWorkspace } from "@/xingjing_versions/VersionWorkspace";
 import { useMemo } from "react";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
@@ -178,7 +180,7 @@ export function WorkspaceLandingRoute({ workspaceId, surface }: { workspaceId: s
   const commercePage = { templates: "CR-112", billing: "CR-009", commercial: "CR-013", team: "CR-107" }[surface];
   if (!["home", "tasks", "templates", "billing", "commercial", "team", "settings", "analytics"].includes(surface)) return <MissingSurface />;
   return <CreatorWorkspaceFrame workspaceId={workspaceId} active={surface}>
-    {surface === "home" ? <CreatorHomePage /> : surface === "analytics" ? <CreatorAnalyticsPage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
+    {surface === "home" ? <CreatorHomePage /> : surface === "billing" ? <PaymentsWorkspace key={`${workspaceId}:${token}`} workspaceId={workspaceId} /> : surface === "analytics" ? <CreatorAnalyticsPage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
   </CreatorWorkspaceFrame>;
 }
 
@@ -418,13 +420,17 @@ export function AdminBusinessRoute({
   surface: string;
 }) {
   const token = useAuthStore((state) => state.token) ?? "";
+  const [location, navigate] = useLocation();
+  const search = useSearch();
+  const { t } = usePaymentTranslation();
   const route = resolveAdminRoute(surface);
   const modelApi = useMemo(() => createModelOperationsApi(workspaceId, token), [workspaceId, token]);
   const api = useMemo(
     () => createAdminApiClient({ sessionToken: token, workspaceId }),
     [token, workspaceId],
   );
-  return route?.id === "AD-023" ? <ModelOperationsPage key={`${workspaceId}:${token}`} workspaceId={workspaceId} api={modelApi} /> : route?.id === "AD-002" ? (
+  if (route?.id === "AD-034" && new URLSearchParams(search).get("legacy") === "compensation") return <section className="xj-payments-page"><div className="xj-payments-notice"><p>{t("legacyCompensationHelp")}</p><button type="button" className={paymentButton} onClick={() => navigate(location)}>{t("backToRefunds")}</button></div><AdminPlatform routeId="AD-034" api={api} /></section>;
+  return route?.id === "AD-026" || route?.id === "AD-034" ? <PaymentsWorkspace key={`${workspaceId}:${token}:${route.id}`} workspaceId={workspaceId} initialTab={route.id === "AD-034" ? "refunds" : "orders"} mode="admin" /> : route?.id === "AD-023" ? <ModelOperationsPage key={`${workspaceId}:${token}`} workspaceId={workspaceId} api={modelApi} /> : route?.id === "AD-002" ? (
     <OpenPlatform api={api} />
   ) : route ? (
     <AdminPlatform routeId={route.id} api={api} />
@@ -509,6 +515,7 @@ function CollaborationBusinessContent({
       />
     );
   }
+  if (pageId === "CR-009" && workspaceId) return <PaymentsWorkspace key={`${workspaceId}:${token}`} workspaceId={workspaceId} />;
   if (pageId === "CR-085") {
     return <InternalReviewPage workspaceId={workspaceId} projectId={projectId} accessToken={token} />;
   }

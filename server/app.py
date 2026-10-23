@@ -122,6 +122,7 @@ from server.xingjing_operations import (
     create_production_operations_runtime,
     create_unavailable_operations_routers,
 )
+from server.xingjing_payments import create_payment_router, create_production_payment_runtime
 from server.xingjing_projects_runtime import create_production_projects_runtime
 from server.xingjing_review_http import create_review_router, create_unavailable_review_router
 from server.xingjing_review_runtime import ReviewRuntimeConfigurationError, create_production_review_runtime
@@ -405,6 +406,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     if _billing_runtime is not None:
         await _billing_runtime.start()
+    await _payment_runtime.start()
     await _generation_runtime.start()
     await _audio_runtime.start()
 
@@ -547,6 +549,7 @@ async def lifespan(app: FastAPI):
         await _team_runtime.close()
     if _billing_runtime is not None:
         await _billing_runtime.close()
+    await _payment_runtime.close()
     if _review_runtime is not None:
         await _review_runtime.close()
     if _commercial_runtime is not None:
@@ -679,6 +682,17 @@ except (BillingRuntimeConfigurationError, ValueError) as error:
     logger.warning("M11 billing runtime unavailable: %s", error)
 else:
     _billing_router = create_billing_router(_billing_runtime)
+
+_payment_runtime = create_production_payment_runtime()
+
+
+def _billing_payment_status() -> dict[str, object]:
+    status = _payment_runtime.status()
+    return {"configured": status["configured"], "reason": status["reasonCode"]}
+
+
+if _billing_runtime is not None:
+    _billing_runtime.set_payment_status(_billing_payment_status)
 
 # M12 external review links are only served from PostgreSQL plus a deployment
 # secret.  Missing prerequisites remain a visible 503 and never become an
@@ -932,6 +946,7 @@ app.include_router(create_audio_router(_audio_runtime))
 app.include_router(_compliance_router)
 app.include_router(_team_router)
 app.include_router(_billing_router)
+app.include_router(create_payment_router(_payment_runtime))
 app.include_router(_review_router)
 app.include_router(_commercial_router, prefix="/api/v1", tags=["商单"])
 app.include_router(_editing_router)
