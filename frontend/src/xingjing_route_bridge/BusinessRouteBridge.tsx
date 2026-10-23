@@ -53,6 +53,7 @@ import {
   createCollaborationCommerceApi,
 } from "@/xingjing_collaboration_commerce";
 import { PublicReviewPage, StaffReviewPage } from "@/xingjing_review_client";
+import { InternalReviewPage } from "@/xingjing_internal_review/InternalReviewPage";
 import { CommercialWorkspace } from "@/xingjing_commercial_workspace";
 import {
   MarketplacePage,
@@ -502,7 +503,10 @@ function CollaborationBusinessContent({
       />
     );
   }
-  if (["CR-011", "CR-085", "TM-002", "TM-003"].includes(pageId)) {
+  if (pageId === "CR-085") {
+    return <InternalReviewPage workspaceId={workspaceId} projectId={projectId} accessToken={token} />;
+  }
+  if (["CR-011", "TM-002", "TM-003"].includes(pageId)) {
     return (
       <StaffReviewPage
         pageId={pageId as "CR-011" | "CR-085" | "TM-002" | "TM-003"}

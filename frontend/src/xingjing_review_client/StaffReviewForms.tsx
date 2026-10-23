@@ -4,13 +4,13 @@ import type { CreateReviewLinkInput, ReviewLink, ReviewPolicy } from "./api";
 import { inputClass, primaryClass } from "./components";
 import { useReviewTranslation } from "./i18n";
 
-export function LinkForm({ projectId, workspaceMode, pending, onCreate, loadDefaults }: {
-  projectId?: string; workspaceMode: boolean; pending: boolean;
+export function LinkForm({ projectId, initialFinalVersionId, workspaceMode, pending, onCreate, loadDefaults }: {
+  projectId?: string; initialFinalVersionId?: string; workspaceMode: boolean; pending: boolean;
   onCreate: (input: CreateReviewLinkInput & { projectId?: string }) => Promise<boolean>;
   loadDefaults?: (projectId: string, signal?: AbortSignal) => Promise<ReviewPolicy>;
 }) {
   const { t } = useReviewTranslation();
-  const [videoVersion, setVideoVersion] = useState("");
+  const [videoVersion, setVideoVersion] = useState(initialFinalVersionId ?? "");
   const [targetProject, setTargetProject] = useState(projectId ?? "");
   const [expiresAt, setExpiresAt] = useState("");
   const [accessSecret, setAccessSecret] = useState("");

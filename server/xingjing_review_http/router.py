@@ -64,6 +64,9 @@ class ReviewContractRoute(APIRoute):
 
 def create_review_router(runtime: ReviewRuntime) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["xingjing-review"], route_class=ReviewContractRoute)
+    from server.xingjing_review_http.internal_router import register_internal_review_routes
+
+    register_internal_review_routes(router, runtime)
 
     @router.get("/review-links/{token}/context")
     async def external_context(request: Request, token: str) -> JSONResponse:
@@ -236,6 +239,27 @@ def create_unavailable_review_router(code: str = "REVIEW_RUNTIME_NOT_CONFIGURED"
         return _error(request, code, status.HTTP_503_SERVICE_UNAVAILABLE)
 
     routes = (
+        ("/projects/{project_id}/internal-reviews/{round_id}/handoff", ["POST"], "internal_review_handoff_unavailable"),
+        ("/projects/{project_id}/internal-reviews", ["GET", "POST"], "internal_reviews_unavailable"),
+        ("/projects/{project_id}/internal-reviews/{round_id}", ["GET"], "internal_review_detail_unavailable"),
+        (
+            "/projects/{project_id}/internal-reviews/{round_id}/comments",
+            ["POST"],
+            "internal_review_comments_unavailable",
+        ),
+        (
+            "/projects/{project_id}/internal-reviews/{round_id}/comments/{comment_id}/status",
+            ["POST"],
+            "internal_review_status_unavailable",
+        ),
+        (
+            "/projects/{project_id}/internal-reviews/{round_id}/decision",
+            ["POST"],
+            "internal_review_decision_unavailable",
+        ),
+        ("/projects/{project_id}/internal-reviews/{round_id}/lock", ["POST"], "internal_review_lock_unavailable"),
+        ("/projects/{project_id}/internal-reviews/{round_id}/reopen", ["POST"], "internal_review_reopen_unavailable"),
+        ("/internal-review-media/{round_id}", ["GET"], "internal_review_media_unavailable"),
         ("/review-links/{token}/context", ["GET"], "m12_review_context_unavailable"),
         ("/review-links/{token}/actions", ["POST"], "m12_review_actions_unavailable"),
         ("/review-links/{token}/media", ["GET"], "m12_review_media_unavailable"),

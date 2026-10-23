@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Reply, X } from "lucide-react";
+import { useSearch } from "wouter";
 
 import { createReviewApi, type CreateReviewLinkInput, type ReviewComment, type ReviewLink } from "./api";
 import { buttonClass, ErrorPanel, inputClass, LoadingMark, orderedComments, primaryClass, ReviewShell, ReviewStatus, ReviewTime, toTimecode } from "./components";
@@ -15,6 +16,7 @@ export function StaffReviewPage(props: StaffProps) {
 
 function StaffReviewWorkspace({ pageId, workspaceId, projectId, accessToken }: StaffProps) {
   const { t } = useReviewTranslation();
+  const initialFinalVersionId = new URLSearchParams(useSearch()).get("projectVersion") ?? undefined;
   const api = useMemo(() => createReviewApi({ accessToken }), [accessToken]);
   const isProject = pageId === "CR-011" || pageId === "CR-085";
   const [links, setLinks] = useState<ReviewLink[]>([]);
@@ -137,7 +139,7 @@ function StaffReviewWorkspace({ pageId, workspaceId, projectId, accessToken }: S
   return <ReviewShell eyebrow={t("staff")} title={t(isProject ? "projectLinks" : "workspaceLinks")} meta={projectId ?? workspaceId}>
     {missingContext ? <p role="alert" className="text-slate-300">{t("missingContext")}</p> : <>
       <div className={"grid gap-6 " + (canManage ? "xl:grid-cols-[22rem_minmax(0,1fr)]" : "")}>
-        {canManage && <LinkForm projectId={projectId} workspaceMode={!isProject} pending={pending} onCreate={create} loadDefaults={api.projectReviewDefaults} />}
+        {canManage && <LinkForm key={`${projectId ?? "workspace"}:${initialFinalVersionId ?? ""}`} projectId={projectId} initialFinalVersionId={initialFinalVersionId} workspaceMode={!isProject} pending={pending} onCreate={create} loadDefaults={api.projectReviewDefaults} />}
         <section className="rounded-2xl border border-white/10 bg-white/[.035] p-5">
           <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-serif text-xl">{t("createdLinks")}</h2><form className="flex gap-2" onSubmit={search}>
             <label><span className="sr-only">{t("search")}</span><input disabled={pending} value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder={t("search")} /></label>
