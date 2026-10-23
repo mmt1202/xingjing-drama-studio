@@ -106,6 +106,8 @@ from server.xingjing_compliance_runtime import (
     RuntimeConfigurationError as ComplianceRuntimeConfigurationError,
 )
 from server.xingjing_content_runtime import create_production_content_runtime
+from server.xingjing_cover import create_production_cover_runtime
+from server.xingjing_cover.router import create_cover_router
 from server.xingjing_editing_http import create_unavailable_editing_router
 from server.xingjing_editing_runtime import EditingRuntimeConfigurationError, create_production_editing_runtime
 from server.xingjing_generation_http import create_generation_router
@@ -532,6 +534,7 @@ async def lifespan(app: FastAPI):
     await _projects_runtime.close()
     _content_runtime.close()
     await _generation_runtime.close()
+    _cover_runtime.close()
     await _tasks_runtime.close()
     await _model_control_runtime.close()
     await _audio_runtime.close()
@@ -630,6 +633,7 @@ _model_control_runtime = create_model_control_runtime()
 # database is configured. Submission stays explicitly unavailable until a real
 # Provider adapter has been wired; it never falls back to the legacy queue.
 _generation_runtime = create_production_generation_runtime()
+_cover_runtime = create_production_cover_runtime(generation_runtime=_generation_runtime)
 
 # M07 uses only its PostgreSQL adapter and trusted Java session context.
 # Missing database, Provider or object storage remains an explicit failure at
@@ -918,6 +922,7 @@ app.include_router(_open_platform_router)
 app.include_router(_marketplace_runtime.router())
 app.include_router(_content_runtime.router(), prefix="/api/v1", tags=["剧本内容与 AI 导演"])
 app.include_router(create_generation_router(_generation_runtime), prefix="/api/v1", tags=["图片与视频生成"])
+app.include_router(create_cover_router(_cover_runtime))
 app.include_router(create_audio_router(_audio_runtime))
 app.include_router(_compliance_router)
 app.include_router(_team_router)

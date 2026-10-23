@@ -9,6 +9,8 @@ import { CreatorHomePage, WorkspaceTasks } from "@/xingjing_creator_home/Creator
 import { ModelOperationsPage } from "@/xingjing_model_operations/ModelOperationsPage";
 import { createModelOperationsApi } from "@/xingjing_model_operations/api";
 import { CreatorAnalyticsPage } from "@/xingjing_analytics/CreatorAnalyticsPage";
+import { CoverWorkspace } from "@/xingjing_cover/CoverWorkspace";
+import { CoverReleaseLinks } from "@/xingjing_cover/CoverReleaseLinks";
 
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -326,14 +328,20 @@ function ProjectBusinessContent({
       );
     case "compliance-delivery":
       return (
+        <>
+        <CoverReleaseLinks projectVersion={complianceQuery.get("projectVersion") ?? undefined} target={complianceQuery.get("target") ?? undefined} selectionId={complianceQuery.get("coverSelectionId") ?? undefined} />
         <ComplianceDeliveryPage
           pageId={surface.pageId}
           projectId={projectId}
           projectVersion={complianceQuery.get("projectVersion") ?? undefined}
           target={complianceQuery.get("target") ?? undefined}
+          coverSelectionId={complianceQuery.get("coverSelectionId") ?? undefined}
           api={complianceApi}
         />
+        </>
       );
+    case "cover":
+      return <CoverWorkspace key={`${workspaceId}:${projectId}:${token}`} workspaceId={workspaceId} projectId={projectId} mode={surface.mode} />;
     case "creator-settings":
       return (
         <>
@@ -342,13 +350,6 @@ function ProjectBusinessContent({
             api={preferenceApi}
             projectId={projectId}
           />
-          {["CR-022", "CR-023"].includes(surface.pageId) ? (
-            <GenerationWorkbench
-              scope={{ workspaceId, projectId }}
-              view="image"
-              api={generationCenterApi}
-            />
-          ) : null}
         </>
       );
     case "assets-storyboard": {

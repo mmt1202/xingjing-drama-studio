@@ -34,7 +34,7 @@ function activeStage(slug: string) {
   if (/audio|subtitle|lip-sync|bgm-sfx/.test(slug)) return "audio";
   if (/postproduction|editing|final-|timeline|watermark/.test(slug)) return "editing";
   if (slug === "collaboration") return "review";
-  if (/export|release|jianying|premiere|davinci/.test(slug)) return "export";
+  if (/export|release|cover|jianying|premiere|davinci/.test(slug)) return "export";
   if (/compliance|rights|provenance|aigc|authorization|risk|sensitive|likeness|ip-rights/.test(slug)) return "compliance";
   return "control";
 }
@@ -111,7 +111,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     }
     const selected = number === null ? undefined : number === undefined ? episode : validData?.episodes.find((e) => e.episode === number);
     if (selected && !query.has("episodeId")) query.set("episodeId", String(selected.episode));
-    if (/^(release|export|compliance|rights|provenance|aigc)/.test(path) && selected?.finalVersionId) {
+    if (/^(release|export|cover|compliance|rights|provenance|aigc)/.test(path) && selected?.finalVersionId) {
       if (!query.has("projectVersion")) query.set("projectVersion", selected.finalVersionId);
       if (!query.has("target")) query.set("target", validData?.project.targetPlatform ?? "douyin");
     }
@@ -134,7 +134,15 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     return stage;
   }) ?? [];
   const selectedGate = stages.find((s) => s.id === gate && s.reason);
-  const pageGate = stages.find((s) => s.id === active && s.reason);
+  const isCover = slug === "cover-generate" || slug === "cover-title-ab-test";
+  const coverReason = !validData ? null
+    : !["project.view", "final.view", "settings.view"].every((permission) => validData.permissions.includes(permission)) ? "permission"
+      : validData.project.archived ? "archived"
+        : validData.project.setupState && validData.project.setupState !== "ready" ? "setup"
+          : episode ? !episode.finalVersionId ? "finals" : null
+            : !validData.episodes.some((item) => item.finalVersionId) ? "finals" : null;
+  const pageGate = isCover ? coverReason ? { id: "export", reason: coverReason, recovery: coverReason === "setup" ? "guided-create" : coverReason === "finals" ? "postproduction" : null } : undefined
+    : stages.find((s) => s.id === active && s.reason);
   return <CreatorShell active="projects" title={t(`stage.${active}`)} workspaceLabel={workspaceAccess?.workspaceName ?? workspaceId} permissions={workspaceAccess?.permissions ?? []} onNavigate={goWorkspace} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
     <div className="xj-project-layout">
       <section className="xj-project-card" aria-label={t("projectIdentity")}>

@@ -61,6 +61,9 @@ class HttpComplianceProvider(ComplianceProvider):
             conclusion = ReviewConclusion(_text(body, "conclusion"))
             evidence_digest = _text(body, "evidenceDigest")
             policy_digest = _text(body, "policyDigest")
+            reviewed_creative_digest = body.get("reviewedCreativeDigest")
+            if not isinstance(reviewed_creative_digest, str):
+                reviewed_creative_digest = None
             policy_summary_raw = body.get("policySummary", {})
             if not isinstance(policy_summary_raw, Mapping):
                 raise ValueError
@@ -75,6 +78,9 @@ class HttpComplianceProvider(ComplianceProvider):
             raise ComplianceProviderError("COMPLIANCE_PROVIDER_APPROVAL_HAS_RISKS")
         if any(not digest.startswith("sha256:") or len(digest) != 71 for digest in (evidence_digest, policy_digest)):
             raise ComplianceProviderError("COMPLIANCE_PROVIDER_EVIDENCE_DIGEST_INVALID")
+        expected_creative_digest = request.facts.get("releaseCreativeDigest")
+        if expected_creative_digest is not None and reviewed_creative_digest != expected_creative_digest:
+            raise ComplianceProviderError("COVER_COMPLIANCE_REVIEW_REQUIRED")
         return ProviderReviewResult(
             provider_id=provider_id,
             provider_version=provider_version,
@@ -83,6 +89,7 @@ class HttpComplianceProvider(ComplianceProvider):
             evidence_digest=evidence_digest,
             policy_digest=policy_digest,
             policy_summary=policy_summary,
+            reviewed_creative_digest=reviewed_creative_digest,
         )
 
 

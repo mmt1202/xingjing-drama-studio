@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import i18n from "@/i18n";
+import "@/xingjing_cover/i18n";
 import { ComplianceApiError } from "./api";
 import type {
   AuthorizationRecordInput,
@@ -107,6 +109,7 @@ function stateFor(error: unknown): LoadState {
 }
 
 function errorMessage(state: LoadState, error: unknown) {
+  if (error instanceof ComplianceApiError && error.code === "COVER_COMPLIANCE_REVIEW_REQUIRED") return i18n.t("coverWorkspace:complianceRequired");
   if (state === "denied") return "当前账号无权读取合规或导出交付记录。";
   if (state === "conflict")
     return "权威合规证据缺失或已失效；请在服务端补齐当前项目版本的证据后重试。";
@@ -373,7 +376,7 @@ export function ComplianceExportPanel({
             ? "正在读取服务端权威合规证据与已完成交付记录…"
             : errorMessage(loadState, error)}
         </p>
-        {loadState !== "loading" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700" onClick={() => void reload()}>重新读取</button>{loadState === "conflict" ? <button type="button" disabled={checkBusy} className="rounded-md bg-sky-700 px-3 py-2 text-sm font-medium text-white disabled:bg-slate-400" onClick={() => void runComplianceCheck()}>{checkBusy ? "正在调用审核服务…" : "执行当前成片合规检查"}</button> : null}</div> : null}
+        {loadState !== "loading" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700" onClick={() => void reload()}>重新读取</button>{loadState === "conflict" ? <button type="button" disabled={checkBusy} className="rounded-md bg-sky-700 px-3 py-2 text-sm font-medium text-white disabled:bg-slate-400" onClick={() => void runComplianceCheck()}>{scope.coverSelectionId ? i18n.t(checkBusy ? "coverWorkspace:reviewingCreative" : "coverWorkspace:reviewCreative") : checkBusy ? "正在调用审核服务…" : "执行当前成片合规检查"}</button> : null}</div> : null}
       </section>
     );
 
@@ -401,7 +404,7 @@ export function ComplianceExportPanel({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {showRiskActions ? <button type="button" disabled={checkBusy} onClick={() => void runComplianceCheck()} className="rounded-md bg-sky-700 px-3 py-2 text-sm font-medium text-white disabled:bg-slate-400">{checkBusy ? "正在复检…" : "重新执行合规检查"}</button> : null}
+          {showRiskActions ? <button type="button" disabled={checkBusy} onClick={() => void runComplianceCheck()} className="rounded-md bg-sky-700 px-3 py-2 text-sm font-medium text-white disabled:bg-slate-400">{scope.coverSelectionId ? i18n.t(checkBusy ? "coverWorkspace:reviewingCreative" : "coverWorkspace:reviewCreative") : checkBusy ? "正在复检…" : "重新执行合规检查"}</button> : null}
           {showExport ? <button
             type="button"
             disabled={preflightBusy || exportBusy}

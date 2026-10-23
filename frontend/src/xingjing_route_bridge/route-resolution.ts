@@ -19,6 +19,7 @@ export type ProjectSurface =
   | { kind: "audio"; pageId: string }
   | { kind: "postproduction"; pageId: string }
   | { kind: "compliance-delivery"; pageId: string }
+  | { kind: "cover"; pageId: string; mode: "generate" | "ab" }
   | { kind: "creator-settings"; pageId: string }
   | { kind: "assets-storyboard"; pageId: string };
 
@@ -75,8 +76,8 @@ const PROJECT_SURFACES: Readonly<Record<string, ProjectSurface>> = {
   "release-rules": { kind: "compliance-delivery", pageId: "CR-082" },
   "release-package": { kind: "compliance-delivery", pageId: "CR-083" },
   authorizations: { kind: "compliance-delivery", pageId: "CR-086" },
-  "cover-generate": { kind: "creator-settings", pageId: "CR-022" },
-  "cover-title-ab-test": { kind: "creator-settings", pageId: "CR-023" },
+  "cover-generate": { kind: "cover", pageId: "CR-022", mode: "generate" },
+  "cover-title-ab-test": { kind: "cover", pageId: "CR-023", mode: "ab" },
   home: { kind: "creator-settings", pageId: "CR-046" },
   "risk-appeal": { kind: "compliance-delivery", pageId: "CR-087" },
   settings: { kind: "creator-settings", pageId: "CR-096" },

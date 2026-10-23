@@ -129,6 +129,7 @@ class ProviderReviewResult:
     evidence_digest: str
     policy_digest: str
     policy_summary: Mapping[str, object]
+    reviewed_creative_digest: str | None = None
 
 
 class ComplianceProvider(Protocol):
@@ -170,6 +171,7 @@ class FormalExportRequest:
     project_id: str
     project_version: str
     target: str
+    cover_selection_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

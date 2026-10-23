@@ -86,6 +86,7 @@ export interface ComplianceScope {
   readonly projectId: string;
   readonly projectVersion: string;
   readonly target: string;
+  readonly coverSelectionId?: string;
 }
 
 export interface ExportContextOption {

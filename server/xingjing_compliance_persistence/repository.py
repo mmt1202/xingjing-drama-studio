@@ -37,7 +37,12 @@ from server.xingjing_compliance.models import (
     ProviderReviewResult,
     ReviewConclusion,
 )
-from server.xingjing_compliance_runtime.contracts import DeliveryRecord, ExportArtifact, ExportAuthorityEvidence
+from server.xingjing_compliance_runtime.contracts import (
+    DeliveryRecord,
+    ExportArtifact,
+    ExportAuthorityEvidence,
+    ReleaseCreativeReservation,
+)
 from server.xingjing_compliance_runtime.errors import AuthorityDataMissing
 
 
@@ -623,6 +628,8 @@ class SqlAlchemyComplianceAuthorityStore:
         commercial_export_enabled: bool,
         idempotency_key: str,
         audit: AuditContext,
+        release_creative_digest: str | None = None,
+        release_creative_snapshot: dict[str, object] | None = None,
     ) -> dict[str, object]:
         self._assert_audit(audit)
         assessment_id = (
@@ -664,6 +671,14 @@ class SqlAlchemyComplianceAuthorityStore:
             "risks": risks,
             "commercial_export_enabled": commercial_export_enabled,
         }
+        review_payload: dict[str, object] = {"risks": risks, "provider_evidence_digest": result.evidence_digest}
+        if release_creative_digest is not None:
+            if result.reviewed_creative_digest != release_creative_digest:
+                raise ValueError("COVER_COMPLIANCE_REVIEW_REQUIRED")
+            command_payload["release_creative_digest"] = release_creative_digest
+            review_payload["release_creative_digest"] = release_creative_digest
+            review_payload["reviewed_creative_digest"] = result.reviewed_creative_digest
+            review_payload["release_creative"] = release_creative_snapshot
         command_digest = _digest(command_payload)
         async with self._session_factory.begin() as session:
             replay = await session.scalar(
@@ -753,7 +768,7 @@ class SqlAlchemyComplianceAuthorityStore:
                         input_digest=input_digest,
                         evidence_digest=result.evidence_digest,
                         reviewed_at=_utc(audit.occurred_at),
-                        review_payload={"risks": risks, "provider_evidence_digest": result.evidence_digest},
+                        review_payload=review_payload,
                         version=1,
                     )
                 )
@@ -812,12 +827,17 @@ class SqlAlchemyComplianceAuthorityStore:
                             input_digest=input_digest,
                             evidence_digest=result.evidence_digest,
                             reviewed_at=_utc(audit.occurred_at),
-                            review_payload={"risks": risks, "provider_evidence_digest": result.evidence_digest},
+                            review_payload=review_payload,
                             version=review_version,
                         )
                     )
                     if getattr(updated, "rowcount", 0) != 1:
                         raise ComplianceVersionConflict(current.version)
+            if release_creative_digest is not None:
+                after["release_creative_digest"] = release_creative_digest
+                after["cover_selection_id"] = (
+                    None if release_creative_snapshot is None else release_creative_snapshot.get("selectionId")
+                )
             configuration_values = {
                 "current_project_version": project_version,
                 "snapshot_version": project_version,
@@ -1035,6 +1055,30 @@ class SqlAlchemyComplianceAuthorityStore:
     async def load_export_evidence(self, request: FormalExportRequest, audit: AuditContext) -> ExportAuthorityEvidence:
         return await self._load_evidence(request, audit, require_complete=True)
 
+    async def release_review_matches(
+        self,
+        *,
+        project_id: str,
+        project_version: str,
+        input_digest: str,
+        creative_digest: str,
+    ) -> bool:
+        async with self._session_factory() as session:
+            review = await session.scalar(
+                select(ReviewRow).where(
+                    ReviewRow.tenant_id == self._scope.tenant_id,
+                    ReviewRow.workspace_id == self._scope.workspace_id,
+                    ReviewRow.project_id == project_id,
+                    ReviewRow.project_version == project_version,
+                )
+            )
+            return bool(
+                review is not None
+                and review.input_digest == input_digest
+                and review.review_payload.get("release_creative_digest") == creative_digest
+                and review.review_payload.get("reviewed_creative_digest") == creative_digest
+            )
+
     async def _load_evidence(
         self,
         request: FormalExportRequest,
@@ -1139,6 +1183,9 @@ class SqlAlchemyComplianceAuthorityStore:
             reviewed_at=_utc(review.reviewed_at),
             review_version=review.version,
             billing_summary=() if settlement is None else tuple(dict(item) for item in settlement.cost_summary),
+            input_digest=review.input_digest,
+            release_creative_digest=_optional_selection_id(review.review_payload.get("release_creative_digest")),
+            reviewed_creative_digest=_optional_selection_id(review.review_payload.get("reviewed_creative_digest")),
         )
 
     async def record_delivery(
@@ -1178,17 +1225,122 @@ class SqlAlchemyComplianceAuthorityStore:
             await session.execute(statement)
             row = await self._one(
                 session,
+                select(DeliveryRow)
+                .where(
+                    DeliveryRow.tenant_id == self._scope.tenant_id,
+                    DeliveryRow.workspace_id == self._scope.workspace_id,
+                    DeliveryRow.project_id == manifest.project_id,
+                    DeliveryRow.request_id == manifest.request_id,
+                )
+                .with_for_update(),
+                "delivery record",
+            )
+            if row.status == "processing":
+                if (
+                    artifact is None
+                    or artifact.release_creative is None
+                    or row.project_version != manifest.project_version
+                    or row.target != manifest.target
+                    or row.format != artifact.format
+                    or row.manifest_summary.get("release_creative") != artifact.release_creative
+                    or row.manifest_summary.get("requested_cover_selection_id") != artifact.requested_cover_selection_id
+                ):
+                    raise DeliveryIdempotencyConflict("formal export reservation does not match its artifact")
+                for key, value in values.items():
+                    setattr(row, key, value)
+                await session.flush()
+        if row.manifest_digest != digest:
+            raise DeliveryIdempotencyConflict("formal export request_id was already recorded with a different manifest")
+        return self._delivery(row)
+
+    async def reserve_release_creative(
+        self,
+        manifest: ExportManifestContext,
+        evidence: ExportAuthorityEvidence,
+        *,
+        output_format: str,
+        snapshot: dict[str, object],
+        requested_selection_id: str | None,
+    ) -> ReleaseCreativeReservation:
+        self._assert_manifest(manifest)
+        summary = await self._delivery_summary(manifest, evidence, None)
+        summary["release_creative"] = snapshot
+        summary["requested_cover_selection_id"] = requested_selection_id
+        async with self._session_factory.begin() as session:
+            await session.execute(
+                insert(DeliveryRow)
+                .values(
+                    tenant_id=self._scope.tenant_id,
+                    workspace_id=self._scope.workspace_id,
+                    project_id=manifest.project_id,
+                    request_id=manifest.request_id,
+                    project_version=manifest.project_version,
+                    target=manifest.target,
+                    policy_id=evidence.policy_id,
+                    policy_version=evidence.policy_version,
+                    manifest_digest=_digest(summary),
+                    manifest_summary=summary,
+                    created_at=_utc(manifest.authorized_at),
+                    status="processing",
+                    format=output_format,
+                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "workspace_id", "project_id", "request_id"])
+            )
+            row = await self._one(
+                session,
                 select(DeliveryRow).where(
                     DeliveryRow.tenant_id == self._scope.tenant_id,
                     DeliveryRow.workspace_id == self._scope.workspace_id,
                     DeliveryRow.project_id == manifest.project_id,
                     DeliveryRow.request_id == manifest.request_id,
                 ),
-                "delivery record",
+                "delivery reservation",
             )
-        if row.manifest_digest != digest:
-            raise DeliveryIdempotencyConflict("formal export request_id was already recorded with a different manifest")
-        return self._delivery(row)
+            if (
+                row.status != "processing"
+                or row.project_version != manifest.project_version
+                or row.target != manifest.target
+                or row.format != output_format
+                or row.manifest_summary.get("requested_cover_selection_id") != requested_selection_id
+            ):
+                raise DeliveryIdempotencyConflict("formal export reservation conflicts with a recorded request")
+            return self._release_reservation(row)
+
+    async def load_release_reservation(self, *, project_id: str, request_id: str) -> ReleaseCreativeReservation:
+        async with self._session_factory() as session:
+            row = await self._one(
+                session,
+                select(DeliveryRow).where(
+                    DeliveryRow.tenant_id == self._scope.tenant_id,
+                    DeliveryRow.workspace_id == self._scope.workspace_id,
+                    DeliveryRow.project_id == project_id,
+                    DeliveryRow.request_id == request_id,
+                    DeliveryRow.status == "processing",
+                ),
+                "delivery reservation",
+            )
+            return self._release_reservation(row)
+
+    @staticmethod
+    def _release_reservation(row: DeliveryRow) -> ReleaseCreativeReservation:
+        summary = row.manifest_summary
+        snapshot = summary.get("release_creative")
+        manifest = summary.get("manifest")
+        if not isinstance(snapshot, dict) or not isinstance(manifest, dict):
+            raise AuthorityDataMissing("formal export reservation is invalid")
+        return ReleaseCreativeReservation(
+            manifest=ExportManifestContext(
+                project_id=manifest["project_id"],
+                project_version=manifest["project_version"],
+                target=manifest["target"],
+                tenant_id=manifest["tenant_id"],
+                actor_id=manifest["actor_id"],
+                request_id=manifest["request_id"],
+                authorized_at=datetime.fromisoformat(manifest["authorized_at"]),
+            ),
+            snapshot=dict(snapshot),
+            requested_cover_selection_id=_optional_selection_id(summary.get("requested_cover_selection_id")),
+        )
 
     async def list_deliveries(self, *, tenant_id: str, project_id: str) -> tuple[DeliveryRecord, ...]:
         if tenant_id != self._scope.tenant_id:
@@ -1237,7 +1389,7 @@ class SqlAlchemyComplianceAuthorityStore:
                 "immutable project snapshot",
             )
         state = evidence.state
-        return {
+        summary = {
             "manifest": {
                 "tenant_id": manifest.tenant_id,
                 "project_id": manifest.project_id,
@@ -1272,6 +1424,10 @@ class SqlAlchemyComplianceAuthorityStore:
                 "download_path": artifact.download_path,
             },
         }
+        if artifact is not None and artifact.release_creative is not None:
+            summary["release_creative"] = artifact.release_creative
+            summary["requested_cover_selection_id"] = artifact.requested_cover_selection_id
+        return summary
 
     async def _insert_immutable(self, row: object) -> None:
         async with self._session_factory.begin() as session:
@@ -1293,6 +1449,7 @@ class SqlAlchemyComplianceAuthorityStore:
 
     @staticmethod
     def _delivery(row: DeliveryRow) -> DeliveryRecord:
+        creative = row.manifest_summary.get("release_creative")
         return DeliveryRecord(
             tenant_id=row.tenant_id,
             project_id=row.project_id,
@@ -1308,7 +1465,17 @@ class SqlAlchemyComplianceAuthorityStore:
             content_sha256=row.content_sha256,
             size_bytes=row.size_bytes,
             download_path=row.download_path,
+            cover_selection_id=creative.get("selectionId") if isinstance(creative, dict) else None,
+            requested_cover_selection_id=_optional_selection_id(
+                row.manifest_summary.get("requested_cover_selection_id")
+            ),
         )
+
+
+def _optional_selection_id(value: object) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise AuthorityDataMissing("formal export reservation has an invalid cover selection")
+    return value
 
 
 def _utc(value: datetime) -> datetime:

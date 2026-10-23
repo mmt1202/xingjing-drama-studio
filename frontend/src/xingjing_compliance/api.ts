@@ -38,6 +38,7 @@ function scopeQuery(scope: ComplianceScope) {
   return new URLSearchParams({
     projectVersion: scope.projectVersion,
     target: scope.target,
+    ...(scope.coverSelectionId ? { coverSelectionId: scope.coverSelectionId } : {}),
   }).toString();
 }
 
@@ -157,6 +158,7 @@ export function createComplianceExportApi({
             projectVersion: scope.projectVersion,
             target: scope.target,
             format: outputFormat,
+            ...(["material_package", "publish_package", "project_archive", "jianying_draft"].includes(outputFormat) && scope.coverSelectionId ? { coverSelectionId: scope.coverSelectionId } : {}),
           }),
         },
       ).then((data) => data.delivery),
@@ -190,6 +192,7 @@ export function createComplianceExportApi({
             projectVersion: scope.projectVersion,
             target: scope.target,
             action: "run_check",
+            ...(scope.coverSelectionId ? { coverSelectionId: scope.coverSelectionId } : {}),
           }),
         },
       ).then((data) => data.assessment),

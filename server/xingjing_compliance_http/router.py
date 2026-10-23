@@ -86,10 +86,17 @@ class ComplianceContractRoute(APIRoute):
             except DeliveryIdempotencyConflict:
                 return _error(request, "EXPORT_IDEMPOTENCY_CONFLICT", status.HTTP_409_CONFLICT)
             except FormalExportArtifactError as error:
-                status_code = status.HTTP_404_NOT_FOUND if error.code.endswith("NOT_FOUND") else status.HTTP_409_CONFLICT
+                status_code = (
+                    status.HTTP_404_NOT_FOUND if error.code.endswith("NOT_FOUND") else status.HTTP_409_CONFLICT
+                )
                 return _error(request, error.code, status_code)
             except ComplianceProviderError as error:
-                return _error(request, error.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+                status_code = (
+                    status.HTTP_409_CONFLICT
+                    if error.code == "COVER_COMPLIANCE_REVIEW_REQUIRED"
+                    else status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+                return _error(request, error.code, status_code)
             except (ComplianceRuntimeUnavailable, RuntimeConfigurationError, SQLAlchemyError):
                 return _error(request, "COMPLIANCE_RUNTIME_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE)
             except HTTPException as error:
@@ -156,6 +163,7 @@ def create_production_compliance_router(runtime: ProductionComplianceRuntime) ->
                 project_version=project_version,
                 target=_required_text(body, "target"),
                 idempotency_key=idempotency_key,
+                cover_selection_id=_optional_cover_selection(body.get("coverSelectionId")),
             )
             return _success(request, {"assessment": result})
         if action == "record_authorization":
@@ -203,6 +211,7 @@ def create_production_compliance_router(runtime: ProductionComplianceRuntime) ->
                 project_id=project_id,
                 project_version=project_version,
                 target=target,
+                cover_selection_id=_optional_cover_selection(body.get("coverSelectionId")),
             ),
             output_format=output_format,
             idempotency_key=idempotency_key,
@@ -269,7 +278,12 @@ def _formal_request(request: Request, project_id: str) -> FormalExportRequest:
         raise ComplianceHttpError("PROJECT_VERSION_REQUIRED")
     if not target:
         raise ComplianceHttpError("EXPORT_TARGET_REQUIRED")
-    return FormalExportRequest(project_id=project_id, project_version=project_version, target=target)
+    return FormalExportRequest(
+        project_id=project_id,
+        project_version=project_version,
+        target=target,
+        cover_selection_id=_optional_cover_selection(request.query_params.get("coverSelectionId")),
+    )
 
 
 async def _json_body(request: Request) -> dict[str, object]:
@@ -286,6 +300,14 @@ def _required_text(body: Mapping[str, object], field: str) -> str:
     value = body.get(field)
     if not isinstance(value, str) or not value.strip():
         raise ComplianceHttpError(f"{field.upper()}_REQUIRED")
+    return value.strip()
+
+
+def _optional_cover_selection(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 128:
+        raise ComplianceHttpError("COVER_SELECTION_ID_INVALID")
     return value.strip()
 
 

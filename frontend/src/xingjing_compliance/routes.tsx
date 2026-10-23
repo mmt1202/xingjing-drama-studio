@@ -9,16 +9,17 @@ export interface ComplianceRouteProps {
   readonly projectId: string;
   readonly projectVersion?: string;
   readonly target?: string;
+  readonly coverSelectionId?: string;
   readonly api?: ComplianceExportPort;
 }
 
-export function ComplianceDeliveryPage({ pageId = "CR-018", projectId, projectVersion, target, api: suppliedApi }: ComplianceRouteProps) {
+export function ComplianceDeliveryPage({ pageId = "CR-018", projectId, projectVersion, target, coverSelectionId, api: suppliedApi }: ComplianceRouteProps) {
   const api = useMemo(() => suppliedApi ?? createComplianceExportApi(), [suppliedApi]);
   const scope = useMemo<ComplianceScope | null>(() => {
     const version = projectVersion?.trim();
     const exportTarget = target?.trim();
-    return version && exportTarget ? { projectId, projectVersion: version, target: exportTarget } : null;
-  }, [projectId, projectVersion, target]);
+    return version && exportTarget ? { projectId, projectVersion: version, target: exportTarget, ...(coverSelectionId ? { coverSelectionId } : {}) } : null;
+  }, [projectId, projectVersion, target, coverSelectionId]);
   if (!scope) return <ComplianceContextPicker api={api} projectId={projectId} pageId={pageId} />;
   const props: ComplianceExportPanelProps = { api, scope, pageId };
   return <main className="mx-auto max-w-6xl p-6"><ComplianceExportPanel {...props} /></main>;

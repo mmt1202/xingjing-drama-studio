@@ -21,6 +21,17 @@ from server.xingjing_editing import FinalVideoVersion
 from server.xingjing_editing.contracts import ClipReference, TimelineVersion
 from server.xingjing_editing_persistence.models import FinalVideoVersionRow, TimelineVersionRow
 
+from .release_creative import (
+    PACKAGE_FORMATS,
+    ReleaseCreativeError,
+    assert_creative_review,
+    creative_review_summary,
+    verified_cover_bytes,
+)
+from .release_creative import (
+    load_release_creative as load_selected_creative,
+)
+
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _CHUNK_SIZE = 1024 * 1024
 _FORMAT_EXTENSIONS = {
@@ -53,13 +64,72 @@ class LocalFormalExportExecutor:
         session_factory: async_sessionmaker[AsyncSession],
         render_root: Path,
         export_root: Path,
+        generation_root: Path | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._render_root = render_root.resolve()
         export_root.mkdir(parents=True, exist_ok=True)
         self._export_root = export_root.resolve()
+        self._generation_root = None if generation_root is None else generation_root.resolve()
         if not self._render_root.is_dir() or not self._export_root.is_dir():
             raise FormalExportArtifactError("FORMAL_EXPORT_STORAGE_ROOT_INVALID")
+
+    async def load_release_creative(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        project_id: str,
+        project_version: str,
+        output_format: str,
+        target: str,
+        selection_id: str | None,
+    ) -> dict[str, object] | None:
+        if output_format not in PACKAGE_FORMATS:
+            if selection_id is not None:
+                raise FormalExportArtifactError("FORMAL_EXPORT_COVER_REQUIRES_PACKAGE")
+            return None
+        version = await self._load_version(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            version_id=project_version,
+        )
+        timeline = await self._load_timeline(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            timeline_id=version.timeline_id,
+            version_id=version.timeline_version_id,
+        )
+        try:
+            return await load_selected_creative(
+                self._session_factory,
+                version=version,
+                timeline=timeline,
+                target=target,
+                selection_id=selection_id,
+            )
+        except ReleaseCreativeError as error:
+            raise FormalExportArtifactError(str(error)) from error
+
+    async def verify_release_creative(
+        self,
+        snapshot: dict[str, object],
+        *,
+        workspace_id: str,
+        project_id: str,
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                verified_cover_bytes,
+                snapshot,
+                root=self._generation_root,
+                workspace_id=workspace_id,
+                project_id=project_id,
+            )
+        except ReleaseCreativeError as error:
+            raise FormalExportArtifactError(str(error)) from error
 
     async def execute(
         self,
@@ -71,6 +141,8 @@ class LocalFormalExportExecutor:
         output_format: str,
         manifest: ExportManifestContext,
         evidence: ExportAuthorityEvidence,
+        release_creative: dict[str, object] | None = None,
+        requested_cover_selection_id: str | None = None,
     ) -> ExportArtifact:
         if output_format not in _FORMAT_EXTENSIONS:
             raise FormalExportArtifactError("FORMAL_EXPORT_FORMAT_UNSUPPORTED")
@@ -99,6 +171,8 @@ class LocalFormalExportExecutor:
             output_format,
             manifest,
             evidence,
+            release_creative,
+            requested_cover_selection_id,
         )
 
     async def load_source_version(
@@ -135,7 +209,15 @@ class LocalFormalExportExecutor:
             )
         if row is None:
             raise FormalExportArtifactError("FINAL_VIDEO_VERSION_NOT_FOUND")
-        return FinalVideoVersion.model_validate(row.snapshot)
+        version = FinalVideoVersion.model_validate(row.snapshot)
+        if (version.tenant_id, version.workspace_id, version.project_id, version.version_id) != (
+            tenant_id,
+            workspace_id,
+            project_id,
+            version_id,
+        ):
+            raise FormalExportArtifactError("FINAL_VIDEO_VERSION_SCOPE_MISMATCH")
+        return version
 
     async def _load_timeline(
         self,
@@ -158,7 +240,22 @@ class LocalFormalExportExecutor:
             )
         if row is None:
             raise FormalExportArtifactError("FORMAL_EXPORT_TIMELINE_VERSION_NOT_FOUND")
-        return TimelineVersion.model_validate(row.snapshot)
+        timeline = TimelineVersion.model_validate(row.snapshot)
+        if (
+            timeline.tenant_id,
+            timeline.workspace_id,
+            timeline.project_id,
+            timeline.timeline_id,
+            timeline.version_id,
+        ) != (
+            tenant_id,
+            workspace_id,
+            project_id,
+            timeline_id,
+            version_id,
+        ):
+            raise FormalExportArtifactError("FORMAL_EXPORT_TIMELINE_VERSION_SCOPE_MISMATCH")
+        return timeline
 
     def _generate_verified(
         self,
@@ -170,14 +267,40 @@ class LocalFormalExportExecutor:
         output_format: str,
         manifest: ExportManifestContext,
         evidence: ExportAuthorityEvidence,
+        release_creative: dict[str, object] | None = None,
+        requested_cover_selection_id: str | None = None,
     ) -> ExportArtifact:
+        cover: tuple[bytes, str] | None = None
+        if release_creative is not None:
+            if (
+                output_format not in PACKAGE_FORMATS
+                or release_creative.get("finalVersionId") != version.version_id
+                or release_creative.get("episodeId") != timeline.episode_id
+                or release_creative.get("target") != manifest.target
+            ):
+                raise FormalExportArtifactError("FORMAL_EXPORT_COVER_SELECTION_SCOPE_MISMATCH")
+            try:
+                assert_creative_review(evidence, version, manifest.target, release_creative)
+                cover = verified_cover_bytes(
+                    release_creative,
+                    root=self._generation_root,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                )
+            except ReleaseCreativeError as error:
+                raise FormalExportArtifactError(str(error)) from error
         source = self._resolve_scoped(self._render_root, tenant_id, workspace_id, version.output.object_key)
         if not source.is_file():
             raise FormalExportArtifactError("FINAL_VIDEO_OBJECT_NOT_FOUND")
         source_digest, source_size = _file_digest(source)
         if source_digest != version.output.content_sha256:
             raise FormalExportArtifactError("FINAL_VIDEO_DIGEST_MISMATCH")
-        destination_dir = self._export_root / tenant_id / workspace_id / "exports" / project_id / manifest.request_id
+        if not _SAFE_COMPONENT.fullmatch(project_id):
+            raise FormalExportArtifactError("FORMAL_EXPORT_SCOPE_INVALID")
+        request_directory = manifest.request_id
+        if not _SAFE_COMPONENT.fullmatch(request_directory):
+            request_directory = hashlib.sha256(manifest.request_id.encode("utf-8")).hexdigest()
+        destination_dir = self._export_root / tenant_id / workspace_id / "exports" / project_id / request_directory
         destination_dir.mkdir(parents=True, exist_ok=True)
         extension = _FORMAT_EXTENSIONS[output_format]
         destination = destination_dir / f"formal-delivery.{extension}"
@@ -191,6 +314,8 @@ class LocalFormalExportExecutor:
                 timeline=timeline,
                 manifest=manifest,
                 evidence=evidence,
+                release_creative=release_creative,
+                cover=cover,
             )
             os.replace(temporary, destination)
         finally:
@@ -218,6 +343,9 @@ class LocalFormalExportExecutor:
             },
         }
         manifest_path = destination_dir / "manifest.json"
+        if release_creative is not None:
+            manifest_payload["releaseCreative"] = release_creative
+            manifest_payload["releaseCreativeReview"] = creative_review_summary(evidence)
         manifest_temporary = destination_dir / f".manifest.{uuid4().hex}.tmp"
         try:
             manifest_temporary.write_text(
@@ -234,6 +362,8 @@ class LocalFormalExportExecutor:
             content_sha256=output_digest,
             size_bytes=output_size,
             download_path=f"/api/v1/projects/{project_id}/exports/{manifest.request_id}/download",
+            release_creative=release_creative,
+            requested_cover_selection_id=requested_cover_selection_id,
         )
 
     def _write_artifact(
@@ -246,6 +376,8 @@ class LocalFormalExportExecutor:
         timeline: TimelineVersion,
         manifest: ExportManifestContext,
         evidence: ExportAuthorityEvidence,
+        release_creative: dict[str, object] | None = None,
+        cover: tuple[bytes, str] | None = None,
     ) -> None:
         if output_format == "mp4":
             shutil.copyfile(source, destination)
@@ -263,6 +395,8 @@ class LocalFormalExportExecutor:
             destination.write_bytes(_premiere_xml(timeline))
             return
         report = _compliance_report(version, timeline, manifest, evidence)
+        if release_creative is not None:
+            report["releaseCreativeReview"] = creative_review_summary(evidence)
         if output_format == "compliance_report":
             destination.write_text(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
             return
@@ -291,6 +425,8 @@ class LocalFormalExportExecutor:
             version=version,
             timeline=timeline,
             compliance_report=report,
+            release_creative=release_creative,
+            cover=cover,
         )
 
     def resolve_download(self, *, tenant_id: str, workspace_id: str, object_key: str) -> Path:
@@ -363,11 +499,14 @@ def _subtitle_srt(timeline: TimelineVersion) -> str:
     if not cues:
         raise FormalExportArtifactError("FORMAL_EXPORT_SUBTITLE_TEXT_MISSING")
     cues.sort(key=lambda item: (item[0], item[1], item[2]))
-    return "\n\n".join(
-        f"{index}\n{_milliseconds_timecode(start, separator=',')} --> "
-        f"{_milliseconds_timecode(end, separator=',')}\n{text}"
-        for index, (start, end, text) in enumerate(cues, start=1)
-    ) + "\n"
+    return (
+        "\n\n".join(
+            f"{index}\n{_milliseconds_timecode(start, separator=',')} --> "
+            f"{_milliseconds_timecode(end, separator=',')}\n{text}"
+            for index, (start, end, text) in enumerate(cues, start=1)
+        )
+        + "\n"
+    )
 
 
 def _csv_cell(value: object) -> str:
@@ -376,17 +515,38 @@ def _csv_cell(value: object) -> str:
 
 
 def _storyboard_csv(timeline: TimelineVersion) -> str:
-    rows: list[list[object]] = [[
-        "track_kind", "track_id", "clip_id", "shot_id", "source_asset_id", "source_version_id",
-        "timeline_start_ms", "timeline_end_ms", "source_in_ms", "source_out_ms", "source_sha256",
-    ]]
+    rows: list[list[object]] = [
+        [
+            "track_kind",
+            "track_id",
+            "clip_id",
+            "shot_id",
+            "source_asset_id",
+            "source_version_id",
+            "timeline_start_ms",
+            "timeline_end_ms",
+            "source_in_ms",
+            "source_out_ms",
+            "source_sha256",
+        ]
+    ]
     for track in timeline.tracks:
         for clip in track.clips:
-            rows.append([
-                track.kind.value, track.track_id, clip.clip_id, clip.shot_id, clip.source_asset_id,
-                clip.source_version_id, clip.timeline_start_ms, clip.timeline_end_ms, clip.source_in_ms,
-                clip.source_out_ms, clip.source_sha256,
-            ])
+            rows.append(
+                [
+                    track.kind.value,
+                    track.track_id,
+                    clip.clip_id,
+                    clip.shot_id,
+                    clip.source_asset_id,
+                    clip.source_version_id,
+                    clip.timeline_start_ms,
+                    clip.timeline_end_ms,
+                    clip.source_in_ms,
+                    clip.source_out_ms,
+                    clip.source_sha256,
+                ]
+            )
     return "\r\n".join(",".join(_csv_cell(cell) for cell in row) for row in rows) + "\r\n"
 
 
@@ -460,19 +620,32 @@ def _write_zip_package(
     version: FinalVideoVersion,
     timeline: TimelineVersion,
     compliance_report: dict[str, object],
+    release_creative: dict[str, object] | None = None,
+    cover: tuple[bytes, str] | None = None,
 ) -> None:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        package: dict[str, object] = {
+            "schema": "xingjing.delivery-package/v1",
+            "kind": package_kind,
+            "projectId": timeline.project_id,
+            "projectVersion": version.version_id,
+            "timelineVersion": timeline.version_id,
+            "aigc": True,
+        }
+        if release_creative is not None:
+            if cover is None:
+                raise FormalExportArtifactError("FORMAL_EXPORT_COVER_MEDIA_UNAVAILABLE")
+            package["releaseCreative"] = {**release_creative, "coverFile": cover[1]}
+            package["releaseCreativeReview"] = compliance_report.get("releaseCreativeReview")
+            archive.writestr(cover[1], cover[0])
+            archive.writestr(
+                "release-creative.json",
+                json.dumps(package["releaseCreative"], ensure_ascii=False, sort_keys=True, indent=2),
+            )
         archive.writestr(
             "package.json",
             json.dumps(
-                {
-                    "schema": "xingjing.delivery-package/v1",
-                    "kind": package_kind,
-                    "projectId": timeline.project_id,
-                    "projectVersion": version.version_id,
-                    "timelineVersion": timeline.version_id,
-                    "aigc": True,
-                },
+                package,
                 ensure_ascii=False,
                 sort_keys=True,
                 indent=2,
@@ -494,7 +667,8 @@ def _write_zip_package(
                         "duration": max(
                             (clip.timeline_end_ms for _, clip in _all_clips(timeline)),
                             default=0,
-                        ) * 1_000,
+                        )
+                        * 1_000,
                         "tracks": [track.model_dump(mode="json") for track in timeline.tracks],
                         "source": "xingjing",
                     },

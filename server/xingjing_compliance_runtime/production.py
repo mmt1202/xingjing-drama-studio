@@ -20,6 +20,7 @@ from fastapi import Request
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from server.xingjing_assets_runtime.runtime import LocalAssetEvidenceStorage
 from server.xingjing_audio_persistence.models import audio_billing_holds
@@ -53,6 +54,13 @@ from .errors import (
 )
 from .formal_export import FormalExportArtifactError, LocalFormalExportExecutor
 from .provider import ComplianceProviderError, HttpComplianceProvider
+from .release_creative import (
+    ReleaseCreativeError,
+    assert_creative_review,
+    creative_digest,
+    provider_review_facts,
+    review_input_digest,
+)
 from .runtime import ComplianceRuntime
 
 TrustedContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
@@ -81,10 +89,7 @@ def _settlement_cost_summary(
             bucket["taskCount"] += 1
             latest = updated_at if latest is None or updated_at > latest else latest
     return (
-        [
-            {"source": source, "currency": currency, **totals[(source, currency)]}
-            for source, currency in sorted(totals)
-        ],
+        [{"source": source, "currency": currency, **totals[(source, currency)]} for source, currency in sorted(totals)],
         latest,
     )
 
@@ -133,6 +138,7 @@ class ProductionComplianceRuntime:
         self._session_factory = session_factory
         self._context_resolver = context_resolver
         self._engine: AsyncEngine | None = engine
+        self._export_lock_engine = create_async_engine(engine.url, poolclass=NullPool)
         self._export_executor = export_executor
         self._evidence_storage = evidence_storage
         self._compliance_provider = compliance_provider
@@ -266,7 +272,30 @@ class ProductionComplianceRuntime:
             required_permission="export.manage",
         )
         await self._synchronize_billing_settlement(context, formal_request.project_version)
-        return await ComplianceRuntime(authority_store=self._store(context)).authorize_export(formal_request, context.audit)
+        if formal_request.cover_selection_id is not None:
+            if self._export_executor is None:
+                raise ComplianceRuntimeUnavailable("FORMAL_EXPORT_EXECUTOR_NOT_CONFIGURED")
+            creative = await self._export_executor.load_release_creative(
+                tenant_id=context.trusted.tenant_id,
+                workspace_id=context.trusted.workspace_id,
+                project_id=formal_request.project_id,
+                project_version=formal_request.project_version,
+                output_format="publish_package",
+                target=formal_request.target,
+                selection_id=formal_request.cover_selection_id,
+            )
+            if creative is not None:
+                await self._export_executor.verify_release_creative(
+                    creative,
+                    workspace_id=context.trusted.workspace_id,
+                    project_id=formal_request.project_id,
+                )
+                await self._assert_creative_review(context, formal_request, None, creative)
+                evidence = await self._store(context).load_export_evidence(formal_request, context.audit)
+                await self._assert_creative_review(context, formal_request, evidence, creative)
+        return await ComplianceRuntime(authority_store=self._store(context)).authorize_export(
+            formal_request, context.audit
+        )
 
     async def _synchronize_billing_settlement(
         self,
@@ -374,6 +403,7 @@ class ProductionComplianceRuntime:
         project_version: str,
         target: str,
         idempotency_key: str,
+        cover_selection_id: str | None = None,
     ) -> dict[str, object]:
         context = await self.resolve_context(request, project_id=project_id, required_permission="compliance.manage")
         if self._compliance_provider is None:
@@ -386,23 +416,25 @@ class ProductionComplianceRuntime:
             project_id=project_id,
             version_id=project_version,
         )
-        facts: dict[str, object] = {
-            "exportTarget": target,
-            "objectKey": source.output.object_key,
-            "contentSha256": source.output.content_sha256,
-            "sizeBytes": source.output.size_bytes,
-            "durationMs": source.output.duration_ms,
-            "timelineId": source.timeline_id,
-            "timelineVersionId": source.timeline_version_id,
-            "container": source.profile.container,
-            "videoCodec": source.profile.video_codec,
-            "audioCodec": source.profile.audio_codec,
-            "width": source.profile.width,
-            "height": source.profile.height,
-        }
-        input_digest = "sha256:" + hashlib.sha256(
-            json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        creative = None
+        if cover_selection_id is not None:
+            creative = await self._export_executor.load_release_creative(
+                tenant_id=context.trusted.tenant_id,
+                workspace_id=context.trusted.workspace_id,
+                project_id=project_id,
+                project_version=project_version,
+                output_format="publish_package",
+                target=target,
+                selection_id=cover_selection_id,
+            )
+            if creative is not None:
+                await self._export_executor.verify_release_creative(
+                    creative,
+                    workspace_id=context.trusted.workspace_id,
+                    project_id=project_id,
+                )
+        facts = provider_review_facts(source, target, creative)
+        input_digest = review_input_digest(facts)
         audit = context.audit
         result = await self._compliance_provider.review(
             ProviderReviewRequest(
@@ -413,6 +445,8 @@ class ProductionComplianceRuntime:
                 audit=audit,
             )
         )
+        if creative is not None and result.reviewed_creative_digest != creative_digest(creative):
+            raise ComplianceProviderError("COVER_COMPLIANCE_REVIEW_REQUIRED")
         return await self._store(context).save_provider_assessment(
             project_id=project_id,
             project_version=project_version,
@@ -424,6 +458,8 @@ class ProductionComplianceRuntime:
             commercial_export_enabled=self._commercial_export_enabled,
             idempotency_key=idempotency_key,
             audit=audit,
+            release_creative_digest=None if creative is None else creative_digest(creative),
+            release_creative_snapshot=creative,
         )
 
     async def submit_export(
@@ -439,6 +475,33 @@ class ProductionComplianceRuntime:
             project_id=formal_request.project_id,
             required_permission="export.manage",
         )
+        lock_scope = json.dumps(
+            [
+                context.trusted.tenant_id,
+                context.trusted.workspace_id,
+                formal_request.project_id,
+                idempotency_key,
+            ],
+            separators=(",", ":"),
+        )
+        lock_key = int.from_bytes(hashlib.sha256(lock_scope.encode()).digest()[:8], "big", signed=True)
+        async with self._export_lock_engine.begin() as connection:
+            await connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+            return await self._submit_serialized_export(
+                context,
+                formal_request=formal_request,
+                output_format=output_format,
+                idempotency_key=idempotency_key,
+            )
+
+    async def _submit_serialized_export(
+        self,
+        context: ComplianceRequestContext,
+        *,
+        formal_request: FormalExportRequest,
+        output_format: str,
+        idempotency_key: str,
+    ) -> DeliveryRecord:
         store = self._store(context)
         existing = await store.get_delivery(project_id=formal_request.project_id, request_id=idempotency_key)
         if existing is not None:
@@ -446,11 +509,11 @@ class ProductionComplianceRuntime:
                 existing.project_version != formal_request.project_version
                 or existing.target != formal_request.target
                 or existing.format != output_format
+                or existing.requested_cover_selection_id != formal_request.cover_selection_id
             ):
-                raise DeliveryIdempotencyConflict(
-                    "formal export idempotency key was reused with a different request"
-                )
-            return existing
+                raise DeliveryIdempotencyConflict("formal export idempotency key was reused with a different request")
+            if existing.status != "processing":
+                return existing
         audit = AuditContext(
             actor_id=context.trusted.actor_id,
             tenant_id=context.trusted.tenant_id,
@@ -458,6 +521,27 @@ class ProductionComplianceRuntime:
             source="xingjing_compliance_http",
             occurred_at=datetime.now(UTC),
         )
+        if self._export_executor is None:
+            raise ComplianceRuntimeUnavailable("FORMAL_EXPORT_EXECUTOR_NOT_CONFIGURED")
+        reservation = None
+        if existing is not None:
+            reservation = await store.load_release_reservation(
+                project_id=formal_request.project_id,
+                request_id=idempotency_key,
+            )
+            creative = reservation.snapshot
+        else:
+            creative = await self._export_executor.load_release_creative(
+                tenant_id=context.trusted.tenant_id,
+                workspace_id=context.trusted.workspace_id,
+                project_id=formal_request.project_id,
+                project_version=formal_request.project_version,
+                output_format=output_format,
+                target=formal_request.target,
+                selection_id=formal_request.cover_selection_id,
+            )
+        if creative is not None:
+            await self._assert_creative_review(context, formal_request, None, creative)
         await self._assert_content_not_blocked(context, formal_request.project_version)
         await self._synchronize_billing_settlement(context, formal_request.project_version)
         evidence = await store.load_export_evidence(formal_request, audit)
@@ -465,18 +549,60 @@ class ProductionComplianceRuntime:
         if not decision.allowed or decision.manifest_context is None:
             codes = ",".join(code.value for code in decision.block_codes)
             raise ValueError(f"FORMAL_EXPORT_BLOCKED:{codes}")
-        if self._export_executor is None:
-            raise ComplianceRuntimeUnavailable("FORMAL_EXPORT_EXECUTOR_NOT_CONFIGURED")
+        manifest = reservation.manifest if reservation is not None else decision.manifest_context
+        if creative is not None:
+            await self._assert_creative_review(context, formal_request, evidence, creative)
+            if reservation is None:
+                reservation = await store.reserve_release_creative(
+                    manifest,
+                    evidence,
+                    output_format=output_format,
+                    snapshot=creative,
+                    requested_selection_id=formal_request.cover_selection_id,
+                )
+                manifest, creative = reservation.manifest, reservation.snapshot
         artifact = await self._export_executor.execute(
             tenant_id=context.trusted.tenant_id,
             workspace_id=context.trusted.workspace_id,
             project_id=formal_request.project_id,
             project_version=formal_request.project_version,
             output_format=output_format,
-            manifest=decision.manifest_context,
+            manifest=manifest,
             evidence=evidence,
+            release_creative=creative,
+            requested_cover_selection_id=formal_request.cover_selection_id,
         )
-        return await store.record_delivery(decision.manifest_context, evidence, artifact)
+        return await store.record_delivery(manifest, evidence, artifact)
+
+    async def _assert_creative_review(
+        self,
+        context: ComplianceRequestContext,
+        formal_request: FormalExportRequest,
+        evidence: ExportAuthorityEvidence | None,
+        creative: dict[str, object],
+    ) -> None:
+        if self._export_executor is None:
+            raise ComplianceRuntimeUnavailable("FORMAL_EXPORT_EXECUTOR_NOT_CONFIGURED")
+        source = await self._export_executor.load_source_version(
+            tenant_id=context.trusted.tenant_id,
+            workspace_id=context.trusted.workspace_id,
+            project_id=formal_request.project_id,
+            version_id=formal_request.project_version,
+        )
+        try:
+            if evidence is None:
+                matches = await self._store(context).release_review_matches(
+                    project_id=formal_request.project_id,
+                    project_version=formal_request.project_version,
+                    input_digest=review_input_digest(provider_review_facts(source, formal_request.target, creative)),
+                    creative_digest=creative_digest(creative),
+                )
+                if not matches:
+                    raise ReleaseCreativeError("COVER_COMPLIANCE_REVIEW_REQUIRED")
+                return
+            assert_creative_review(evidence, source, formal_request.target, creative)
+        except ReleaseCreativeError as error:
+            raise FormalExportArtifactError(str(error)) from error
 
     async def record_authorization(
         self,
@@ -542,6 +668,7 @@ class ProductionComplianceRuntime:
         engine = self._engine
         if engine is not None:
             self._engine = None
+            await self._export_lock_engine.dispose()
             await engine.dispose()
 
     def _store(self, context: ComplianceRequestContext) -> SqlAlchemyComplianceAuthorityStore:
@@ -567,7 +694,8 @@ class ProductionComplianceRuntime:
         """Make AD-011 governance an export-side server gate, not an admin-only label."""
         try:
             async with self._session_factory() as session:
-                blocked = await session.scalar(text("""
+                blocked = await session.scalar(
+                    text("""
                     SELECT EXISTS(
                       SELECT 1
                         FROM xingjing_admin_business_governance governance
@@ -580,12 +708,14 @@ class ProductionComplianceRuntime:
                          AND video.tenant_id=:tenant_id AND video.workspace_id=:workspace_id
                          AND video.project_id=:project_id AND video.version_id=:version_id
                     )
-                """), {
-                    "tenant_id": context.trusted.tenant_id,
-                    "workspace_id": context.trusted.workspace_id,
-                    "project_id": context.project_id,
-                    "version_id": version_id,
-                })
+                """),
+                    {
+                        "tenant_id": context.trusted.tenant_id,
+                        "workspace_id": context.trusted.workspace_id,
+                        "project_id": context.project_id,
+                        "version_id": version_id,
+                    },
+                )
         except SQLAlchemyError as error:
             raise ComplianceRuntimeUnavailable("CONTENT_GOVERNANCE_GATE_UNAVAILABLE") from error
         if blocked:
@@ -620,6 +750,9 @@ def create_production_compliance_runtime(
             session_factory=session_factory,
             render_root=render_root,
             export_root=export_root,
+            generation_root=Path(value)
+            if (value := os.environ.get("XINGJING_M06_ARTIFACT_ROOT", "").strip())
+            else None,
         )
     except FormalExportArtifactError as error:
         raise RuntimeConfigurationError(error.code) from error
