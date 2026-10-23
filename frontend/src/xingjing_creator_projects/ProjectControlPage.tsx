@@ -57,12 +57,11 @@ export function ProjectControlPage({ api }: { api: CreatorProjectsPort }) {
     { key: "pending", value: can("compliance.view") && episodes.every((e) => e.state !== "restricted") ? episodes.filter((e) => ["pending_review", "review_blocked"].includes(e.state)).length : "—", icon: TriangleAlert },
   ];
   const counts = tasks?.counts ?? {};
-  return <main className="mx-auto max-w-[1600px] space-y-5 px-4 py-6 md:px-6" aria-busy={busy || loading}>
+  return <main className="space-y-5" aria-busy={busy || loading}>
     <header className="flex flex-wrap items-start justify-between gap-4">
-      <div><p className="text-xs font-medium tracking-wider text-[#FF8D74]">{t("title")}</p><h1 className="mt-2 text-2xl font-semibold tracking-tight md:text-3xl">{project.name}</h1><p className="mt-2 text-sm text-slate-400">{t("intro")}</p></div>
+      <div><h1 className="text-xl font-semibold">{t("title")}</h1><p className="mt-2 text-sm text-slate-400">{t("intro")}</p></div>
       <div className="flex flex-wrap gap-2"><button className={controlButton} disabled={disabled || editing} onClick={refresh}><RefreshCw size={14} />{t("refresh")}</button>{can("project.manage") && !project.archived && <button className={controlButton} disabled={disabled || editing} onClick={() => project.setupState === "draft" ? go("guided-create") : setEditing(true)}>{t(project.setupState === "draft" ? "setup" : "editConfig")}</button>}<button className={controlButton + " border-orange-400/40 bg-orange-400/10 text-orange-200"} onClick={() => go("episodes")}>{t("manageEpisodes")}<ArrowRight size={14} /></button></div>
     </header>
-    <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-400">{[["projectId", project.id], ["type", project.type], ["target", project.targetPlatform], ["owner", project.ownerName], ["version", project.version]].map(([key, value]) => <span key={key}>{t(String(key))}<span className="ml-2 font-mono text-slate-200">{value}</span></span>)}</div>
     {editing && <ProjectOverviewSettings api={api} onClose={() => setEditing(false)} />}
     <section aria-label={t("overview")} className="grid grid-cols-2 gap-3 xl:grid-cols-4">{metrics.map(({ key, value, icon: Icon }) => <article key={key} className={panel}><div className="flex items-center justify-between gap-2 text-sm text-slate-400">{t(key)}<Icon size={17} className="text-slate-500" /></div><p className="mt-4 font-mono text-3xl font-semibold tracking-tight">{value}</p>{key === "totalEpisodes" && <p className="mt-2 text-xs text-slate-500">{t("planned", { count: data.plannedCount })}</p>}</article>)}</section>
     <p className="text-xs text-slate-500">{t("countHint")}</p>

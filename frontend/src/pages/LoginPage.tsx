@@ -73,7 +73,7 @@ export function LoginPage() {
           workspaces: Array<{ id: string }>;
         } };
         if (!contextEnvelope.data.currentWorkspace && contextEnvelope.data.workspaces.length !== 1) {
-          sessionStorage.setItem("xingjing_workspace_return", safeReturnPath(new URLSearchParams(search).get("from")) ?? "/app/projects");
+          sessionStorage.setItem("xingjing_workspace_return", safeReturnPath(new URLSearchParams(search).get("from")) ?? "/app/home");
           setLocation("/workspace-select");
           return;
         }
@@ -90,9 +90,9 @@ export function LoginPage() {
         }
       }
       // 登录成功后回跳到进入登录页前的原始地址（由 AuthGuard / 401 拦截以 ?from 传入），
-      // 经 safeReturnPath 校验为站内安全路径；非法或缺失时回退到项目列表。
+      // 经 safeReturnPath 校验为站内安全路径；非法或缺失时进入当前工作区主页。
       const returnTo = safeReturnPath(new URLSearchParams(search).get("from"));
-      setLocation(returnTo ?? "/app/projects");
+      setLocation(returnTo ?? "/app/home");
     } catch (err) {
       setError(errMsg(err, t("auth:login_failed")));
     } finally {
@@ -132,7 +132,7 @@ export function LoginPage() {
       );
       sessionStorage.setItem(
         "xingjing_workspace_return",
-        safeReturnPath(new URLSearchParams(search).get("from")) ?? "/app/projects",
+        safeReturnPath(new URLSearchParams(search).get("from")) ?? "/app/home",
       );
       setLocation("/workspace-select");
     } catch (error) {

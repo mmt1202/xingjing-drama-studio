@@ -186,7 +186,8 @@ export function ProjectBusinessRoute({
   const controlApi = useMemo(() => createProjectControlApi(() => token), [token]);
   if (surface === "home") return <Redirect to={`/app/workspaces/${encodeURIComponent(workspaceId)}/home`} />;
   const page = <ProjectBusinessContent workspaceId={workspaceId} projectId={projectId} surface={surface} itemId={itemId} />;
-  if (["create", "guided-create", "projects", "home"].includes(surface)) return page;
+  if (["create", "guided-create"].includes(surface)) return <CreatorWorkspaceFrame workspaceId={workspaceId} active="projects">{page}</CreatorWorkspaceFrame>;
+  if (["projects", "home"].includes(surface)) return page;
   return <ProjectFlowShell key={`${workspaceId}:${projectId}:${token}`} api={controlApi} workspaceId={workspaceId} projectId={projectId} slug={surface} itemId={itemId}>{page}</ProjectFlowShell>;
 }
 

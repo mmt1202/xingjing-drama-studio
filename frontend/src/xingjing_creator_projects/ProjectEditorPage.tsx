@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useWorkspaceNavigationGuard } from "@/xingjing_creator_home/WorkspaceFrame";
 import { ArrowLeft, ArrowRight, Check, Save } from "lucide-react";
 import { CreatorApiError } from "./api";
 import { CreatorPage } from "./shared";
@@ -77,8 +78,10 @@ function ProjectSetupForm({ api, projectId, mode = "quick", onCreated, onDraftSa
   const errorKey = apiError?.status === 409 ? "conflict" : apiError?.status === 403 ? "forbidden" : apiError?.status === 422 ? "invalid" : "error";
   const isReady = project?.setupState === "ready";
   const pending = saving || readingFile;
+  const dirty = !loading && !isReady && !saved && (Boolean(project) || Boolean(name.trim()) || JSON.stringify(value) !== JSON.stringify(initialSetup(context.user.id)));
+  useWorkspaceNavigationGuard(pending || dirty);
   return <div className="mx-auto max-w-7xl">
-    <div className="mb-6 flex flex-wrap items-center justify-between gap-4"><p className="max-w-2xl text-sm leading-6 text-slate-400">{t("intro")}</p>{onBack && <button type="button" className={setupButton} disabled={pending} onClick={onBack}><ArrowLeft size={15} className="mr-2 inline" />{t("back")}</button>}</div>
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-4"><p className="max-w-2xl text-sm leading-6 text-slate-400">{t("intro")}</p>{onBack && <button type="button" className={setupButton} disabled={pending} onClick={onBack}><ArrowLeft size={15} className="mr-2 inline" />{t(dirty ? "discardAndBack" : "back")}</button>}</div>
     {loading ? <p role="status" className="py-16 text-center text-slate-400">{t("loading")}</p> : <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
       <form onSubmit={submit} className="min-w-0 space-y-5">
         {isReady ? <section className="rounded-2xl border border-emerald-400/20 p-6"><h2 className="text-lg font-semibold">{t("created")}</h2><p className="mt-3 text-sm text-slate-400">{t("readonly")}</p><button type="button" className={setupButton + " mt-5"} onClick={() => onCreated?.(project.id)}>{t("openProject")}</button></section> : <>

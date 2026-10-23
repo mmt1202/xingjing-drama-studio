@@ -1,6 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ChevronRight, LockKeyhole, RefreshCw } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, ChevronRight, Film, LockKeyhole, RefreshCw } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
+import { CreatorShell } from "@/xingjing_creator_home/CreatorShell";
+import { createHomeApi, type HomeApi, type WorkspaceAccess } from "@/xingjing_creator_home/api";
+import { readHomeReturn } from "@/xingjing_creator_home/return-state";
+import { readAnalyticsReturn } from "@/xingjing_analytics/return-state";
+import { useAuthStore } from "@/stores/auth-store";
 import { CreatorApiError } from "./api";
 import type { ProjectControl, ProjectControlApi } from "./control-api";
 import { useControlTranslation } from "./control-i18n";
@@ -40,6 +45,10 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const { t } = useControlTranslation();
   const [location, navigate] = useLocation();
   const search = useSearch();
+  const token = useAuthStore((state) => state.token);
+  const workspaceApi = useMemo(() => createHomeApi(workspaceId, token), [workspaceId, token]);
+  const [workspaceContext, setWorkspaceContext] = useState<{ api: HomeApi; access?: WorkspaceAccess; failed?: boolean }>();
+  const [workspaceReload, setWorkspaceReload] = useState(0);
   const [data, setData] = useState<ProjectControl>();
   const [error, setError] = useState<unknown>();
   const [loading, setLoading] = useState(true);
@@ -62,6 +71,15 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const requestKey = `${projectId}:${filters}:${slug}:${itemId ?? ""}:${reload}`;
   useEffect(() => {
     const abort = new AbortController();
+    void workspaceApi.context(abort.signal).then((access) => {
+      if (!abort.signal.aborted) setWorkspaceContext({ api: workspaceApi, access });
+    }).catch(() => {
+      if (!abort.signal.aborted) setWorkspaceContext({ api: workspaceApi, failed: true });
+    });
+    return () => abort.abort();
+  }, [workspaceApi, workspaceReload]);
+  useEffect(() => {
+    const abort = new AbortController();
     const query = new URLSearchParams(filters);
     void api.get(projectId, { days: Number(query.get("days") ?? 0), q: query.get("q") ?? "", episodeState: query.get("episodeState") ?? "", offset: Number(query.get("offset") ?? 0) }, abort.signal)
       .then((result) => { if (!abort.signal.aborted) { setData(result); setError(undefined); setLoading(false); setLoadedKey(requestKey); } })
@@ -74,6 +92,9 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const episode = validData?.episodes.find((e) => String(e.episode) === episodeId);
   const invalidEpisode = Boolean(episodeId && validData && !episode);
   const base = `/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}`;
+  const workspaceBase = `/app/workspaces/${encodeURIComponent(workspaceId)}`;
+  const workspaceAccess = workspaceContext?.api === workspaceApi ? workspaceContext.access : undefined;
+  const workspaceUnavailable = workspaceContext?.api === workspaceApi && workspaceContext.failed;
   const filterKey = `control:${workspaceId}:${projectId}:filters`;
   function canLeave() {
     const allowed = [...guards.current].every((guard) => guard());
@@ -98,6 +119,12 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     setGate(undefined);
     navigate(`${base}/${path}${query.size ? `?${query}` : ""}`);
   }
+  function goWorkspace(target: string) {
+    if (!canLeave() || !workspaceAccess) return;
+    const [path, supplied = ""] = target.split("?");
+    const query = supplied || (path === "home" ? readHomeReturn(workspaceAccess.actorId, workspaceId).query : path === "analytics" ? readAnalyticsReturn(workspaceAccess.actorId, workspaceId).query : "");
+    navigate(`${workspaceBase}/${path}${query ? `?${query}` : ""}`);
+  }
   const active = activeStage(slug);
   const stages = validData?.stages.map((stage) => {
     if (stage.reason || !episode) return stage;
@@ -108,31 +135,45 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   }) ?? [];
   const selectedGate = stages.find((s) => s.id === gate && s.reason);
   const pageGate = stages.find((s) => s.id === active && s.reason);
-  return <div className="min-h-screen bg-[#07080C] text-[#F5F6FA]">
-    <header className="border-b border-[#2A2E3A] bg-[#101218] px-4 py-4 md:px-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label={t("context")} className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
-          <button className={controlButton} onClick={() => { if (canLeave()) navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects`); }}><ArrowLeft size={14} />{t("library")}</button>
-          <span className="max-w-40 truncate text-xs text-slate-500" title={workspaceId}>{workspaceId}</span>
-          <ChevronRight size={14} className="text-slate-600" /><button className="max-w-72 truncate font-semibold hover:text-orange-300" onClick={() => go("control")}>{validData?.project.name ?? t("title")}</button>
-          {objectId && <span className="max-w-48 truncate font-mono text-xs text-slate-400" title={objectId}>{t("object")} · {objectId}</span>}
-        </nav>
-        {validData && <label className="flex items-center gap-3 text-xs text-slate-400">{t("context")}<select aria-label={t("context")} value={episodeId ?? ""} className="max-w-64 rounded-lg border border-[#2A2E3A] bg-[#171922] p-2 text-sm text-slate-100" onChange={(event) => {
-          const target = slug === "generation" && itemId ? `${slug}/${itemId}` : slug === "collaboration" && itemId ? `${slug}/${itemId}` : slug;
-          go(target, event.target.value ? Number(event.target.value) : null);
-        }}><option value="">{t("allEpisodes")}</option>{invalidEpisode && <option value={episodeId ?? ""}>{t("invalidEpisode")}</option>}{validData.episodes.map((e) => <option key={e.episode} value={e.episode}>{t("episode", { number: e.episode })} · {e.title}</option>)}</select></label>}
+  return <CreatorShell active="projects" title={t(`stage.${active}`)} workspaceLabel={workspaceAccess?.workspaceName ?? workspaceId} permissions={workspaceAccess?.permissions ?? []} onNavigate={goWorkspace} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
+    <div className="xj-project-layout">
+      <section className="xj-project-card" aria-label={t("projectIdentity")}>
+        {validData ? <>
+          <div className="xj-project-identity">
+            <div className="flex min-w-0 flex-1 items-start gap-4">
+              <div className="xj-project-poster" aria-hidden="true"><Film size={23} className="text-violet-200" /></div>
+              <div className="min-w-0 flex-1">
+                <button className="max-w-full truncate text-left text-lg font-semibold text-white hover:text-violet-200" title={validData.project.name} onClick={() => go("control")}>{validData.project.name}</button>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400"><span className="rounded-full border border-white/10 bg-white/[.03] px-3 py-1">{t(`projectType.${validData.project.type}`, { defaultValue: validData.project.type })}</span><span className="rounded-full border border-white/10 bg-white/[.03] px-3 py-1">{t("planned", { count: validData.plannedCount })}</span><span>{t("productionState")}: {t(`status.${validData.project.archived ? "archived" : validData.project.productionStatus}`, { defaultValue: validData.project.productionStatus })}</span></div>
+                <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] leading-5 text-slate-500">{[["projectId", validData.project.id], ["target", validData.project.targetPlatform], ["owner", validData.project.ownerName], ["version", validData.project.version]].map(([label, value]) => <div key={label} className="flex min-w-0 max-w-full gap-2"><dt>{t(String(label))}</dt><dd className="min-w-0 truncate text-slate-300" title={String(value)}>{value}</dd></div>)}</dl>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-col items-start gap-3 sm:items-end">
+              <div className="text-left sm:text-right"><p className="text-[11px] text-slate-500">{t("currentStage")}</p><span className="mt-2 inline-flex rounded-full border border-violet-300/20 bg-gradient-to-r from-violet-500/30 to-orange-400/15 px-4 py-2 text-sm text-white">{t(`stage.${active}`)}</span></div>
+              <button className="xj-shell-button" disabled={!workspaceAccess?.permissions.includes("project.view")} onClick={() => goWorkspace("projects")}><ArrowLeft size={14} />{t("library")}</button>
+            </div>
+          </div>
+          <div className="xj-project-flow">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><p className="text-[11px] text-slate-500">{t("flow")}</p><label className="flex max-w-full items-center gap-3 text-xs text-slate-400"><span className="shrink-0">{t("context")}</span><select aria-label={t("context")} value={episodeId ?? ""} className="min-w-0 max-w-72 rounded-xl border border-white/10 bg-[#171B27] px-3 py-2 text-sm text-slate-200" onChange={(event) => {
+              const target = slug === "generation" && itemId ? `${slug}/${itemId}` : slug === "collaboration" && itemId ? `${slug}/${itemId}` : slug;
+              go(target, event.target.value ? Number(event.target.value) : null);
+            }}><option value="">{t("allEpisodes")}</option>{invalidEpisode ? <option value={episodeId ?? ""}>{t("invalidEpisode")}</option> : null}{validData.episodes.map((item) => <option key={item.episode} value={item.episode}>{t("episode", { number: item.episode })} · {item.title}</option>)}</select></label></div>
+            <nav aria-label={t("flow")} className="flex flex-wrap gap-2">{stages.map((stage) => <button key={stage.id} className="xj-project-stage" aria-current={stage.id === active ? "step" : undefined} aria-disabled={Boolean(stage.reason)} title={stage.reason ? t(`gate.${stage.reason}`) : t(`stage.${stage.id}`)} onClick={() => stage.reason ? setGate(stage.id) : go(stage.target)}>{t(`stage.${stage.id}`)}{stage.reason ? <LockKeyhole size={12} /> : null}</button>)}</nav>
+            {objectId ? <p className="mt-3 truncate text-[11px] text-slate-500" title={objectId}>{t("object")}: {objectId}</p> : null}
+            {selectedGate ? <div role="status" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-600/30 bg-amber-500/5 p-3 text-sm text-amber-200"><span>{t(`stage.${selectedGate.id}`)} · {t(`gate.${selectedGate.reason}`)}</span>{selectedGate.recovery ? <button className={controlButton} onClick={() => go(selectedGate.recovery!)}>{t("recovery")}<ChevronRight size={14} /></button> : null}</div> : null}
+          </div>
+        </> : <p className="px-6 py-5 text-sm text-slate-500">{t(error ? "projectIdentity" : "loading")}</p>}
+      </section>
+      {workspaceUnavailable ? <p role="status" className="mt-4 text-xs leading-6 text-amber-200">{t("workspaceNavigationUnavailable")} <button className="underline underline-offset-4" onClick={() => setWorkspaceReload((value) => value + 1)}>{t("retry")}</button></p> : null}
+      {navigationBlocked ? <p role="status" className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/[.04] p-3 text-sm text-amber-200">{t("saveBeforeNavigate")}</p> : null}
+      <div className="xj-project-surface">
+        {error ? <section role="alert" className="rounded-xl border border-red-400/30 p-6"><h1>{t("failed")}</h1><p className="my-3 text-sm text-slate-400">{t(apiError?.status === 403 ? "forbidden" : apiError?.status === 404 ? "missing" : "notSaved")}</p>{apiError?.requestId ? <p className="mb-3 font-mono text-xs">{apiError.requestId}</p> : null}<button className={controlButton} onClick={refresh}><RefreshCw size={14} />{t("retry")}</button></section>
+          : data?.project.id === projectId && data.workspaceId !== workspaceId ? <section role="alert" className="p-6"><p>{t("missing")}</p><button className={controlButton + " mt-4"} disabled={!workspaceAccess?.permissions.includes("project.view")} onClick={() => goWorkspace("projects")}>{t("library")}</button></section>
+          : !validData ? <p role="status" className="p-12 text-center text-slate-400">{t("loading")}</p>
+          : invalidEpisode ? <section role="alert" className="p-6"><p>{t("invalidEpisode")}</p><button className={controlButton + " mt-4"} onClick={() => go("control", null)}>{t("title")}</button></section>
+          : pageGate ? <section role="status" className="rounded-xl border border-amber-400/30 p-6"><h1 className="text-lg">{t(`stage.${pageGate.id}`)}</h1><p className="my-4 text-sm text-amber-200">{t(`gate.${pageGate.reason}`)}</p>{pageGate.recovery ? <button className={controlButton} onClick={() => go(pageGate.recovery!)}>{t("recovery")}</button> : null}</section>
+          : <FlowContext.Provider value={{ data: validData, loading: loading || loadedKey !== requestKey, refresh, go, registerGuard }}><div key={`${projectId}:${location}:${episodeId ?? ""}:${params.get("timelineId") ?? ""}`}>{["generation", "audio", "audio-subtitle"].includes(slug) ? <p className="mb-4 text-xs leading-6 text-slate-400">{t("projectWide")}</p> : null}{children}</div></FlowContext.Provider>}
       </div>
-      {validData && <nav aria-label={t("flow")} className="mt-4 flex flex-wrap gap-1">{stages.map((stage, index) => <button key={stage.id} aria-current={stage.id === active ? "step" : undefined} aria-disabled={Boolean(stage.reason)} title={stage.reason ? t(`gate.${stage.reason}`) : t(`stage.${stage.id}`)} onClick={() => stage.reason ? setGate(stage.id) : go(stage.target)} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 ${stage.id === active ? "bg-[#FF6B4A] font-semibold text-white" : stage.reason ? "text-slate-500 hover:bg-white/5" : "text-slate-300 hover:bg-white/10"}`}>
-        <span className="font-mono opacity-60">{String(index + 1).padStart(2, "0")}</span>{t(`stage.${stage.id}`)}{stage.reason && <LockKeyhole size={11} />}
-      </button>)}</nav>}
-      {selectedGate && <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-600/30 bg-amber-500/5 p-3 text-sm text-amber-200"><span>{t(`stage.${selectedGate.id}`)} · {t(`gate.${selectedGate.reason}`)}</span>{selectedGate.recovery && <button className={controlButton} onClick={() => go(selectedGate.recovery!)}>{t("recovery")}<ChevronRight size={14} /></button>}</div>}
-      {navigationBlocked && <p role="status" className="mt-3 text-sm text-amber-200">{t("saveBeforeNavigate")}</p>}
-    </header>
-    {error ? <section role="alert" className="m-6 rounded-xl border border-red-400/30 p-6"><h1>{t("failed")}</h1><p className="my-3 text-sm text-slate-400">{t(apiError?.status === 403 ? "forbidden" : apiError?.status === 404 ? "missing" : "notSaved")}</p>{apiError?.requestId && <p className="mb-3 font-mono text-xs">{apiError.requestId}</p>}<button className={controlButton} onClick={refresh}><RefreshCw size={14} />{t("retry")}</button></section>
-      : data?.project.id === projectId && data.workspaceId !== workspaceId ? <section role="alert" className="m-6 p-6"><p>{t("missing")}</p><button className={controlButton + " mt-4"} onClick={() => navigate(`/app/workspaces/${encodeURIComponent(data.workspaceId)}/projects`)}>{t("library")}</button></section>
-      : !validData ? <p role="status" className="p-12 text-center text-slate-400">{t("loading")}</p>
-      : invalidEpisode ? <section role="alert" className="m-6 p-6"><p>{t("invalidEpisode")}</p><button className={controlButton + " mt-4"} onClick={() => go("control", null)}>{t("title")}</button></section>
-      : pageGate ? <section role="status" className="m-6 rounded-xl border border-amber-400/30 p-6"><h1 className="text-lg">{t(`stage.${pageGate.id}`)}</h1><p className="my-4 text-sm text-amber-200">{t(`gate.${pageGate.reason}`)}</p>{pageGate.recovery && <button className={controlButton} onClick={() => go(pageGate.recovery!)}>{t("recovery")}</button>}</section>
-      : <FlowContext.Provider value={{ data: validData, loading: loading || loadedKey !== requestKey, refresh, go, registerGuard }}><div key={`${projectId}:${location}:${episodeId ?? ""}:${params.get("timelineId") ?? ""}`}>{["generation", "audio", "audio-subtitle"].includes(slug) && <p className="px-6 pt-4 text-xs text-slate-400">{t("projectWide")}</p>}{children}</div></FlowContext.Provider>}
-  </div>;
+    </div>
+  </CreatorShell>;
 }

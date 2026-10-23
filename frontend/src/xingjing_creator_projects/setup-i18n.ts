@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 
 const zh = {
+  discardAndBack: "放弃更改并返回项目库",
   quick: "快捷新建项目", guided: "引导式新建项目", editDraft: "继续建项草稿", intro: "确定内容、交付规格与制作资源，预览创建后的工作区。",
   step1: "项目底稿与起点", step2: "集数时长与交付", step3: "预算权限与审片", name: "项目名称", shortName: "项目简称", ownerId: "负责人", workspace: "团队空间",
   projectType: "项目类型", sourceKind: "内容起点", sourceText: "小说或剧本正文", sourceHelp: "粘贴正文或读取 UTF-8 TXT 文件，最多 100 万字符。", readFile: "读取 TXT 文件", fileError: "请选择不超过 3 MB 的 UTF-8 TXT 文件，正文最多 100 万字符。",
@@ -19,6 +20,7 @@ const zh = {
 };
 type Messages = Record<keyof typeof zh, string>;
 const en: Messages = {
+  discardAndBack: "Discard changes and return to projects",
   quick: "Quick project setup", guided: "Guided project setup", editDraft: "Resume project draft", intro: "Define your content, delivery format and resources, then preview the workspace.",
   step1: "Project and starting point", step2: "Episodes and delivery", step3: "Budget and review", name: "Project name", shortName: "Short name", ownerId: "Project owner", workspace: "Team workspace",
   projectType: "Project type", sourceKind: "Starting point", sourceText: "Novel or screenplay text", sourceHelp: "Paste text or read a UTF-8 TXT file, up to 1 million characters.", readFile: "Read TXT file", fileError: "Choose a UTF-8 TXT file under 3 MB, with at most 1 million characters.",
@@ -35,6 +37,7 @@ const en: Messages = {
   previous: "Previous", next: "Next", saveDraft: "Save draft", create: "Create project", saving: "Saving…", draftSaved: "Draft saved. Resume it from the project library.", loading: "Loading project setup…", optionsError: "Team or model options could not be loaded. Retry, or use the current owner and workspace routing.", retry: "Retry", back: "Project library", refresh: "Reload", error: "Could not save. Your input is preserved; please retry.", conflict: "The project changed. Reload and review its setup.", forbidden: "You do not have project management permission in this workspace.", invalid: "Check the highlighted fields and configuration limits.", created: "Project created", openProject: "Open project overview", readonly: "Setup is complete. Continue production from the project overview.", resumeDraft: "Resume setup", draftBadge: "Setup draft", setupReady: "Project ready", validation: "Complete the required fields before creating the project.",
 };
 const vi: Messages = {
+  discardAndBack: "Bỏ thay đổi và về thư viện dự án",
   quick: "Tạo dự án nhanh", guided: "Tạo dự án theo hướng dẫn", editDraft: "Tiếp tục bản nháp dự án", intro: "Xác định nội dung, định dạng bàn giao và nguồn lực, sau đó xem trước không gian dự án.",
   step1: "Dự án và điểm bắt đầu", step2: "Tập phim và bàn giao", step3: "Ngân sách và duyệt", name: "Tên dự án", shortName: "Tên viết tắt", ownerId: "Người phụ trách", workspace: "Không gian nhóm",
   projectType: "Loại dự án", sourceKind: "Điểm bắt đầu", sourceText: "Văn bản tiểu thuyết hoặc kịch bản", sourceHelp: "Dán văn bản hoặc đọc tệp TXT UTF-8, tối đa 1 triệu ký tự.", readFile: "Đọc tệp TXT", fileError: "Chọn tệp TXT UTF-8 dưới 3 MB, tối đa 1 triệu ký tự.",

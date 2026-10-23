@@ -278,14 +278,14 @@ export function AppRoutes() {
         {/* Token-scoped customer review pages never receive production editing context. */}
         <Route path="/review/:reviewToken/:pageId"><CollaborationBusinessPage /></Route>
 
-        {/* Root redirects to projects list */}
+        {/* Default entry resolves the current workspace before showing its home. */}
         <Route path="/">
-          <Redirect to="/app/projects" />
+          <Redirect to="/app/home" />
         </Route>
 
-        {/* /app and /app/ also redirect to projects list */}
+        {/* /app and /app/ share the workspace home entry. */}
         <Route path={ROUTE_APP}>
-          <Redirect to={ROUTE_APP_PROJECTS} />
+          <Redirect to="/app/home" />
         </Route>
 
         {/* Projects list */}

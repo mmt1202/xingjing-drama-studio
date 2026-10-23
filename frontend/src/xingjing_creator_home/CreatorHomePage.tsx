@@ -27,7 +27,7 @@ function searchText(form: HTMLFormElement) {
 }
 export function CreatorHomePage() {
   const { t } = useHomeTranslation();
-  const { access, token, go } = useCreatorWorkspace();
+  const { access, token } = useCreatorWorkspace();
   const preferencesApi = useMemo(() => createPreferenceApi({ workspaceId: access.workspaceId, accessToken: token }), [access.workspaceId, token]);
   const [record, setRecord] = useState<PreferenceRecord | null>();
   const [preferenceError, setPreferenceError] = useState(false);
@@ -44,8 +44,8 @@ export function CreatorHomePage() {
   }, [access.permissions, preferencesApi, reload]);
   const preferences = homePreferences(record?.value);
   if (!access.permissions.includes("project.view")) return <p role="alert" className="p-8">{t("forbidden")}</p>;
-  return <main className="mx-auto max-w-[1440px] px-5 pb-12 sm:px-8">
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 py-5"><div><p className="text-sm font-semibold">{t("home")}</p><p className="mt-1 text-xs text-slate-500">{t("subtitle")}</p></div><div className="flex flex-wrap gap-2">{access.permissions.includes("settings.manage") && <button className={homeButton} disabled={record === undefined || preferenceError || editing} onClick={() => { setEditing(true); setSaved(false); }}><Settings2 size={15} />{t("customize")}</button>}{access.permissions.includes("project.manage") && <button className={homeButton} onClick={() => go("projects/_new/guided-create")}>{t("create")}<ArrowRight size={14} /></button>}</div></header>
+  return <main className="xj-home-page">
+    <div className="xj-home-tools">{access.permissions.includes("settings.manage") && <button className={homeButton} disabled={record === undefined || preferenceError || editing} onClick={() => { setEditing(true); setSaved(false); }}><Settings2 size={15} />{t("customize")}</button>}</div>
     {preferenceError && <p role="status" className="mt-4 text-xs text-amber-200">{t("preferenceFailed")} <button className="underline" onClick={() => setReload((value) => value + 1)}>{t("retry")}</button></p>}
     {editing && record !== undefined && <div className="mt-5"><HomePreferencesEditor api={preferencesApi} record={record} onSaved={(next) => { setRecord(next); setEditing(false); setSaved(true); }} onClose={() => setEditing(false)} onReload={() => { setEditing(false); setReload((value) => value + 1); }} /></div>}
     {saved && <p role="status" className="mt-3 text-sm text-emerald-300">{t("saved")}</p>}
