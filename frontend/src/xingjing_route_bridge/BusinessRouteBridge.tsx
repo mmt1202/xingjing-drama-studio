@@ -3,7 +3,9 @@ import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
 import { createProjectControlApi } from "@/xingjing_creator_projects/control-api";
 import { ProjectFlowShell } from "@/xingjing_creator_projects/ProjectFlowShell";
-import { useLocation, useSearch } from "wouter";
+import { Redirect, useLocation, useSearch } from "wouter";
+import { CreatorWorkspaceFrame } from "@/xingjing_creator_home/WorkspaceFrame";
+import { CreatorHomePage, WorkspaceTasks } from "@/xingjing_creator_home/CreatorHomePage";
 
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -83,6 +85,7 @@ export function WorkspaceProjectsRoute({
     [workspaceId, token],
   );
   return (
+    <CreatorWorkspaceFrame workspaceId={workspaceId} active="projects">
     <ProjectLibraryPage
       api={api}
       onNavigate={(target, projectId) => {
@@ -92,6 +95,7 @@ export function WorkspaceProjectsRoute({
         );
       }}
     />
+    </CreatorWorkspaceFrame>
   );
 }
 
@@ -150,13 +154,25 @@ export function WorkspaceAssetsRoute({
       );
   };
   return (
+    <CreatorWorkspaceFrame workspaceId={workspaceId} active="assets">
     <Page
       workspaceId={workspaceId}
       assetId={assetId}
       api={api}
       onNavigate={go}
     />
+    </CreatorWorkspaceFrame>
   );
+}
+
+export function WorkspaceLandingRoute({ workspaceId, surface }: { workspaceId: string; surface: string }) {
+  const token = useAuthStore((state) => state.token);
+  const preferenceApi = useMemo(() => createPreferenceApi({ workspaceId, accessToken: token }), [workspaceId, token]);
+  const commercePage = { templates: "CR-112", billing: "CR-009", commercial: "CR-013", team: "CR-107" }[surface];
+  if (!["home", "tasks", "templates", "billing", "commercial", "team", "settings"].includes(surface)) return <MissingSurface />;
+  return <CreatorWorkspaceFrame workspaceId={workspaceId} active={surface}>
+    {surface === "home" ? <CreatorHomePage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
+  </CreatorWorkspaceFrame>;
 }
 
 export function ProjectBusinessRoute({
@@ -164,6 +180,7 @@ export function ProjectBusinessRoute({
 }: { workspaceId: string; projectId: string; surface: string; itemId?: string }) {
   const token = useAuthStore((state) => state.token);
   const controlApi = useMemo(() => createProjectControlApi(() => token), [token]);
+  if (surface === "home") return <Redirect to={`/app/workspaces/${encodeURIComponent(workspaceId)}/home`} />;
   const page = <ProjectBusinessContent workspaceId={workspaceId} projectId={projectId} surface={surface} itemId={itemId} />;
   if (["create", "guided-create", "projects", "home"].includes(surface)) return page;
   return <ProjectFlowShell key={`${workspaceId}:${projectId}:${token}`} api={controlApi} workspaceId={workspaceId} projectId={projectId} slug={surface} itemId={itemId}>{page}</ProjectFlowShell>;
@@ -277,9 +294,11 @@ function ProjectBusinessContent({
     case "generation":
       return (
         <GenerationWorkbench
+          key={complianceQuery.get("taskId") ?? "generation"}
           scope={{ workspaceId, projectId }}
           view={surface.view}
           api={generationCenterApi}
+          initialTaskId={complianceQuery.get("taskId") ?? undefined}
         />
       );
     case "audio":
@@ -324,9 +343,6 @@ function ProjectBusinessContent({
               view="image"
               api={generationCenterApi}
             />
-          ) : null}
-          {surface.pageId === "CR-046" ? (
-            <WorkspaceProjectsRoute workspaceId={workspaceId} />
           ) : null}
         </>
       );
@@ -411,6 +427,7 @@ export function CollaborationBusinessRoute({
   workspaceId, projectId, reviewToken, pageId,
 }: { workspaceId?: string; projectId?: string; reviewToken?: string; pageId: string }) {
   if (workspaceId && projectId && !reviewToken) return <ProjectBusinessRoute workspaceId={workspaceId} projectId={projectId} surface="collaboration" itemId={pageId} />;
+  if (workspaceId && !reviewToken) return <CreatorWorkspaceFrame workspaceId={workspaceId} active={pageId === "CR-009" ? "billing" : ["CR-111", "CR-112"].includes(pageId) ? "templates" : pageId.startsWith("TM-") || pageId === "CR-107" ? "team" : "commercial"}><CollaborationBusinessContent workspaceId={workspaceId} projectId={projectId} pageId={pageId} /></CreatorWorkspaceFrame>;
   return <CollaborationBusinessContent workspaceId={workspaceId} projectId={projectId} reviewToken={reviewToken} pageId={pageId} />;
 }
 

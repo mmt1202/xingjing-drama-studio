@@ -60,7 +60,9 @@ export function WorkspaceSelectionPage() {
         body: JSON.stringify({ workspaceId }),
       });
       if (!response.ok) throw new Error("workspace");
-      const destination = sessionStorage.getItem("xingjing_workspace_return") ?? "/app/projects";
+      const requested = sessionStorage.getItem("xingjing_workspace_return");
+      const destination = !requested || requested === "/app/projects" || requested.startsWith("/app/workspaces/") && !requested.startsWith(`/app/workspaces/${encodeURIComponent(workspaceId)}/`)
+        ? `/app/workspaces/${encodeURIComponent(workspaceId)}/home` : requested;
       sessionStorage.removeItem("xingjing_workspace_return");
       navigate(destination);
     } catch {

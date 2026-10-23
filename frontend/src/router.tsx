@@ -36,7 +36,8 @@ import { useAssistantStore } from "@/stores/assistant-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useConfigStatusStore } from "@/stores/config-status-store";
 import { type GenerationWorkbenchView } from "@/xingjing_generation_center";
-import { AdminBusinessRoute, CollaborationBusinessRoute, ProjectBusinessRoute, WorkspaceAssetsRoute, WorkspaceProjectsRoute } from "@/xingjing_route_bridge";
+import { AdminBusinessRoute, CollaborationBusinessRoute, ProjectBusinessRoute, WorkspaceAssetsRoute, WorkspaceProjectsRoute, WorkspaceLandingRoute } from "@/xingjing_route_bridge";
+import { CreatorHomeEntry } from "@/xingjing_creator_home/HomeEntry";
 import { errMsg } from "@/utils/async";
 import {
   ROUTE_APP,
@@ -199,6 +200,11 @@ function WorkspaceProjectsBusinessPage() {
   return <WorkspaceProjectsRoute workspaceId={workspaceId} />;
 }
 
+function WorkspaceLandingBusinessPage() {
+  const { workspaceId = "", surface = "home" } = useParams<{ workspaceId: string; surface?: string }>();
+  return <WorkspaceLandingRoute workspaceId={workspaceId} surface={surface} />;
+}
+
 function WorkspaceAssetsBusinessPage({ surface }: { surface: "assets" | "asset-market" }) {
   const { workspaceId = "", assetId } = useParams<{ workspaceId: string; assetId?: string }>();
   return <WorkspaceAssetsRoute workspaceId={workspaceId} surface={surface} assetId={assetId} />;
@@ -211,7 +217,7 @@ function ProjectBusinessPage() {
 
 function GenerationBusinessPage({ view }: { view: GenerationWorkbenchView }) {
   const { workspaceId = "", projectId = "" } = useParams<{ workspaceId: string; projectId: string }>();
-  return <ProjectBusinessRoute workspaceId={workspaceId} projectId={projectId} surface="generation" itemId={view === "center" ? undefined : view} />;
+  return <ProjectBusinessRoute workspaceId={workspaceId} projectId={projectId} surface={view === "tasks" ? "tasks" : "generation"} itemId={view === "center" || view === "tasks" ? undefined : view} />;
 }
 
 const generationViews: Readonly<Record<string, GenerationWorkbenchView>> = {
@@ -304,6 +310,7 @@ export function AppRoutes() {
         </Route>
 
         {/* Canonical workspace-scoped business pages. Keep these before the legacy project nest. */}
+        <Route path="/app/home"><AuthGuard><CreatorHomeEntry /></AuthGuard></Route>
         <Route path="/app/workspaces/:workspaceId/projects">
           <AuthGuard><WorkspaceProjectsBusinessPage /></AuthGuard>
         </Route>
@@ -354,6 +361,9 @@ export function AppRoutes() {
         </Route>
         <Route path="/app/workspaces/:workspaceId/collaboration/:pageId">
           <AuthGuard><CollaborationBusinessPage /></AuthGuard>
+        </Route>
+        <Route path="/app/workspaces/:workspaceId/:surface">
+          <AuthGuard><WorkspaceLandingBusinessPage /></AuthGuard>
         </Route>
 
         {/* 演示项目没有可用的项目级设置（后端不存在该项目）——地址栏直达、书签或外部链接

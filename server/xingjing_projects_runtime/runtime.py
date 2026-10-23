@@ -33,6 +33,7 @@ from server.xingjing_team_persistence.repository import MemberRow
 from .control import register_control_routes
 from .control_actions import transition
 from .episodes import register_episode_routes
+from .home import register_home_routes
 from .initialization import initialize_source
 from .setup import ProjectSetup, SetupInvalid, create_projection, creation_digest, parse_setup
 
@@ -196,6 +197,7 @@ class ProjectsRuntime:
 
         register_episode_routes(self, router)
         register_control_routes(self, router)
+        register_home_routes(self, router)
         return router
 
     async def _context(self, request: Request, permission: str):

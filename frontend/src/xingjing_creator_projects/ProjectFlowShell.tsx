@@ -57,7 +57,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   }, []);
   const params = new URLSearchParams(search);
   const episodeId = params.get("episodeId");
-  const objectId = (slug !== "generation" && slug !== "collaboration" ? itemId : undefined) ?? params.get("projectVersion") ?? params.get("timelineId");
+  const objectId = (slug !== "generation" && slug !== "collaboration" ? itemId : undefined) ?? params.get("projectVersion") ?? params.get("timelineId") ?? params.get("taskId");
   const filters = slug === "control" ? new URLSearchParams({ days: params.get("days") ?? "0", q: params.get("q") ?? "", episodeState: params.get("episodeState") ?? "", offset: params.get("offset") ?? "0" }).toString() : "";
   const requestKey = `${projectId}:${filters}:${slug}:${itemId ?? ""}:${reload}`;
   useEffect(() => {

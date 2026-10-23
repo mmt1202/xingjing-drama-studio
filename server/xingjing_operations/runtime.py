@@ -350,10 +350,15 @@ def _preferences_router(
 
     @router.get("/preferences")
     def get_preferences(
+        request: Request,
         resource: str | None = None,
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
         _require(trusted, "settings.view")
+        if resource == "creator-home":
+            from .home_preferences import require_home_workspace
+
+            require_home_workspace(request, trusted)
         with sessions() as session:
             statement = select(GovernanceObjectRow).where(
                 GovernanceObjectRow.tenant_id == trusted.tenant_id,
@@ -473,15 +478,23 @@ def _preferences_router(
         idempotency_key: str = Header("", alias="Idempotency-Key"),
     ) -> dict[str, object]:
         _require(trusted, "settings.manage")
-        if payload.resource not in {
-            "cover-generation",
-            "cover-title-ab",
-            "creator-home",
-            "risk-appeal",
-            "settings",
-            "version-history",
-        } or not idempotency_key.strip():
+        if (
+            payload.resource
+            not in {
+                "cover-generation",
+                "cover-title-ab",
+                "creator-home",
+                "risk-appeal",
+                "settings",
+                "version-history",
+            }
+            or not idempotency_key.strip()
+        ):
             raise HTTPException(422, detail={"code": "INVALID_PREFERENCE"})
+        if payload.resource == "creator-home":
+            from .home_preferences import save_home_preferences
+
+            return save_home_preferences(sessions, trusted, payload, request, idempotency_key)
         command = ActionPayload(
             action="保存设置",
             objectId=trusted.actor_id,

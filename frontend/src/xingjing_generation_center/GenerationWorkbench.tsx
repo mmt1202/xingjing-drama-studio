@@ -112,9 +112,9 @@ function DetailPanel({ detail, onClose, onSelectCandidate, selecting }: { readon
   </aside>;
 }
 
-export interface GenerationWorkbenchProps { readonly scope: GenerationWorkspaceScope; readonly view?: GenerationWorkbenchView; readonly api?: GenerationCenterApi }
+export interface GenerationWorkbenchProps { readonly scope: GenerationWorkspaceScope; readonly view?: GenerationWorkbenchView; readonly api?: GenerationCenterApi; readonly initialTaskId?: string }
 
-export function GenerationWorkbench({ scope, view = "center", api = generationCenterApi }: GenerationWorkbenchProps) {
+export function GenerationWorkbench({ scope, view = "center", api = generationCenterApi, initialTaskId }: GenerationWorkbenchProps) {
   const config = copy[view]; const Icon = config.icon; const [tasks, setTasks] = useState<readonly GenerationTask[]>([]); const [total, setTotal] = useState(0); const [offset, setOffset] = useState(0); const [filters, setFilters] = useState<GenerationTaskFilters>({}); const [model, setModel] = useState<GenerationModelAvailability | null>(null); const [usage, setUsage] = useState<readonly GenerationModelUsageReport[]>([]); const [candidates, setCandidates] = useState<readonly GenerationCandidateSet[]>([]); const [candidateTotal, setCandidateTotal] = useState(0); const [selected, setSelected] = useState<GenerationTaskDetail | null>(null); const [state, setState] = useState<"loading" | "ready" | "forbidden" | "error">("loading"); const [message, setMessage] = useState(""); const [busyId, setBusyId] = useState<string>(); const controller = useRef<AbortController | null>(null);
   const load = useCallback(async () => { controller.current?.abort(); const signalController = new AbortController(); controller.current = signalController; setState("loading"); try { const [page, availability, recordedUsage, candidatePage] = await Promise.all([api.list(scope.projectId, offset, 50, signalController.signal, filters), api.models(scope.projectId, signalController.signal), view === "model-report" ? api.usage(scope.projectId, signalController.signal) : Promise.resolve([]), view === "video-candidates" ? api.candidates(scope.projectId, { mediaType: "video", offset: 0, limit: 20, signal: signalController.signal }) : Promise.resolve(null)]); setTasks(page.tasks); setTotal(page.total); setModel(availability); setUsage(recordedUsage); setCandidates(candidatePage?.candidates ?? []); setCandidateTotal(candidatePage?.total ?? 0); setSelected((current) => current ? { ...current, task: page.tasks.find((task) => task.task_id === current.task.task_id) ?? current.task } : null); setState("ready"); } catch (error) { if (signalController.signal.aborted) return; setState(error instanceof GenerationCenterApiError && error.status === 403 ? "forbidden" : "error"); setMessage(errorText(error)); } }, [api, filters, offset, scope.projectId, view]);
   useEffect(() => {
@@ -122,6 +122,12 @@ export function GenerationWorkbench({ scope, view = "center", api = generationCe
     return () => { window.clearTimeout(timer); controller.current?.abort(); };
   }, [load]);
   const processing = useMemo(() => tasks.filter((task) => isProcessingTask(task.status)).length, [tasks]);
+  useEffect(() => {
+    if (!initialTaskId) return;
+    const abort = new AbortController();
+    void api.detail(scope.projectId, initialTaskId, abort.signal).then((detail) => { if (!abort.signal.aborted) setSelected(detail); }).catch((error: unknown) => { if (!abort.signal.aborted) setMessage(errorText(error)); });
+    return () => abort.abort();
+  }, [api, scope.projectId, initialTaskId]);
   const readDetail = async (task: GenerationTask) => { try { setSelected(await api.detail(scope.projectId, task.task_id)); } catch (error) { setMessage(errorText(error)); } };
   const cancel = async (task: GenerationTask) => { setBusyId(task.task_id); setMessage(""); try { await api.cancel(scope.projectId, task, `xj:${scope.projectId}:cancel:${task.task_id}:${task.version}`); await load(); await readDetail(task); } catch (error) { setMessage(errorText(error)); if (error instanceof GenerationCenterApiError && error.status === 409) await load(); } finally { setBusyId(undefined); } };
   const retry = async (task: GenerationTask) => { setBusyId(task.task_id); setMessage(""); try { const retried = await api.retry(scope.projectId, task, `xj:${scope.projectId}:retry:${task.task_id}:${task.version}`); setMessage(`已从 ${task.task_id} 创建新的恢复任务 ${retried.task_id}。`); await load(); await readDetail(retried); } catch (error) { setMessage(errorText(error)); } finally { setBusyId(undefined); } };

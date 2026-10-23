@@ -41,6 +41,7 @@ import { ONBOARDING_ANCHORS } from "@/onboarding/anchors";
 import { OnboardingDemoCard } from "@/onboarding/OnboardingDemoCard";
 import { useOnboardingStore } from "@/stores/onboarding-store";
 import { BRAND } from "@/branding";
+import { CreatorHomeLink } from "@/xingjing_creator_home/HomeEntry";
 import {
   PHASE_ORDER,
   type Phase,
@@ -443,6 +444,7 @@ function TopBar({
         </label>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <CreatorHomeLink />
           <button
             type="button"
             onClick={onAssets}
