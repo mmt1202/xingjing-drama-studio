@@ -375,76 +375,62 @@ def _preferences_router(sessions: sessionmaker[Session], resolver: ContextResolv
 
     @router.get("/version-history")
     def version_history(
+        request: Request,
         project_id: str = Query(..., alias="projectId", min_length=1, max_length=128),
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
+        from server.xingjing_editing_persistence.models import TimelineVersionRow
+        from server.xingjing_versions.contracts import SCAN_LIMIT, VersionFailure
+        from server.xingjing_versions.reader import VersionReader, check_source, iso, scoped
+        from server.xingjing_versions.runtime import authorize_project
+
         _require(trusted, "settings.view")
-        parameters = {
-            "tenant": trusted.tenant_id,
-            "workspace": trusted.workspace_id,
-            "project": project_id,
-        }
-        with sessions() as session:
-            project_exists = session.scalar(
-                text(
-                    """SELECT 1 FROM xingjing_projects
-                    WHERE tenant_id=:tenant AND workspace_id=:workspace
-                    AND id=:project"""
-                ),
-                parameters,
-            )
-            if project_exists is None:
-                raise HTTPException(404, detail={"code": "PROJECT_NOT_FOUND"})
-            rows = session.execute(
-                text(
-                    """SELECT 'script' kind,v.script_id object_id,
-                    v.number::text version_id,v.number revision,
-                    v.change_summary summary,NULL::timestamptz created_at
-                    FROM xingjing_content_script_versions v
-                    JOIN xingjing_content_scripts s
-                    ON s.workspace_id=v.workspace_id AND s.script_id=v.script_id
-                    WHERE s.workspace_id=:workspace AND s.project_id=:project
-                    UNION ALL
-                    SELECT 'asset',v.asset_id,v.version_id,v.sequence,v.change_note,
-                    NULLIF(v.created_at,'')::timestamptz
-                    FROM xingjing_asset_versions v
-                    JOIN xingjing_asset_records a
-                    ON a.tenant_id=v.tenant_id AND a.workspace_id=v.workspace_id
-                    AND a.asset_id=v.asset_id
-                    WHERE a.tenant_id=:tenant AND a.workspace_id=:workspace
-                    AND a.owner_project_id=:project
-                    UNION ALL
-                    SELECT 'storyboard',storyboard_id,version::text,version,
-                    COALESCE(payload->>'status','storyboard snapshot'),
-                    NULLIF(payload->>'updated_at','')::timestamptz
-                    FROM xingjing_storyboards WHERE tenant_id=:tenant
-                    AND workspace_id=:workspace AND project_id=:project
-                    UNION ALL
-                    SELECT 'timeline',timeline_id,version_id,revision,
-                    COALESCE(snapshot->>'label','timeline snapshot'),created_at
-                    FROM xingjing_editing_timeline_versions
-                    WHERE tenant_id=:tenant AND workspace_id=:workspace
-                    AND project_id=:project
-                    UNION ALL
-                    SELECT 'final-video',final_video_id,version_id,1,
-                    COALESCE(snapshot->>'label','final video'),created_at
-                    FROM xingjing_editing_final_video_versions
-                    WHERE tenant_id=:tenant AND workspace_id=:workspace
-                    AND project_id=:project"""
-                ),
-                parameters,
-            ).mappings()
-            items = [
-                {
-                    "kind": str(row["kind"]),
-                    "objectId": str(row["object_id"]),
-                    "versionId": str(row["version_id"]),
-                    "revision": int(row["revision"]),
-                    "summary": str(row["summary"]),
-                    "createdAt": (row["created_at"].isoformat() if isinstance(row["created_at"], datetime) else None),
-                }
-                for row in rows
-            ]
+        for header, expected in (("X-Workspace-Id", trusted.workspace_id), ("X-Project-Id", project_id)):
+            if request.headers.get(header) and request.headers[header] != expected:
+                raise HTTPException(403, detail={"code": "VERSION_CONTEXT_MISMATCH"})
+        try:
+            with sessions() as session:
+                context = authorize_project(session, trusted, project_id)
+                entries = VersionReader(final_selection_available=False).entries(session, context, project_id)
+                items: list[dict[str, object]] = [
+                    {
+                        "kind": "final-video" if entry.node["ref"]["kind"] == "final" else entry.node["ref"]["kind"],
+                        "objectId": entry.node["ref"]["objectId"],
+                        "versionId": entry.node["ref"]["versionId"],
+                        "revision": entry.node["versionNumber"],
+                        "summary": entry.node["summary"],
+                        "createdAt": entry.node["createdAt"],
+                    }
+                    for entry in entries
+                    if entry.node["ref"]["kind"] != "shot"
+                ]
+                # Timeline remains a read-only compatibility kind. It uses the
+                # same project scope and final permission as the editing service.
+                if "final.view" in context.permissions:
+                    check_source(session, "XINGJING_EDITING_DATABASE_URL")
+                    rows = session.scalars(
+                        select(TimelineVersionRow)
+                        .where(*scoped(TimelineVersionRow, context), TimelineVersionRow.project_id == project_id)
+                        .order_by(TimelineVersionRow.created_at, TimelineVersionRow.version_id)
+                        .limit(SCAN_LIMIT + 1)
+                    )
+                    for row in rows:
+                        if len(items) >= SCAN_LIMIT:
+                            raise VersionFailure("VERSION_SOURCE_SCAN_LIMIT", 422)
+                        items.append(
+                            {
+                                "kind": "timeline",
+                                "objectId": row.timeline_id,
+                                "versionId": row.version_id,
+                                "revision": row.revision,
+                                "summary": str(row.snapshot.get("label") or "timeline snapshot"),
+                                "createdAt": iso(row.created_at),
+                            }
+                        )
+        except VersionFailure as error:
+            raise HTTPException(error.status, detail={"code": error.code}) from error
+        except SQLAlchemyError as error:
+            raise HTTPException(503, detail={"code": "VERSION_SOURCE_UNAVAILABLE"}) from error
         items.sort(
             key=lambda item: (
                 str(item["createdAt"] or ""),

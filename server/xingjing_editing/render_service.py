@@ -433,12 +433,16 @@ class RenderService:
         if current is None:
             raise RenderTaskNotFound()
         now = max(self._clock.now(), current.updated_at)
-        if current.status not in {
-            RenderStatus.QUEUED,
-            RenderStatus.RUNNING,
-            RenderStatus.RETRYING,
-            RenderStatus.CANCELLING,
-        } or now < current.deadline_at:
+        if (
+            current.status
+            not in {
+                RenderStatus.QUEUED,
+                RenderStatus.RUNNING,
+                RenderStatus.RETRYING,
+                RenderStatus.CANCELLING,
+            }
+            or now < current.deadline_at
+        ):
             return current
         failed = timeout_render_task(
             current,
@@ -456,6 +460,111 @@ class RenderService:
             action="render.timed_out",
         )
         return stored
+
+    async def select_final_version(
+        self,
+        context: AccessContext,
+        *,
+        project_id: str,
+        final_video_id: str,
+        version_id: str,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> FinalVideoSelection:
+        return await FinalVersionSelectionService(
+            repository=self._repository,
+            audit=self._audit,
+            ids=self._ids,
+            clock=self._clock,
+        ).select_final_version(
+            context,
+            project_id=project_id,
+            final_video_id=final_video_id,
+            version_id=version_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+
+    async def _fail_unverified_output(
+        self,
+        context: AccessContext,
+        *,
+        current: RenderTask,
+        callback: RenderCallback,
+        code: str,
+    ) -> RenderCallbackResult:
+        failed = fail_render_task(
+            current,
+            failure=RenderFailure(code=code, message="渲染产物未通过对象存储或摘要校验", retryable=True),
+            event_id=callback.event_id,
+            occurred_at=callback.occurred_at,
+        )
+        stored = await self._repository.save_render_task(failed, expected_revision=current.task_revision)
+        await self._record_callback_audit(context, current=current, stored=stored, action="render.output_unverified")
+        return RenderCallbackResult(task=stored, disposition=RenderCallbackDisposition.APPLIED)
+
+    async def _record_callback_audit(
+        self,
+        context: AccessContext,
+        *,
+        current: RenderTask,
+        stored: RenderTask,
+        action: str,
+    ) -> None:
+        await self._audit.record(
+            AuditEvent(
+                event_id=self._ids.new_id("audit"),
+                tenant_id=context.tenant_id,
+                workspace_id=context.workspace_id,
+                project_id=stored.project_id,
+                actor_id=context.actor_id,
+                request_id=context.request_id,
+                action=action,
+                object_type="render_task",
+                object_id=stored.task_id,
+                outcome=AuditOutcome.SUCCEEDED,
+                occurred_at=stored.updated_at,
+                before_sha256=current.request_fingerprint,
+                after_sha256=stored.request_fingerprint,
+                details={"from_status": current.status.value, "to_status": stored.status.value},
+            )
+        )
+
+
+class FinalVersionSelectionService:
+    """Selects an existing immutable final version without rendering dependencies."""
+
+    def __init__(
+        self,
+        *,
+        repository: RenderRepository,
+        audit: AuditRecorder,
+        ids: StableIdGenerator,
+        clock: Clock,
+    ) -> None:
+        self._repository = repository
+        self._audit = audit
+        self._ids = ids
+        self._clock = clock
+
+    async def _require_manage(self, context: AccessContext, *, action: str, object_id: str) -> None:
+        if Permission.FINAL_MANAGE in context.permissions:
+            return
+        await self._audit.record(
+            AuditEvent(
+                event_id=self._ids.new_id("audit"),
+                tenant_id=context.tenant_id,
+                workspace_id=context.workspace_id,
+                actor_id=context.actor_id,
+                request_id=context.request_id,
+                action=action,
+                object_type="render_task",
+                object_id=object_id,
+                outcome=AuditOutcome.DENIED,
+                occurred_at=self._clock.now(),
+            )
+        )
+        raise PermissionDenied()
 
     async def select_final_version(
         self,
@@ -516,48 +625,3 @@ class RenderService:
                 )
             )
         return stored
-
-    async def _fail_unverified_output(
-        self,
-        context: AccessContext,
-        *,
-        current: RenderTask,
-        callback: RenderCallback,
-        code: str,
-    ) -> RenderCallbackResult:
-        failed = fail_render_task(
-            current,
-            failure=RenderFailure(code=code, message="渲染产物未通过对象存储或摘要校验", retryable=True),
-            event_id=callback.event_id,
-            occurred_at=callback.occurred_at,
-        )
-        stored = await self._repository.save_render_task(failed, expected_revision=current.task_revision)
-        await self._record_callback_audit(context, current=current, stored=stored, action="render.output_unverified")
-        return RenderCallbackResult(task=stored, disposition=RenderCallbackDisposition.APPLIED)
-
-    async def _record_callback_audit(
-        self,
-        context: AccessContext,
-        *,
-        current: RenderTask,
-        stored: RenderTask,
-        action: str,
-    ) -> None:
-        await self._audit.record(
-            AuditEvent(
-                event_id=self._ids.new_id("audit"),
-                tenant_id=context.tenant_id,
-                workspace_id=context.workspace_id,
-                project_id=stored.project_id,
-                actor_id=context.actor_id,
-                request_id=context.request_id,
-                action=action,
-                object_type="render_task",
-                object_id=stored.task_id,
-                outcome=AuditOutcome.SUCCEEDED,
-                occurred_at=stored.updated_at,
-                before_sha256=current.request_fingerprint,
-                after_sha256=stored.request_fingerprint,
-                details={"from_status": current.status.value, "to_status": stored.status.value},
-            )
-        )

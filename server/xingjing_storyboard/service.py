@@ -282,9 +282,7 @@ class StoryboardService:
                         edit.negative_prompt if edit.negative_prompt is not None else current.negative_prompt
                     ),
                     prompt_template_id=(
-                        edit.prompt_template_id
-                        if edit.prompt_template_id is not None
-                        else current.prompt_template_id
+                        edit.prompt_template_id if edit.prompt_template_id is not None else current.prompt_template_id
                     ),
                     prompt_variables=(
                         edit.prompt_variables if edit.prompt_variables is not None else current.prompt_variables
@@ -377,7 +375,9 @@ class StoryboardService:
             first_duration = current.duration_ms // 2
             second_duration = current.duration_ms - first_duration
             index = current.position - 1
-            first = replace(current, shot_number=f"{current.shot_number}A", duration_ms=first_duration, quality_issues=())
+            first = replace(
+                current, shot_number=f"{current.shot_number}A", duration_ms=first_duration, quality_issues=()
+            )
             second = replace(
                 current,
                 shot_id=self._identifiers.new("shot"),
@@ -432,9 +432,7 @@ class StoryboardService:
             if [item.position for item in selected] != list(range(selected[0].position, selected[-1].position + 1)):
                 raise ContractViolation("MERGE_REQUIRES_CONTIGUOUS_SHOTS")
             base = selected[0]
-            references = tuple(
-                dict.fromkeys(reference for item in selected for reference in item.asset_references)
-            )
+            references = tuple(dict.fromkeys(reference for item in selected for reference in item.asset_references))
             merged = replace(
                 base,
                 duration_ms=sum(item.duration_ms for item in selected),
@@ -447,7 +445,11 @@ class StoryboardService:
                 replacements=(),
             )
             selected_set = set(selected_ids)
-            combined = tuple(merged if item.shot_id == base.shot_id else item for item in storyboard.shots if item.shot_id not in selected_set or item.shot_id == base.shot_id)
+            combined = tuple(
+                merged if item.shot_id == base.shot_id else item
+                for item in storyboard.shots
+                if item.shot_id not in selected_set or item.shot_id == base.shot_id
+            )
             return tuple(replace(item, position=position) for position, item in enumerate(combined, 1))
 
         return self._mutate(
@@ -485,7 +487,9 @@ class StoryboardService:
         def transform(storyboard: Storyboard) -> tuple[Shot, ...]:
             current = next((item for item in storyboard.shots if item.shot_id == shot_id), None)
             historic = next((item for item in storyboard.versions if item.number == source_version), None)
-            source = None if historic is None else next((item for item in historic.shots if item.shot_id == shot_id), None)
+            source = (
+                None if historic is None else next((item for item in historic.shots if item.shot_id == shot_id), None)
+            )
             if current is None or source is None:
                 raise ContractViolation("VERSIONED_SHOT_NOT_FOUND")
             restored = replace(source, shot_id=current.shot_id, position=current.position, quality_issues=())
@@ -499,6 +503,49 @@ class StoryboardService:
             idempotency_key=idempotency_key,
             fingerprint=fingerprint,
             transform=transform,
+        )
+
+    def restore_storyboard_version(
+        self,
+        context: AccessContext,
+        *,
+        storyboard_id: str,
+        expected_version: int,
+        source_version: int,
+        idempotency_key: str,
+        reason: str,
+    ) -> MutationResult:
+        if type(source_version) is not int or source_version < 1:
+            raise ContractViolation("INVALID_SOURCE_VERSION")
+        if not reason.strip() or len(reason) > 1000:
+            raise ContractViolation("RESTORE_REASON_REQUIRED")
+        action = "storyboard.version_restored"
+        fingerprint = _fingerprint(
+            {
+                "operation": action,
+                "scope": _scope_dict(context.scope),
+                "storyboard_id": storyboard_id,
+                "expected_version": expected_version,
+                "source_version": source_version,
+                "reason": reason,
+            }
+        )
+
+        def transform(current: Storyboard) -> tuple[Shot, ...]:
+            source = next((item for item in current.versions if item.number == source_version), None)
+            if source is None:
+                raise ContractViolation("STORYBOARD_VERSION_NOT_FOUND")
+            return tuple(replace(shot, quality_issues=()) for shot in source.shots)
+
+        return self._mutate(
+            context,
+            action=action,
+            storyboard_id=storyboard_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+            transform=transform,
+            audit_details={"restored_from_version": source_version, "reason": reason.strip()},
         )
 
     def select_shot_candidate(
@@ -973,6 +1020,7 @@ class StoryboardService:
         idempotency_key: str,
         fingerprint: str,
         transform: Callable[[Storyboard], tuple[Shot, ...]],
+        audit_details: Mapping[str, object] | None = None,
     ) -> MutationResult:
         self._authorize(context, MANAGE_PERMISSION, action, storyboard_id)
         self._require_idempotency_key(idempotency_key)
@@ -1001,7 +1049,7 @@ class StoryboardService:
                 storyboard_id,
                 "succeeded",
                 _summary(current),
-                _summary(changed),
+                _summary(changed) | dict(audit_details or {}),
             )
             outcome = self._repository.commit(
                 context.scope,

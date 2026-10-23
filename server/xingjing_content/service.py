@@ -121,6 +121,51 @@ class ContentService:
 
         return self._transact(command.workspace_id, command.idempotency_key, fingerprint, update)
 
+    def restore_script_version(
+        self,
+        *,
+        workspace_id: str,
+        script_id: str,
+        source_version_number: int,
+        expected_revision: int,
+        idempotency_key: str,
+        reason: str,
+    ) -> ScriptDocument:
+        if type(source_version_number) is not int or source_version_number < 1:
+            raise ValueError("INVALID_SOURCE_VERSION")
+        if not reason.strip() or len(reason) > 1000:
+            raise ValueError("RESTORE_REASON_REQUIRED")
+        fingerprint = _fingerprint(
+            (
+                workspace_id,
+                script_id,
+                source_version_number,
+                expected_revision,
+                reason,
+                "restore",
+            )
+        )
+
+        def restore(scripts: dict[str, ScriptDocument]) -> tuple[dict[str, ScriptDocument], ScriptDocument]:
+            current = _owned_script(scripts, script_id, workspace_id)
+            if current.revision != expected_revision:
+                raise ContentConflict("VERSION_CONFLICT")
+            if current.locked_version_number is not None:
+                raise ValueError("SCRIPT_FROZEN")
+            source = next((item for item in current.versions if item.number == source_version_number), None)
+            if source is None:
+                raise KeyError("SCRIPT_VERSION_NOT_FOUND")
+            restored_version = replace(
+                source,
+                number=current.current_version.number + 1,
+                change_summary=f"restore:{source_version_number}; {reason.strip()}",
+            )
+            restored = replace(current, revision=current.revision + 1, versions=(*current.versions, restored_version))
+            scripts[script_id] = restored
+            return scripts, restored
+
+        return self._transact(workspace_id, idempotency_key, fingerprint, restore)
+
     def apply_analysis(self, command: ApplyAnalysisCommand) -> ScriptDocument:
         fingerprint = _fingerprint(command)
 
@@ -167,7 +212,11 @@ class ContentService:
             item
             for item in scripts
             if (project_id is None or item.project_id == project_id)
-            and (not normalized_query or normalized_query in item.title.casefold() or normalized_query in item.script_id.casefold())
+            and (
+                not normalized_query
+                or normalized_query in item.title.casefold()
+                or normalized_query in item.script_id.casefold()
+            )
             and (locked is None or (item.locked_version_number is not None) == locked)
         ]
         filtered.sort(key=lambda item: (item.title, item.script_id))

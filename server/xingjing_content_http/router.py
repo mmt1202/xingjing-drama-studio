@@ -185,6 +185,15 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                     expected_revision=expected,
                     idempotency_key=key,
                 )
+            elif action == "restoreVersion":
+                document = service.restore_script_version(
+                    workspace_id=context.workspace_id,
+                    script_id=script_id,
+                    source_version_number=_positive(payload, "sourceVersion"),
+                    expected_revision=expected,
+                    idempotency_key=key,
+                    reason=_required_text(payload, "reason"),
+                )
             elif action == "analyze":
                 analysis = await dependencies.ai_service_for(context, project_id).analyze(
                     _project_script(service, context, project_id, script_id),

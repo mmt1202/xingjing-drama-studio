@@ -135,6 +135,8 @@ from server.xingjing_storyboard_runtime import StoryboardRuntimeConfigurationErr
 from server.xingjing_tasks_runtime import create_production_tasks_runtime
 from server.xingjing_team_http import create_team_router, create_unavailable_team_router
 from server.xingjing_team_runtime import TeamRuntimeConfigurationError, create_production_team_runtime
+from server.xingjing_versions import create_production_version_runtime
+from server.xingjing_versions.router import create_version_router
 
 
 def assert_no_provider_secrets_in_environ() -> None:
@@ -535,6 +537,7 @@ async def lifespan(app: FastAPI):
     _content_runtime.close()
     await _generation_runtime.close()
     _cover_runtime.close()
+    await _versions_runtime.close()
     await _tasks_runtime.close()
     await _model_control_runtime.close()
     await _audio_runtime.close()
@@ -634,6 +637,7 @@ _model_control_runtime = create_model_control_runtime()
 # Provider adapter has been wired; it never falls back to the legacy queue.
 _generation_runtime = create_production_generation_runtime()
 _cover_runtime = create_production_cover_runtime(generation_runtime=_generation_runtime)
+_versions_runtime = create_production_version_runtime()
 
 # M07 uses only its PostgreSQL adapter and trusted Java session context.
 # Missing database, Provider or object storage remains an explicit failure at
@@ -923,6 +927,7 @@ app.include_router(_marketplace_runtime.router())
 app.include_router(_content_runtime.router(), prefix="/api/v1", tags=["剧本内容与 AI 导演"])
 app.include_router(create_generation_router(_generation_runtime), prefix="/api/v1", tags=["图片与视频生成"])
 app.include_router(create_cover_router(_cover_runtime))
+app.include_router(create_version_router(_versions_runtime))
 app.include_router(create_audio_router(_audio_runtime))
 app.include_router(_compliance_router)
 app.include_router(_team_router)

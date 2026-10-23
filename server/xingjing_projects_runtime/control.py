@@ -40,6 +40,7 @@ STAGES = (
     ("review", "collaboration/CR-085", "review.view", "finals", "postproduction"),
     ("export", "release-package", "export.view", "finals", "postproduction"),
     ("compliance", "compliance", "compliance.view", "finals", "postproduction"),
+    ("versions", "version-history", "project.view", None, None),
 )
 
 

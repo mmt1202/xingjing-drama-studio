@@ -15,6 +15,7 @@ export type ProjectSurface =
   | { kind: "source-mapping" }
   | { kind: "rewrite" }
   | { kind: "script-versions" }
+  | { kind: "version-history" }
   | { kind: "generation"; view: GenerationWorkbenchView }
   | { kind: "audio"; pageId: string }
   | { kind: "postproduction"; pageId: string }
@@ -81,7 +82,7 @@ const PROJECT_SURFACES: Readonly<Record<string, ProjectSurface>> = {
   home: { kind: "creator-settings", pageId: "CR-046" },
   "risk-appeal": { kind: "compliance-delivery", pageId: "CR-087" },
   settings: { kind: "creator-settings", pageId: "CR-096" },
-  "version-history": { kind: "creator-settings", pageId: "CR-115" },
+  "version-history": { kind: "version-history" },
   "assets-extract": { kind: "assets-storyboard", pageId: "CR-027" },
   assets: { kind: "assets-storyboard", pageId: "M04-ASSET-LIST" },
   "asset-editor": { kind: "assets-storyboard", pageId: "M04-ASSET-EDITOR" },

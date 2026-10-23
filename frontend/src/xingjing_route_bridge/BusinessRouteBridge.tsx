@@ -1,3 +1,4 @@
+import { VersionWorkspace } from "@/xingjing_versions/VersionWorkspace";
 import { useMemo } from "react";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
@@ -342,6 +343,8 @@ function ProjectBusinessContent({
       );
     case "cover":
       return <CoverWorkspace key={`${workspaceId}:${projectId}:${token}`} workspaceId={workspaceId} projectId={projectId} mode={surface.mode} />;
+    case "version-history":
+      return <VersionWorkspace key={`${workspaceId}:${projectId}:${token}`} workspaceId={workspaceId} projectId={projectId} />;
     case "creator-settings":
       return (
         <>

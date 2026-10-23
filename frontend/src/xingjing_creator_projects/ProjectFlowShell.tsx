@@ -5,6 +5,7 @@ import { CreatorShell } from "@/xingjing_creator_home/CreatorShell";
 import { createHomeApi, type HomeApi, type WorkspaceAccess } from "@/xingjing_creator_home/api";
 import { readHomeReturn } from "@/xingjing_creator_home/return-state";
 import { readAnalyticsReturn } from "@/xingjing_analytics/return-state";
+import { readVersionReturn } from "@/xingjing_versions/return-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { CreatorApiError } from "./api";
 import type { ProjectControl, ProjectControlApi } from "./control-api";
@@ -23,6 +24,7 @@ export function useProjectFlow() {
 }
 
 function activeStage(slug: string) {
+  if (slug === "version-history") return "versions";
   if (["control", "episodes", "episode-split-editor"].includes(slug)) return "control";
   if (["script-import", "script-lab", "source", "rewrite", "versions", "source-mapping"].includes(slug)) return "script";
   if (slug === "script-checkup") return "checkup";
@@ -105,12 +107,18 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     if (!canLeave()) return;
     const [path, supplied = ""] = target.split("?");
     const query = new URLSearchParams(supplied);
+    let restoringVersionReturn = false;
+    if (path === "version-history" && slug !== "version-history" && number === undefined && !supplied && workspaceAccess) {
+      const previous = readVersionReturn(workspaceAccess.actorId, workspaceId, projectId);
+      restoringVersionReturn = previous.present;
+      for (const [key, value] of new URLSearchParams(previous.query)) query.set(key, value);
+    }
     if (slug === "control") sessionStorage.setItem(filterKey, filters);
     if (path === "control" && !supplied) {
       for (const [key, value] of new URLSearchParams(sessionStorage.getItem(filterKey) ?? "")) query.set(key, value);
     }
     const selected = number === null ? undefined : number === undefined ? episode : validData?.episodes.find((e) => e.episode === number);
-    if (selected && !query.has("episodeId")) query.set("episodeId", String(selected.episode));
+    if (selected && !query.has("episodeId") && !restoringVersionReturn) query.set("episodeId", String(selected.episode));
     if (/^(release|export|cover|compliance|rights|provenance|aigc)/.test(path) && selected?.finalVersionId) {
       if (!query.has("projectVersion")) query.set("projectVersion", selected.finalVersionId);
       if (!query.has("target")) query.set("target", validData?.project.targetPlatform ?? "douyin");

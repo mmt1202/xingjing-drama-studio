@@ -69,13 +69,17 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             raise HttpContractError("PROMPT_TEMPLATE_STORE_UNAVAILABLE", status_code=503)
         usages = {
             prompt_id: sum(
-                1 for storyboard in _all_storyboards(dependencies, context) for shot in storyboard.shots
+                1
+                for storyboard in _all_storyboards(dependencies, context)
+                for shot in storyboard.shots
                 if shot.prompt_template_id == prompt_id
             )
             for prompt_id in (item.prompt_id for item in dependencies.prompt_repository.list(context.scope))
         }
         items = dependencies.prompt_repository.list(context.scope)
-        return _data_response(context.request_id, [item.to_dict(usage_count=usages.get(item.prompt_id, 0)) for item in items])
+        return _data_response(
+            context.request_id, [item.to_dict(usage_count=usages.get(item.prompt_id, 0)) for item in items]
+        )
 
     @result.post("/projects/{project_id}/prompt-templates")
     async def create_prompt_template(request: Request, project_id: str):
@@ -87,13 +91,28 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         now = datetime.now(UTC)
         template, replayed = dependencies.prompt_repository.create(
             context.scope,
-            name=_required_text(body, "name"), media_type=_required_text(body, "mediaType"),
-            template=_required_text(body, "template"), negative_prompt=str(body.get("negativePrompt") or ""),
+            name=_required_text(body, "name"),
+            media_type=_required_text(body, "mediaType"),
+            template=_required_text(body, "template"),
+            negative_prompt=str(body.get("negativePrompt") or ""),
             variables=_optional_string_list(body.get("variables"), code="INVALID_PROMPT_VARIABLES"),
-            model_adapter_versions=_optional_string_list(body.get("modelAdapterVersions"), code="INVALID_MODEL_ADAPTERS"),
+            model_adapter_versions=_optional_string_list(
+                body.get("modelAdapterVersions"), code="INVALID_MODEL_ADAPTERS"
+            ),
             idempotency_key=request.headers.get("Idempotency-Key", ""),
-            audit=AuditEvent(context.tenant_id, context.workspace_id, context.project_id, context.request_id,
-                context.actor_id, "storyboard.prompt_template_created", "pending", "succeeded", now, {}, {}),
+            audit=AuditEvent(
+                context.tenant_id,
+                context.workspace_id,
+                context.project_id,
+                context.request_id,
+                context.actor_id,
+                "storyboard.prompt_template_created",
+                "pending",
+                "succeeded",
+                now,
+                {},
+                {},
+            ),
         )
         return _data_response(context.request_id, template.to_dict(), replayed=replayed)
 
@@ -110,18 +129,36 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         expected = _expected_version(request, {})
         body = _object(await request.json(), code="INVALID_JSON_BODY")
         updated = replace(
-            current, name=_required_text(body, "name"), media_type=_required_text(body, "mediaType"),
-            template=_required_text(body, "template"), negative_prompt=str(body.get("negativePrompt") or ""),
+            current,
+            name=_required_text(body, "name"),
+            media_type=_required_text(body, "mediaType"),
+            template=_required_text(body, "template"),
+            negative_prompt=str(body.get("negativePrompt") or ""),
             variables=_optional_string_list(body.get("variables"), code="INVALID_PROMPT_VARIABLES"),
-            model_adapter_versions=_optional_string_list(body.get("modelAdapterVersions"), code="INVALID_MODEL_ADAPTERS"),
-            version=expected + 1, updated_at=datetime.now(UTC),
+            model_adapter_versions=_optional_string_list(
+                body.get("modelAdapterVersions"), code="INVALID_MODEL_ADAPTERS"
+            ),
+            version=expected + 1,
+            updated_at=datetime.now(UTC),
         )
         stored, replayed = repository.update(
-            context.scope, updated, expected_version=expected,
+            context.scope,
+            updated,
+            expected_version=expected,
             idempotency_key=request.headers.get("Idempotency-Key", ""),
-            audit=AuditEvent(context.tenant_id, context.workspace_id, context.project_id, context.request_id,
-                context.actor_id, "storyboard.prompt_template_updated", prompt_id, "succeeded", updated.updated_at,
-                current.to_dict(), updated.to_dict()),
+            audit=AuditEvent(
+                context.tenant_id,
+                context.workspace_id,
+                context.project_id,
+                context.request_id,
+                context.actor_id,
+                "storyboard.prompt_template_updated",
+                prompt_id,
+                "succeeded",
+                updated.updated_at,
+                current.to_dict(),
+                updated.to_dict(),
+            ),
         )
         return _data_response(context.request_id, stored.to_dict(), replayed=replayed)
 
@@ -139,11 +176,23 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         now = datetime.now(UTC)
         archived = replace(current, version=expected + 1, updated_at=now, archived_at=now)
         stored, replayed = repository.update(
-            context.scope, archived, expected_version=expected,
+            context.scope,
+            archived,
+            expected_version=expected,
             idempotency_key=request.headers.get("Idempotency-Key", ""),
-            audit=AuditEvent(context.tenant_id, context.workspace_id, context.project_id, context.request_id,
-                context.actor_id, "storyboard.prompt_template_archived", prompt_id, "succeeded", now,
-                current.to_dict(), archived.to_dict()),
+            audit=AuditEvent(
+                context.tenant_id,
+                context.workspace_id,
+                context.project_id,
+                context.request_id,
+                context.actor_id,
+                "storyboard.prompt_template_archived",
+                prompt_id,
+                "succeeded",
+                now,
+                current.to_dict(),
+                archived.to_dict(),
+            ),
         )
         return _data_response(context.request_id, stored.to_dict(), replayed=replayed)
 
@@ -154,15 +203,29 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         if dependencies.audit_repository is None:
             raise HttpContractError("STORYBOARD_AUDIT_UNAVAILABLE", status_code=503)
         events = dependencies.audit_repository.query_audit(
-            context.scope, storyboard_id=request.query_params.get("objectId"),
-            request_id=request.query_params.get("requestId"), actor_id=request.query_params.get("actorId"),
+            context.scope,
+            storyboard_id=request.query_params.get("objectId"),
+            request_id=request.query_params.get("requestId"),
+            actor_id=request.query_params.get("actorId"),
             action=request.query_params.get("action"),
         )
-        return _data_response(context.request_id, [{
-            "requestId": item.request_id, "actorId": item.actor_id, "action": item.action,
-            "objectId": item.object_id, "result": item.result, "occurredAt": item.occurred_at.isoformat(),
-            "before": item.before, "after": item.after, "errorCode": item.error_code,
-        } for item in events])
+        return _data_response(
+            context.request_id,
+            [
+                {
+                    "requestId": item.request_id,
+                    "actorId": item.actor_id,
+                    "action": item.action,
+                    "objectId": item.object_id,
+                    "result": item.result,
+                    "occurredAt": item.occurred_at.isoformat(),
+                    "before": item.before,
+                    "after": item.after,
+                    "errorCode": item.error_code,
+                }
+                for item in events
+            ],
+        )
 
     @result.get("/projects/{project_id}/shots")
     async def list_shots(request: Request, project_id: str):
@@ -185,10 +248,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             request.query_params.get("pageSize"), default=20, minimum=1, maximum=200, code="INVALID_PAGE_SIZE"
         )
         selected = items[offset : offset + page_size]
-        selected = [
-            await _with_generation_facts(item, context, dependencies)
-            for item in selected
-        ]
+        selected = [await _with_generation_facts(item, context, dependencies) for item in selected]
         next_token = str(offset + page_size) if offset + page_size < len(items) else None
         collection_version = max((storyboard.version for storyboard in storyboards), default=0)
         return {
@@ -206,9 +266,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         for storyboard in _all_storyboards(dependencies, context):
             shot = next((item for item in storyboard.shots if item.shot_id == shot_id), None)
             if shot is not None:
-                projected = await _with_generation_facts(
-                    project_shot(storyboard, shot), context, dependencies
-                )
+                projected = await _with_generation_facts(project_shot(storyboard, shot), context, dependencies)
                 return {"data": projected, "meta": {"requestId": context.request_id}}
         raise HttpContractError("SHOT_NOT_FOUND", status_code=404)
 
@@ -258,7 +316,9 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 format=format_value,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
-            export_id = dependencies.upload_store.put_export(context, exported.content, exported.media_type, exported.filename)
+            export_id = dependencies.upload_store.put_export(
+                context, exported.content, exported.media_type, exported.filename
+            )
             return _action_response(
                 context,
                 {
@@ -283,18 +343,14 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 )
             except ContractViolation as error:
                 if str(error) == "SMART_STORYBOARD_REQUEST_IN_PROGRESS":
-                    raise HttpContractError(
-                        "SMART_STORYBOARD_REQUEST_IN_PROGRESS", status_code=409
-                    ) from error
+                    raise HttpContractError("SMART_STORYBOARD_REQUEST_IN_PROGRESS", status_code=409) from error
                 raise
             if inspect.isawaitable(drafts):
                 try:
                     drafts = await drafts
                 except ContractViolation as error:
                     if str(error) == "SMART_STORYBOARD_REQUEST_IN_PROGRESS":
-                        raise HttpContractError(
-                            "SMART_STORYBOARD_REQUEST_IN_PROGRESS", status_code=409
-                        ) from error
+                        raise HttpContractError("SMART_STORYBOARD_REQUEST_IN_PROGRESS", status_code=409) from error
                     if str(error) == "SMART_STORYBOARD_MODEL_FAILED":
                         raise HttpContractError(
                             "SMART_STORYBOARD_MODEL_FAILED",
@@ -336,17 +392,24 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             if media_type not in {"image", "video"}:
                 raise HttpContractError("GENERATION_MEDIA_TYPE_INVALID")
             trusted = TrustedWorkspaceContext(
-                tenant_id=context.tenant_id, workspace_id=context.workspace_id, actor_id=context.actor_id,
-                request_id=context.request_id, permissions=context.permissions, role="",
+                tenant_id=context.tenant_id,
+                workspace_id=context.workspace_id,
+                actor_id=context.actor_id,
+                request_id=context.request_id,
+                permissions=context.permissions,
+                role="",
             )
             generation_request = GenerationRequest(
-                workspace_id=context.workspace_id, project_id=context.project_id,
+                workspace_id=context.workspace_id,
+                project_id=context.project_id,
                 media_type=MediaType(media_type),
                 capability="image_generation" if media_type == "image" else "video_generation",
                 prompt=shot.prompt,
                 parameters={
-                    "storyboard_id": storyboard.storyboard_id, "storyboard_version": storyboard.version,
-                    "shot_id": shot.shot_id, "negative_prompt": shot.negative_prompt,
+                    "storyboard_id": storyboard.storyboard_id,
+                    "storyboard_version": storyboard.version,
+                    "shot_id": shot.shot_id,
+                    "negative_prompt": shot.negative_prompt,
                     "prompt_template_id": shot.prompt_template_id,
                     "prompt_model_adapter_version": shot.prompt_model_adapter_version,
                     "duration_ms": shot.duration_ms,
@@ -357,19 +420,26 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             )
             try:
                 task = await generation.submit(
-                    trusted, context.project_id, generation_request,
+                    trusted,
+                    context.project_id,
+                    generation_request,
                     idempotency_key=request.headers.get("Idempotency-Key", ""),
                 )
             except (GenerationRuntimeUnavailable, RuntimeError, ValueError) as error:
                 raise HttpContractError(str(error), status_code=503) from error
             recorded = dependencies.service.record_shot_generation_task(
-                context, storyboard_id=storyboard.storyboard_id, expected_version=expected,
-                shot_id=shot.shot_id, task_id=task.task_id,
+                context,
+                storyboard_id=storyboard.storyboard_id,
+                expected_version=expected,
+                shot_id=shot.shot_id,
+                task_id=task.task_id,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
             return _action_response(
-                context, {"task": _generation_task(task, context), "message": "镜头媒体生成任务已创建"},
-                replayed=recorded.replayed, version=recorded.storyboard.version,
+                context,
+                {"task": _generation_task(task, context), "message": "镜头媒体生成任务已创建"},
+                replayed=recorded.replayed,
+                version=recorded.storyboard.version,
             )
         if action == "adoptShotMedia":
             _require_manage(context)
@@ -382,8 +452,12 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             generated_asset_id = _required_text(payload, "generatedAssetId")
             task_id = _required_text(payload, "taskId")
             trusted = TrustedWorkspaceContext(
-                tenant_id=context.tenant_id, workspace_id=context.workspace_id, actor_id=context.actor_id,
-                request_id=context.request_id, permissions=context.permissions, role="",
+                tenant_id=context.tenant_id,
+                workspace_id=context.workspace_id,
+                actor_id=context.actor_id,
+                request_id=context.request_id,
+                permissions=context.permissions,
+                role="",
             )
             try:
                 generated_asset, _path = await generation.generated_artifact_file(
@@ -399,26 +473,31 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 or parameters.get("storyboard_id") != storyboard.storyboard_id
                 or parameters.get("shot_id") != _required_text(body, "targetId")
                 or next(
-                    item for item in storyboard.shots
-                    if item.shot_id == _required_text(body, "targetId")
-                ).generation_task_id != task_id
+                    item for item in storyboard.shots if item.shot_id == _required_text(body, "targetId")
+                ).generation_task_id
+                != task_id
             ):
                 raise HttpContractError("GENERATED_ASSET_SCOPE_MISMATCH", status_code=409)
             result_value = dependencies.service.replace_shot_media(
-                context, storyboard_id=storyboard.storyboard_id,
+                context,
+                storyboard_id=storyboard.storyboard_id,
                 expected_version=_expected_version(request, payload),
-                shot_id=_required_text(body, "targetId"), new_media_id=generated_asset_id,
-                reason="generation_output_adopted", idempotency_key=request.headers.get("Idempotency-Key", ""),
+                shot_id=_required_text(body, "targetId"),
+                new_media_id=generated_asset_id,
+                reason="generation_output_adopted",
+                idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
             persisted = dependencies.service.get_storyboard(context, result_value.storyboard.storyboard_id)
             adopted = next(item for item in persisted.shots if item.shot_id == _required_text(body, "targetId"))
             return _action_response(
-                context, {"shot": project_shot(persisted, adopted), "message": "生成结果已采用为镜头新版本"},
-                replayed=result_value.replayed, version=persisted.version,
+                context,
+                {"shot": project_shot(persisted, adopted), "message": "生成结果已采用为镜头新版本"},
+                replayed=result_value.replayed,
+                version=persisted.version,
             )
         storyboard = (
             dependencies.service.get_storyboard(context, _required_text(payload, "storyboardId"))
-            if action == "confirmStoryboard"
+            if action in {"confirmStoryboard", "restoreStoryboardVersion"}
             else _storyboard_for_shots(_all_storyboards(dependencies, context), _action_shot_ids(action, body, payload))
         )
         expected_version = _expected_version(request, payload)
@@ -470,11 +549,16 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 context,
                 storyboard_id=storyboard.storyboard_id,
                 expected_version=expected_version,
-                edits=(ShotEdit(
-                    shot_id=_required_text(body, "targetId"), prompt=prompt_text,
-                    negative_prompt=negative_prompt, prompt_template_id=template_id,
-                    prompt_variables=variables, prompt_model_adapter_version=adapter_version,
-                ),),
+                edits=(
+                    ShotEdit(
+                        shot_id=_required_text(body, "targetId"),
+                        prompt=prompt_text,
+                        negative_prompt=negative_prompt,
+                        prompt_template_id=template_id,
+                        prompt_variables=variables,
+                        prompt_model_adapter_version=adapter_version,
+                    ),
+                ),
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
         elif action == "selectStoryboardCandidate":
@@ -501,6 +585,15 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 storyboard_id=storyboard.storyboard_id,
                 expected_version=expected_version,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
+            )
+        elif action == "restoreStoryboardVersion":
+            result_value = dependencies.service.restore_storyboard_version(
+                context,
+                storyboard_id=storyboard.storyboard_id,
+                expected_version=expected_version,
+                source_version=_version_from_id(_required_text(payload, "versionId")),
+                idempotency_key=request.headers.get("Idempotency-Key", ""),
+                reason=_required_text(payload, "reason"),
             )
         elif action == "replaceShot":
             result_value = dependencies.service.replace_shot_media(
@@ -559,7 +652,11 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 replayed=result_value.replayed,
                 version=persisted.version,
             )
-        shot_id = _required_text(body, "targetId") if action in {"replaceShot", "savePrompt", "selectStoryboardCandidate", "restoreVersion"} else None
+        shot_id = (
+            _required_text(body, "targetId")
+            if action in {"replaceShot", "savePrompt", "selectStoryboardCandidate", "restoreVersion"}
+            else None
+        )
         data: dict[str, object] = (
             {"shots": [project_shot(persisted, shot) for shot in persisted.shots]}
             if shot_id is None
@@ -623,7 +720,9 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
     async def complete_upload(project_id: str, upload_id: str, request: Request):
         context = await _access_context(request, project_id, dependencies)
         _require_manage(context)
-        if not dependencies.upload_store.complete(context, upload_id, idempotency_key=request.headers.get("Idempotency-Key", "")):
+        if not dependencies.upload_store.complete(
+            context, upload_id, idempotency_key=request.headers.get("Idempotency-Key", "")
+        ):
             raise HttpContractError("UPLOAD_NOT_FOUND", status_code=404)
         return _action_response_for_request_id(context.request_id, {"uploadId": upload_id, "status": "succeeded"})
 
@@ -929,7 +1028,9 @@ def _generation_task(task: object, context: AccessContext) -> dict[str, object]:
     task_id = str(getattr(task, "task_id"))
     status = getattr(getattr(task, "status"), "value", str(getattr(task, "status")))
     return {
-        "taskId": task_id, "projectId": context.project_id, "status": status,
+        "taskId": task_id,
+        "projectId": context.project_id,
+        "status": status,
         "statusUrl": f"/api/v1/generation-tasks/{task_id}?projectId={context.project_id}",
         "requestId": context.request_id,
     }
@@ -1046,7 +1147,9 @@ def _action_response_for_request_id(request_id: str, data: dict[str, object]) ->
 
 
 def _data_response(request_id: str, data: object, *, replayed: bool = False) -> JSONResponse:
-    response = JSONResponse(content={"data": data, "meta": {"requestId": request_id}}, headers={"X-Request-Id": request_id})
+    response = JSONResponse(
+        content={"data": data, "meta": {"requestId": request_id}}, headers={"X-Request-Id": request_id}
+    )
     if replayed:
         response.headers["X-Idempotency-Replayed"] = "true"
     return response
