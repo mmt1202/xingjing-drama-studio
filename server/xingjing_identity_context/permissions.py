@@ -40,6 +40,8 @@ WORKSPACE_OWNER_PERMISSIONS = frozenset(
         "billing.manage",
         "settings.view",
         "settings.manage",
+        "analytics.view",
+        "analytics.manage",
     }
 )
 

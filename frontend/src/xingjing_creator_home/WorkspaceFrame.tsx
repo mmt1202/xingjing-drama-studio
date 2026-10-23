@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { createHomeApi, HomeApiError, type HomeApi, type WorkspaceAccess } from "./api";
 import { homeButton, useHomeTranslation } from "./i18n";
 import { readHomeReturn, rememberHome } from "./return-state";
+import { readAnalyticsReturn, rememberAnalytics } from "@/xingjing_analytics/return-state";
 
 const navigation = [
   { key: "home", path: "home", icon: House, permission: "project.view" },
@@ -16,7 +17,7 @@ const navigation = [
   { key: "billing", path: "billing", icon: CircleDollarSign, permission: "billing.view" },
   { key: "commercial", path: "commercial", icon: BriefcaseBusiness, permission: "commercial.view" },
   { key: "team", path: "team", icon: Users, permission: "workspace.view" },
-  { key: "analytics", path: "", icon: ChartNoAxesCombined, permission: "" },
+  { key: "analytics", path: "analytics", icon: ChartNoAxesCombined, permission: "analytics.view" },
   { key: "settings", path: "settings", icon: Settings2, permission: "settings.view" },
 ];
 const Context = createContext<{ access: WorkspaceAccess; api: HomeApi; token: string | null; base: string; go: (path: string) => void; register: (guard: () => boolean) => () => void } | null>(null);
@@ -63,7 +64,8 @@ function WorkspaceFrameContent({ workspaceId, token, active, children }: { works
   function go(path: string) {
     if (!canLeave()) return;
     if (access && location === `${base}/home`) rememberHome(access.actorId, workspaceId, search);
-    const query = access && path === "home" ? readHomeReturn(access.actorId, workspaceId).query : "";
+    if (access && location === `${base}/analytics`) rememberAnalytics(access.actorId, workspaceId, search);
+    const query = access && path === "home" ? readHomeReturn(access.actorId, workspaceId).query : access && path === "analytics" ? readAnalyticsReturn(access.actorId, workspaceId).query : "";
     navigate(`${base}/${path}${query ? `?${query}` : ""}`);
   }
   if (error || !access) return <main className="grid min-h-screen place-content-center gap-4 bg-[#05060A] px-6 text-slate-200" aria-busy={!error}>

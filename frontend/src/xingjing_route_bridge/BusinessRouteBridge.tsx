@@ -8,6 +8,7 @@ import { CreatorWorkspaceFrame } from "@/xingjing_creator_home/WorkspaceFrame";
 import { CreatorHomePage, WorkspaceTasks } from "@/xingjing_creator_home/CreatorHomePage";
 import { ModelOperationsPage } from "@/xingjing_model_operations/ModelOperationsPage";
 import { createModelOperationsApi } from "@/xingjing_model_operations/api";
+import { CreatorAnalyticsPage } from "@/xingjing_analytics/CreatorAnalyticsPage";
 
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -172,9 +173,9 @@ export function WorkspaceLandingRoute({ workspaceId, surface }: { workspaceId: s
   const token = useAuthStore((state) => state.token);
   const preferenceApi = useMemo(() => createPreferenceApi({ workspaceId, accessToken: token }), [workspaceId, token]);
   const commercePage = { templates: "CR-112", billing: "CR-009", commercial: "CR-013", team: "CR-107" }[surface];
-  if (!["home", "tasks", "templates", "billing", "commercial", "team", "settings"].includes(surface)) return <MissingSurface />;
+  if (!["home", "tasks", "templates", "billing", "commercial", "team", "settings", "analytics"].includes(surface)) return <MissingSurface />;
   return <CreatorWorkspaceFrame workspaceId={workspaceId} active={surface}>
-    {surface === "home" ? <CreatorHomePage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
+    {surface === "home" ? <CreatorHomePage /> : surface === "analytics" ? <CreatorAnalyticsPage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
   </CreatorWorkspaceFrame>;
 }
 

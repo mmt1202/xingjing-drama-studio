@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
@@ -40,15 +40,21 @@ from server.xingjing_platform_persistence.persistence import (
     OutboxRow,
 )
 
-type ContextResolver = Callable[
-    [Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]
-]
+type ContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
 
 
 class PreferencePayload(BaseModel):
     resource: str
     version: int
     value: dict[str, object]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_analytics_version(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("resource") == "data-dashboard":
+            if type(value.get("version")) is not int:
+                raise ValueError("INVALID_PREFERENCE_VERSION")
+        return value
 
 
 @dataclass(slots=True)
@@ -80,9 +86,7 @@ def create_unavailable_operations_routers(
         "/support-tickets",
         "/support-tickets/actions",
     ):
-        admin.add_api_route(
-            path, unavailable, methods=["POST" if path.endswith("/actions") else "GET"]
-        )
+        admin.add_api_route(path, unavailable, methods=["POST" if path.endswith("/actions") else "GET"])
     account.add_api_route(
         "/preferences", unavailable, methods=["GET"], operation_id="unavailable_account_preferences_get"
     )
@@ -144,19 +148,12 @@ def create_production_operations_runtime(
                 {"tables": list(required_tables)},
             ).all()
             if missing:
-                raise RuntimeError(
-                    "XINGJING_OPERATIONS_MIGRATION_REQUIRED:"
-                    + ",".join(str(item) for item in missing)
-                )
-            session.execute(text(
-                "SELECT tenant_id,workspace_id FROM xingjing_admin_governance_commands LIMIT 1"
-            ))
+                raise RuntimeError("XINGJING_OPERATIONS_MIGRATION_REQUIRED:" + ",".join(str(item) for item in missing))
+            session.execute(text("SELECT tenant_id,workspace_id FROM xingjing_admin_governance_commands LIMIT 1"))
     except (RuntimeError, SQLAlchemyError) as error:
         engine.dispose()
         raise RuntimeError("XINGJING_OPERATIONS_MIGRATION_REQUIRED") from error
-    resolver = context_resolver or TrustedWorkspaceContextResolver(
-        PlatformSessionGateway()
-    )
+    resolver = context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway())
     return OperationsRuntime(
         _admin_router(sessions, resolver),
         _preferences_router(sessions, resolver),
@@ -179,9 +176,7 @@ def _require(trusted: TrustedWorkspaceContext, permission: str) -> None:
         raise HTTPException(403, detail={"code": "PERMISSION_DENIED"})
 
 
-def _admin_router(
-    sessions: sessionmaker[Session], resolver: ContextResolver
-) -> APIRouter:
+def _admin_router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRouter:
     router = APIRouter(prefix="/api/v1/admin", tags=["admin-operations"])
     resolve = _resolve_dependency(resolver)
 
@@ -278,9 +273,10 @@ def _admin_router(
         }
         if payload.resource not in allowed[domain]:
             raise HTTPException(422, detail={"code": "UNSUPPORTED_RESOURCE"})
-        fingerprint = "sha256:" + sha256(
-            json.dumps(payload.model_dump(), ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
+        fingerprint = (
+            "sha256:"
+            + sha256(json.dumps(payload.model_dump(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        )
         now = datetime.now(UTC)
         with sessions.begin() as session:
             replay = session.scalar(
@@ -293,13 +289,9 @@ def _admin_router(
             )
             if replay:
                 if replay.fingerprint != fingerprint:
-                    raise HTTPException(
-                        409, detail={"code": "IDEMPOTENCY_CONFLICT"}
-                    )
+                    raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"})
                 return cast(dict[str, object], json.loads(replay.result_json))
-            before, after = _write_object(
-                session, domain, payload, trusted, now
-            )
+            before, after = _write_object(session, domain, payload, trusted, now)
             result = {
                 "requestId": trusted.request_id,
                 "status": "succeeded",
@@ -317,9 +309,7 @@ def _admin_router(
                     created_at=now,
                 )
             )
-            _append_evidence(
-                session, domain, payload, before, after, trusted, request, now
-            )
+            _append_evidence(session, domain, payload, before, after, trusted, request, now)
             return result
 
     def bind_action(path: str, domain: str) -> None:
@@ -329,9 +319,7 @@ def _admin_router(
             trusted: TrustedWorkspaceContext = Depends(resolve),
             idempotency_key: str = Header("", alias="Idempotency-Key"),
         ) -> dict[str, object]:
-            return action(
-                domain, payload, request, trusted, idempotency_key
-            )
+            return action(domain, payload, request, trusted, idempotency_key)
 
         router.add_api_route(path, endpoint, methods=["POST"])
 
@@ -342,9 +330,7 @@ def _admin_router(
     return router
 
 
-def _preferences_router(
-    sessions: sessionmaker[Session], resolver: ContextResolver
-) -> APIRouter:
+def _preferences_router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRouter:
     router = APIRouter(prefix="/api/v1/account", tags=["account-preferences"])
     resolve = _resolve_dependency(resolver)
 
@@ -354,7 +340,11 @@ def _preferences_router(
         resource: str | None = None,
         trusted: TrustedWorkspaceContext = Depends(resolve),
     ) -> dict[str, object]:
-        _require(trusted, "settings.view")
+        _require(trusted, "analytics.view" if resource == "data-dashboard" else "settings.view")
+        if resource == "data-dashboard":
+            from .analytics_preferences import require_analytics_context
+
+            require_analytics_context(request, trusted)
         if resource == "creator-home":
             from .home_preferences import require_home_workspace
 
@@ -367,9 +357,9 @@ def _preferences_router(
                 GovernanceObjectRow.object_id == trusted.actor_id,
             )
             if resource:
-                statement = statement.where(
-                    GovernanceObjectRow.resource == f"preference:{resource}"
-                )
+                statement = statement.where(GovernanceObjectRow.resource == f"preference:{resource}")
+            elif "analytics.view" not in trusted.permissions or trusted.role == "API_KEY":
+                statement = statement.where(GovernanceObjectRow.resource != "preference:data-dashboard")
             rows = session.scalars(statement).all()
         return {
             "items": [
@@ -451,11 +441,7 @@ def _preferences_router(
                     "versionId": str(row["version_id"]),
                     "revision": int(row["revision"]),
                     "summary": str(row["summary"]),
-                    "createdAt": (
-                        row["created_at"].isoformat()
-                        if isinstance(row["created_at"], datetime)
-                        else None
-                    ),
+                    "createdAt": (row["created_at"].isoformat() if isinstance(row["created_at"], datetime) else None),
                 }
                 for row in rows
             ]
@@ -477,13 +463,14 @@ def _preferences_router(
         trusted: TrustedWorkspaceContext = Depends(resolve),
         idempotency_key: str = Header("", alias="Idempotency-Key"),
     ) -> dict[str, object]:
-        _require(trusted, "settings.manage")
+        _require(trusted, "analytics.manage" if payload.resource == "data-dashboard" else "settings.manage")
         if (
             payload.resource
             not in {
                 "cover-generation",
                 "cover-title-ab",
                 "creator-home",
+                "data-dashboard",
                 "risk-appeal",
                 "settings",
                 "version-history",
@@ -491,6 +478,10 @@ def _preferences_router(
             or not idempotency_key.strip()
         ):
             raise HTTPException(422, detail={"code": "INVALID_PREFERENCE"})
+        if payload.resource == "data-dashboard":
+            from .analytics_preferences import save_analytics_preferences
+
+            return save_analytics_preferences(sessions, trusted, payload, request, idempotency_key)
         if payload.resource == "creator-home":
             from .home_preferences import save_home_preferences
 
@@ -503,9 +494,10 @@ def _preferences_router(
             payload=payload.value,
         )
         now = datetime.now(UTC)
-        fingerprint = "sha256:" + sha256(
-            json.dumps(command.model_dump(), ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
+        fingerprint = (
+            "sha256:"
+            + sha256(json.dumps(command.model_dump(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        )
         with sessions.begin() as session:
             replay = session.scalar(
                 select(CommandRow).where(
@@ -517,13 +509,9 @@ def _preferences_router(
             )
             if replay:
                 if replay.fingerprint != fingerprint:
-                    raise HTTPException(
-                        409, detail={"code": "IDEMPOTENCY_CONFLICT"}
-                    )
+                    raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"})
                 return cast(dict[str, object], json.loads(replay.result_json))
-            before, after = _write_object(
-                session, "preferences", command, trusted, now
-            )
+            before, after = _write_object(session, "preferences", command, trusted, now)
             result = {
                 "resource": payload.resource,
                 "value": after["payload"],
@@ -557,9 +545,7 @@ def _preferences_router(
     return router
 
 
-def _page(
-    records: list[dict[str, object]], page: int, page_size: int
-) -> dict[str, object]:
+def _page(records: list[dict[str, object]], page: int, page_size: int) -> dict[str, object]:
     start = (page - 1) * page_size
     return {
         "items": records[start : start + page_size],
@@ -570,14 +556,16 @@ def _page(
 
 
 def _filter_records(
-    records: list[dict[str, object]], *, search: str, status: str | None,
+    records: list[dict[str, object]],
+    *,
+    search: str,
+    status: str | None,
 ) -> list[dict[str, object]]:
     needle = search.strip().casefold()
-    statuses = {
-        item.strip().casefold() for item in (status or "").split(",") if item.strip()
-    }
+    statuses = {item.strip().casefold() for item in (status or "").split(",") if item.strip()}
     return [
-        record for record in records
+        record
+        for record in records
         if (
             not needle
             or needle in str(record.get("id", "")).casefold()
@@ -589,7 +577,11 @@ def _filter_records(
 
 
 def _probe_dependency(
-    component: str, label: str, source: str, configured_value: str, observed_at: datetime,
+    component: str,
+    label: str,
+    source: str,
+    configured_value: str,
+    observed_at: datetime,
 ) -> dict[str, object]:
     details: dict[str, object] = {"configured": bool(configured_value), "source": source}
     status = "unknown"
@@ -604,8 +596,7 @@ def _probe_dependency(
     else:
         parsed = urlparse(configured_value)
         host = parsed.hostname
-        defaults = {"https": 443, "rediss": 6380, "amqps": 5671,
-                    "http": 80, "redis": 6379, "amqp": 5672}
+        defaults = {"https": 443, "rediss": 6380, "amqps": 5671, "http": 80, "redis": 6379, "amqp": 5672}
         port = parsed.port or defaults.get(parsed.scheme)
         if not host or port is None:
             status = "degraded"
@@ -617,15 +608,18 @@ def _probe_dependency(
                 details.update({"host": host, "port": port, "probe": "tcp"})
             except OSError as error:
                 status = "degraded"
-                details.update({"host": host, "port": port, "probe": "tcp",
-                                "reason": str(error)[:160]})
-    return {"id": component, "name": label, "status": status, "version": 1,
-            "updatedAt": observed_at.isoformat(), "details": details}
+                details.update({"host": host, "port": port, "probe": "tcp", "reason": str(error)[:160]})
+    return {
+        "id": component,
+        "name": label,
+        "status": status,
+        "version": 1,
+        "updatedAt": observed_at.isoformat(),
+        "details": details,
+    }
 
 
-def _object_records(
-    session: Session, trusted: TrustedWorkspaceContext, resource: str
-) -> list[dict[str, object]]:
+def _object_records(session: Session, trusted: TrustedWorkspaceContext, resource: str) -> list[dict[str, object]]:
     rows = session.scalars(
         select(GovernanceObjectRow)
         .where(
@@ -684,7 +678,11 @@ def _records(
         }
         records.extend(
             _probe_dependency(
-                component, label, variable, os.environ.get(variable, "").strip(), now,
+                component,
+                label,
+                variable,
+                os.environ.get(variable, "").strip(),
+                now,
             )
             for component, (label, variable) in dependencies.items()
         )
@@ -727,11 +725,7 @@ def _records(
             {
                 "id": f"generation:{row['status']}",
                 "name": f"生成任务 / {row['status']}",
-                "status": (
-                    "backlog"
-                    if str(row["status"]) in {"queued", "retrying"}
-                    else str(row["status"])
-                ),
+                "status": ("backlog" if str(row["status"]) in {"queued", "retrying"} else str(row["status"])),
                 "version": 1,
                 "updatedAt": row["updated_at"].isoformat(),
                 "details": {"total": int(row["total"])},
@@ -740,25 +734,25 @@ def _records(
         )
         return records
     if domain == "operations" and resource == "storage":
-        row = session.execute(
-            text(
-                """SELECT COUNT(*) total,COALESCE(SUM(size_bytes),0) bytes,
+        row = (
+            session.execute(
+                text(
+                    """SELECT COUNT(*) total,COALESCE(SUM(size_bytes),0) bytes,
                 MAX(created_at) updated_at FROM xingjing_generated_assets
                 WHERE workspace_id=:workspace"""
-            ),
-            {"workspace": trusted.workspace_id},
-        ).mappings().one()
+                ),
+                {"workspace": trusted.workspace_id},
+            )
+            .mappings()
+            .one()
+        )
         return [
             {
                 "id": "generated-assets",
                 "name": "生成产物存储",
                 "status": "healthy",
                 "version": 1,
-                "updatedAt": (
-                    row["updated_at"].isoformat()
-                    if row["updated_at"]
-                    else datetime.now(UTC).isoformat()
-                ),
+                "updatedAt": (row["updated_at"].isoformat() if row["updated_at"] else datetime.now(UTC).isoformat()),
                 "details": {
                     "objects": int(row["total"]),
                     "bytes": int(row["bytes"]),
@@ -789,9 +783,10 @@ def _records(
             for row in rows
         ]
     if domain == "operations-config" and resource == "growth":
-        row = session.execute(
-            text(
-                """SELECT
+        row = (
+            session.execute(
+                text(
+                    """SELECT
                 (SELECT COUNT(DISTINCT user_id) FROM identity.workspace_members
                  WHERE workspace_id::text=:workspace AND status<>'REMOVED') users,
                 (SELECT COUNT(*) FROM xingjing_projects
@@ -800,9 +795,12 @@ def _records(
                  WHERE workspace_id=:workspace) tasks,
                 (SELECT COUNT(*) FROM xingjing_compliance_reviews
                  WHERE tenant_id=:tenant AND workspace_id=:workspace) reviews"""
-            ),
-            {"tenant": trusted.tenant_id, "workspace": trusted.workspace_id},
-        ).mappings().one()
+                ),
+                {"tenant": trusted.tenant_id, "workspace": trusted.workspace_id},
+            )
+            .mappings()
+            .one()
+        )
         return [
             {
                 "id": "growth-current",
@@ -815,10 +813,13 @@ def _records(
         ]
     if domain == "notifications" and resource == "notifications":
         rows = session.scalars(
-            select(NotificationRow).where(
+            select(NotificationRow)
+            .where(
                 NotificationRow.tenant_id == trusted.tenant_id,
                 NotificationRow.workspace_id == trusted.workspace_id,
-            ).order_by(NotificationRow.created_at.desc(), NotificationRow.id.desc()).limit(500)
+            )
+            .order_by(NotificationRow.created_at.desc(), NotificationRow.id.desc())
+            .limit(500)
         ).all()
         return [
             {
@@ -909,12 +910,7 @@ def _write_object(
             not isinstance(recipients, list)
             or not recipients
             or not all(isinstance(item, str) and item.strip() for item in recipients)
-            or not (
-                isinstance(body, str)
-                and body.strip()
-                or isinstance(template_id, str)
-                and template_id.strip()
-            )
+            or not (isinstance(body, str) and body.strip() or isinstance(template_id, str) and template_id.strip())
         ):
             raise HTTPException(422, detail={"code": "INVALID_NOTIFICATION"})
         if not isinstance(body, str) or not body.strip():
@@ -959,16 +955,26 @@ def _write_object(
             notification_id = notification_by_recipient.get(preference.recipient_id)
             if notification_id is None or preference.destination is None:
                 continue
-            session.add(NotificationDeliveryRow(
-                id=str(uuid4()), tenant_id=trusted.tenant_id,
-                workspace_id=trusted.workspace_id, notification_id=notification_id,
-                recipient_id=preference.recipient_id, channel=preference.channel,
-                destination=preference.destination,
-                template_key=str(template_id or "admin-broadcast"),
-                payload={"title": title, "body": body, "broadcastId": payload.objectId},
-                status="queued", attempt_count=0, next_attempt_at=now,
-                provider_receipt=None, last_error=None, created_at=now, updated_at=now,
-            ))
+            session.add(
+                NotificationDeliveryRow(
+                    id=str(uuid4()),
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
+                    notification_id=notification_id,
+                    recipient_id=preference.recipient_id,
+                    channel=preference.channel,
+                    destination=preference.destination,
+                    template_key=str(template_id or "admin-broadcast"),
+                    payload={"title": title, "body": body, "broadcastId": payload.objectId},
+                    status="queued",
+                    attempt_count=0,
+                    next_attempt_at=now,
+                    provider_receipt=None,
+                    last_error=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
         next_payload = {**next_payload, "recipientCount": len(notification_values)}
     if domain == "support":
         if current is None:
@@ -1068,8 +1074,14 @@ def _status_for(domain: str, action: str) -> str:
 
 
 def _notification_records(
-    *, tenant_id: str, workspace_id: str, broadcast_id: str,
-    recipients: list[str], category: str, title: str, body: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    broadcast_id: str,
+    recipients: list[str],
+    category: str,
+    title: str,
+    body: str,
     created_at: datetime,
 ) -> list[dict[str, object]]:
     return [
@@ -1093,8 +1105,12 @@ def _notification_records(
 
 
 def _next_ticket_payload(
-    *, current: dict[str, object], command: dict[str, object], actor_id: str,
-    reason: str, occurred_at: datetime,
+    *,
+    current: dict[str, object],
+    command: dict[str, object],
+    actor_id: str,
+    reason: str,
+    occurred_at: datetime,
 ) -> tuple[dict[str, object], str]:
     operation = command.get("operation", "reply")
     if operation not in {"reply", "assign", "escalate", "close"}:
@@ -1109,9 +1125,14 @@ def _next_ticket_payload(
         existing = result.get("messages", [])
         if not isinstance(existing, list):
             raise HTTPException(409, detail={"code": "SUPPORT_MESSAGES_INVALID"})
-        result["messages"] = [*existing, {
-            "actorId": actor_id, "body": body.strip(), "occurredAt": occurred_at.isoformat(),
-        }]
+        result["messages"] = [
+            *existing,
+            {
+                "actorId": actor_id,
+                "body": body.strip(),
+                "occurredAt": occurred_at.isoformat(),
+            },
+        ]
         return result, "processing"
     if operation == "assign":
         assignee = command.get("assigneeId")

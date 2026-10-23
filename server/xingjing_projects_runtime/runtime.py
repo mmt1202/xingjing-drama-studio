@@ -198,6 +198,9 @@ class ProjectsRuntime:
         register_episode_routes(self, router)
         register_control_routes(self, router)
         register_home_routes(self, router)
+        from server.xingjing_analytics.router import register_analytics_routes
+
+        register_analytics_routes(self, router)
         return router
 
     async def _context(self, request: Request, permission: str):
