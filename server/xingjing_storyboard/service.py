@@ -151,6 +151,13 @@ class VersionComparison:
     fields_by_shot: dict[str, tuple[str, ...]]
 
 
+@dataclass(frozen=True, slots=True)
+class ShotGenerationPreparation:
+    storyboard: Storyboard
+    shot: Shot
+    replayed: bool
+
+
 class UuidIdentifierFactory:
     def new(self, kind: str) -> str:
         return f"{kind}-{uuid.uuid4()}"
@@ -492,7 +499,13 @@ class StoryboardService:
             )
             if current is None or source is None:
                 raise ContractViolation("VERSIONED_SHOT_NOT_FOUND")
-            restored = replace(source, shot_id=current.shot_id, position=current.position, quality_issues=())
+            restored = replace(
+                source,
+                shot_id=current.shot_id,
+                position=current.position,
+                quality_issues=(),
+                generation_submission=None,
+            )
             return tuple(restored if item.shot_id == shot_id else item for item in storyboard.shots)
 
         return self._mutate(
@@ -535,7 +548,7 @@ class StoryboardService:
             source = next((item for item in current.versions if item.number == source_version), None)
             if source is None:
                 raise ContractViolation("STORYBOARD_VERSION_NOT_FOUND")
-            return tuple(replace(shot, quality_issues=()) for shot in source.shots)
+            return tuple(replace(shot, quality_issues=(), generation_submission=None) for shot in source.shots)
 
         return self._mutate(
             context,
@@ -557,6 +570,7 @@ class StoryboardService:
         shot_id: str,
         candidate_id: str,
         idempotency_key: str,
+        allow_frozen_execution: bool = False,
     ) -> MutationResult:
         action = "storyboard.candidate_selected"
         fingerprint = _fingerprint(
@@ -567,6 +581,7 @@ class StoryboardService:
                 "expected_version": expected_version,
                 "shot_id": shot_id,
                 "candidate_id": candidate_id,
+                **({"verified_execution": True} if allow_frozen_execution else {}),
             }
         )
 
@@ -590,7 +605,7 @@ class StoryboardService:
                         shot,
                         selected_media_id=candidate_id,
                         generation_status=GenerationStatus.SUCCEEDED,
-                        quality_issues=(),
+                        quality_issues=shot.quality_issues,
                         replacements=(
                             *shot.replacements,
                             ShotReplacement(
@@ -616,6 +631,7 @@ class StoryboardService:
             idempotency_key=idempotency_key,
             fingerprint=fingerprint,
             transform=transform,
+            execution_only=allow_frozen_execution,
         )
 
     def run_quality_check(
@@ -657,6 +673,7 @@ class StoryboardService:
         new_media_id: str,
         reason: str,
         idempotency_key: str,
+        allow_frozen_execution: bool = False,
     ) -> MutationResult:
         action = "storyboard.shot_replaced"
         fingerprint = _fingerprint(
@@ -668,6 +685,7 @@ class StoryboardService:
                 "shot_id": shot_id,
                 "new_media_id": new_media_id,
                 "reason": reason,
+                **({"verified_execution": True} if allow_frozen_execution else {}),
             }
         )
 
@@ -710,7 +728,250 @@ class StoryboardService:
             idempotency_key=idempotency_key,
             fingerprint=fingerprint,
             transform=transform,
+            execution_only=allow_frozen_execution,
         )
+
+    def prepare_shot_generation(
+        self,
+        context: AccessContext,
+        *,
+        storyboard_id: str,
+        expected_version: int,
+        shot_id: str,
+        media_type: str,
+        provider_id: str | None,
+        model_id: str | None,
+        idempotency_key: str,
+    ) -> ShotGenerationPreparation:
+        """Reserve a real request before submission, without inventing a task or queue state."""
+        action = "storyboard.shot_generation_prepared"
+        self._authorize(context, "generation.manage", action, storyboard_id)
+        self._require_idempotency_key(idempotency_key)
+        if media_type not in {"image", "video"}:
+            raise ContractViolation("GENERATION_MEDIA_TYPE_INVALID")
+        identity = _fingerprint(
+            {
+                "scope": _scope_dict(context.scope),
+                "actor_id": context.actor_id,
+                "storyboard_id": storyboard_id,
+                "key": idempotency_key,
+            }
+        )
+        fingerprint = _fingerprint(
+            {
+                "operation": action,
+                "scope": _scope_dict(context.scope),
+                "actor_id": context.actor_id,
+                "storyboard_id": storyboard_id,
+                "expected_version": expected_version,
+                "shot_id": shot_id,
+                "media_type": media_type,
+                "provider_id": provider_id,
+                "model_id": model_id,
+            }
+        )
+
+        def transform(board: Storyboard) -> tuple[Shot, ...]:
+            shot = next((item for item in board.shots if item.shot_id == shot_id), None)
+            if shot is None:
+                raise ContractViolation("SHOT_NOT_FOUND")
+            if not shot.prompt.strip():
+                raise ContractViolation("SHOT_PROMPT_REQUIRED")
+            if len(shot.prompt) > 100_000 or any(
+                value is not None and (not value.strip() or len(value) > 128) for value in (provider_id, model_id)
+            ):
+                raise ContractViolation("GENERATION_REQUEST_INVALID")
+            if model_id is not None and provider_id is None:
+                raise ContractViolation("GENERATION_MODEL_PROVIDER_REQUIRED")
+            pending = shot.generation_submission
+            if pending is not None and pending.get("state") == "pending":
+                if any(
+                    pending.get(name) != value
+                    for name, value in (
+                        ("media_type", media_type),
+                        ("provider_id", provider_id),
+                        ("model_id", model_id),
+                    )
+                ):
+                    raise ContractViolation("SHOT_GENERATION_SUBMISSION_PENDING")
+                submission = pending
+            else:
+                submission = {
+                    "idempotency_key": f"m05-generation:{identity}",
+                    "source_version": board.version,
+                    "media_type": media_type,
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "state": "pending",
+                }
+            return tuple(
+                replace(item, generation_submission=dict(submission)) if item.shot_id == shot_id else item
+                for item in board.shots
+            )
+
+        result = self._mutate(
+            context,
+            action=action,
+            storyboard_id=storyboard_id,
+            expected_version=expected_version,
+            idempotency_key=f"generation.prepare:{identity}",
+            fingerprint=fingerprint,
+            transform=transform,
+            execution_only=True,
+        )
+        shot = next(item for item in result.storyboard.shots if item.shot_id == shot_id)
+        return ShotGenerationPreparation(result.storyboard, shot, result.replayed)
+
+    def claim_generation_dispatch(
+        self,
+        context: AccessContext,
+        *,
+        storyboard_id: str,
+        shot_id: str,
+        submission_key: str,
+        dispatch_token: str,
+    ) -> MutationResult:
+        self._authorize(context, "generation.manage", "storyboard.generation_dispatch_started", storyboard_id)
+
+        def transform(board: Storyboard) -> tuple[Shot, ...]:
+            shot = next((item for item in board.shots if item.shot_id == shot_id), None)
+            submission = shot.generation_submission if shot is not None else None
+            if submission is None or submission.get("idempotency_key") != submission_key:
+                raise ContractViolation("GENERATION_SUBMISSION_MISMATCH")
+            if submission.get("state") == "rejected":
+                raise ContractViolation(str(submission.get("rejection_code") or "GENERATION_SUBMISSION_REJECTED"))
+            if submission.get("state") != "pending" or submission.get("dispatch_token"):
+                raise ContractViolation("GENERATION_SUBMISSION_VERIFICATION_REQUIRED")
+            return tuple(
+                replace(item, generation_submission={**submission, "dispatch_token": dispatch_token})
+                if item.shot_id == shot_id
+                else item
+                for item in board.shots
+            )
+
+        current = self._owned_storyboard(context, storyboard_id)
+        return self._mutate(
+            context,
+            action="storyboard.generation_dispatch_started",
+            storyboard_id=storyboard_id,
+            expected_version=current.version,
+            idempotency_key=f"generation.dispatch:{dispatch_token}",
+            fingerprint=_fingerprint({"submission_key": submission_key, "dispatch_token": dispatch_token}),
+            transform=transform,
+            execution_only=True,
+        )
+
+    def finish_generation_dispatch(
+        self,
+        context: AccessContext,
+        *,
+        storyboard_id: str,
+        shot_id: str,
+        submission_key: str,
+        dispatch_token: str,
+        rejection_code: str | None,
+    ) -> MutationResult:
+        self._authorize(context, "generation.manage", "storyboard.generation_dispatch_finished", storyboard_id)
+
+        def transform(board: Storyboard) -> tuple[Shot, ...]:
+            shot = next((item for item in board.shots if item.shot_id == shot_id), None)
+            submission = shot.generation_submission if shot is not None else None
+            if (
+                submission is None
+                or submission.get("idempotency_key") != submission_key
+                or submission.get("dispatch_token") != dispatch_token
+            ):
+                raise ContractViolation("GENERATION_SUBMISSION_MISMATCH")
+            changed = {key: value for key, value in submission.items() if key != "dispatch_token"}
+            if rejection_code is not None:
+                changed.update(state="rejected", rejection_code=rejection_code)
+            return tuple(
+                replace(item, generation_submission=changed) if item.shot_id == shot_id else item
+                for item in board.shots
+            )
+
+        for attempt in range(8):
+            current = self._owned_storyboard(context, storyboard_id)
+            try:
+                return self._mutate(
+                    context,
+                    action="storyboard.generation_dispatch_finished",
+                    storyboard_id=storyboard_id,
+                    expected_version=current.version,
+                    idempotency_key=f"generation.dispatch-finish:{dispatch_token}",
+                    fingerprint=_fingerprint({"submission_key": submission_key, "rejection_code": rejection_code}),
+                    transform=transform,
+                    execution_only=True,
+                )
+            except VersionConflict:
+                if attempt == 7:
+                    raise
+        raise ContractViolation("GENERATION_SUBMISSION_MISMATCH")
+
+    def bind_prepared_generation_task(
+        self,
+        context: AccessContext,
+        *,
+        storyboard_id: str,
+        shot_id: str,
+        submission_key: str,
+        task_id: str,
+    ) -> MutationResult:
+        """Merge the accepted task through CAS; retries recover the original request receipt."""
+        self._authorize(context, MANAGE_PERMISSION, "storyboard.shot_generation_requested", storyboard_id)
+        if not task_id.strip() or not submission_key.strip():
+            raise ContractViolation("GENERATION_TASK_ID_REQUIRED")
+        fingerprint = _fingerprint(
+            {
+                "scope": _scope_dict(context.scope),
+                "storyboard_id": storyboard_id,
+                "shot_id": shot_id,
+                "submission_key": submission_key,
+                "task_id": task_id,
+            }
+        )
+        key = f"generation.bind:{_fingerprint({'submission_key': submission_key})}"
+
+        def transform(board: Storyboard) -> tuple[Shot, ...]:
+            shot = next((item for item in board.shots if item.shot_id == shot_id), None)
+            if (
+                shot is None
+                or shot.generation_submission is None
+                or shot.generation_submission.get("idempotency_key") != submission_key
+            ):
+                raise ContractViolation("GENERATION_SUBMISSION_MISMATCH")
+            submission = {
+                key: value for key, value in shot.generation_submission.items() if key != "dispatch_token"
+            } | {"state": "bound"}
+            return tuple(
+                replace(
+                    item,
+                    generation_task_id=task_id,
+                    generation_status=GenerationStatus.QUEUED,
+                    generation_submission=submission,
+                )
+                if item.shot_id == shot_id
+                else item
+                for item in board.shots
+            )
+
+        for attempt in range(8):
+            current = self._owned_storyboard(context, storyboard_id)
+            try:
+                return self._mutate(
+                    context,
+                    action="storyboard.shot_generation_requested",
+                    storyboard_id=storyboard_id,
+                    expected_version=current.version,
+                    idempotency_key=key,
+                    fingerprint=fingerprint,
+                    transform=transform,
+                    execution_only=True,
+                )
+            except VersionConflict:
+                if attempt == 7:
+                    raise
+        raise ContractViolation("GENERATION_SUBMISSION_MISMATCH")
 
     def record_shot_generation_task(
         self,
@@ -763,6 +1024,7 @@ class StoryboardService:
             idempotency_key=idempotency_key,
             fingerprint=fingerprint,
             transform=transform,
+            execution_only=True,
         )
 
     def freeze_storyboard(
@@ -1024,6 +1286,7 @@ class StoryboardService:
         fingerprint: str,
         transform: Callable[[Storyboard], tuple[Shot, ...]],
         audit_details: Mapping[str, object] | None = None,
+        execution_only: bool = False,
     ) -> MutationResult:
         self._authorize(context, MANAGE_PERMISSION, action, storyboard_id)
         self._require_idempotency_key(idempotency_key)
@@ -1032,10 +1295,18 @@ class StoryboardService:
             return MutationResult(replay, True)
         try:
             current = self._owned_storyboard(context, storyboard_id)
-            self._assert_mutable(current)
+            if not execution_only:
+                self._assert_mutable(current)
+                if any(
+                    shot.generation_submission is not None and shot.generation_submission.get("state") == "pending"
+                    for shot in current.shots
+                ):
+                    raise ContractViolation("SHOT_GENERATION_SUBMISSION_PENDING")
             if current.version != expected_version:
                 raise VersionConflict("VERSION_CONFLICT", details={"current_version": current.version})
             shots = transform(current)
+            if execution_only:
+                self._assert_execution_plan_unchanged(current, shots)
             self._validate_assets(context, shots)
             now = self._now()
             next_version = current.version + 1
@@ -1134,6 +1405,27 @@ class StoryboardService:
     def _assert_mutable(storyboard: Storyboard) -> None:
         if storyboard.status is StoryboardStatus.FROZEN:
             raise FrozenStoryboardViolation("STORYBOARD_FROZEN")
+
+    @staticmethod
+    def _assert_execution_plan_unchanged(board: Storyboard, shots: tuple[Shot, ...]) -> None:
+        execution_fields = {
+            "selected_media_id",
+            "generation_task_id",
+            "generation_status",
+            "replacements",
+            "generation_submission",
+        }
+
+        def plans(values: tuple[Shot, ...]) -> list[dict[str, object]]:
+            return [
+                {key: value for key, value in shot.to_dict().items() if key not in execution_fields} for shot in values
+            ]
+
+        current_plan = plans(board.shots)
+        if plans(shots) != current_plan or (
+            board.frozen_snapshot is not None and plans(board.frozen_snapshot.shots) != current_plan
+        ):
+            raise FrozenStoryboardViolation("STORYBOARD_FROZEN_PLAN_CHANGED")
 
     def _authorize(
         self,

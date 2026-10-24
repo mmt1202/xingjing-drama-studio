@@ -15,7 +15,11 @@ from server.xingjing_compliance_persistence.repository import DeliveryRow, Revie
 from server.xingjing_content_persistence.repository import ScriptRow, ScriptVersionRow
 from server.xingjing_editing_persistence.models import FinalVideoVersionRow, TimelineHeadRow
 from server.xingjing_identity_context import TrustedWorkspaceContext
+from server.xingjing_storyboard.errors import ContractViolation
+from server.xingjing_storyboard.models import FrozenStoryboard
 from server.xingjing_storyboard_persistence.repository import StoryboardRow
+
+from .episode_sources_models import EpisodeWorkingScriptRow
 
 
 def _scope(model: Any, context: TrustedWorkspaceContext, project_id: str):
@@ -122,6 +126,7 @@ async def production_catalog(
                 "id": row.storyboard_id,
                 "episodeId": row.episode_id,
                 "version": row.version,
+                "frozen": _frozen_board_valid(row.payload),
                 "shots": len(shots) if isinstance(shots := row.payload.get("shots"), list) else 0,
             }
             for row in board_rows
@@ -157,6 +162,17 @@ async def production_catalog(
         "reviews": reviews,
         "deliveries": deliveries,
     }
+
+
+def _frozen_board_valid(payload: dict[str, object]) -> bool:
+    snapshot = payload.get("frozen_snapshot")
+    if payload.get("status") != "frozen" or not isinstance(snapshot, dict):
+        return False
+    try:
+        frozen = FrozenStoryboard.from_dict(snapshot)
+        return bool(frozen.shots) and frozen.verify_digest()
+    except (ContractViolation, KeyError, TypeError, ValueError):
+        return False
 
 
 def binding_issue(production: EpisodeProduction, episode: int, catalog: dict[str, Any]) -> str | None:
@@ -212,6 +228,34 @@ async def validate_production_edits(
     catalog = await production_catalog(session, context, project_id, enforce_visibility=False)
     for edit in changed:
         assert edit.production is not None
+        script_id = edit.production.scriptVersionId.rsplit("@", 1)[0]
+        link = (
+            await session.scalar(
+                select(EpisodeWorkingScriptRow).where(
+                    *_scope(EpisodeWorkingScriptRow, context, project_id),
+                    EpisodeWorkingScriptRow.script_id == script_id,
+                )
+            )
+            if script_id
+            else None
+        )
+        if link is not None:
+            selected = edit.sourceRange
+            source = next(
+                (s for s in snapshot.get("sources", []) if s["path"] == link.source_ref.get("sourceId")), None
+            )
+            source_digest = (
+                (source.get("digest") or hashlib.sha256(source["text"].encode("utf-8")).hexdigest()) if source else None
+            )
+            if (
+                link.episode != edit.episode
+                or selected is None
+                or selected.source_file != link.source_ref.get("sourceId")
+                or selected.start != link.source_ref.get("start")
+                or selected.end != link.source_ref.get("end")
+                or source_digest != link.source_ref.get("digest")
+            ):
+                raise EpisodeEditError("EPISODE_WORKING_SCRIPT_SOURCE_MISMATCH", 409)
         previous = old.get(edit.episode, {})
         has_boards = await session.scalar(
             select(StoryboardRow.storyboard_id)
@@ -241,16 +285,16 @@ def project_production(snapshot: dict[str, Any], catalog: dict[str, Any]) -> dic
         state = "unbound"
         if production.scriptVersionId and not issue:
             state = "script_frozen"
-        if boards:
+        if not issue and any(b["shots"] for b in boards):
             state = "storyboard_ready"
         if production.finalVideoVersionId and not issue:
             state = "final_ready"
-        if review:
+        if review and production.finalVideoVersionId and not issue:
             if review["status"] in {"pending", "appealed"}:
                 state = "pending_review"
             elif review["conclusion"] == "blocked" or review["status"] == "rejected":
                 state = "review_blocked"
-        if state not in {"pending_review", "review_blocked"} and any(
+        if state == "final_ready" and any(
             d["status"] == "succeeded" and d["format"] == "publish_package" for d in deliveries
         ):
             state = "package_ready"

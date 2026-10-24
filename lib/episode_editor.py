@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lib.episode_ledger import (
     SourceRange,
-    compute_source_fingerprints,
     discover_product_episode_nums,
     discover_sources,
     has_downstream_products,
@@ -63,7 +62,7 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _sources(root: Path) -> dict[str, str]:
+def _sources(root: Path, source_texts: dict[str, str] | None = None) -> dict[str, str]:
     source_dir = root / "source"
     if source_dir.is_symlink() or (source_dir.exists() and not source_dir.resolve().is_relative_to(root.resolve())):
         raise EpisodeEditError("EPISODE_SOURCE_UNSAFE")
@@ -72,7 +71,7 @@ def _sources(root: Path) -> dict[str, str]:
     sources = discover_sources(root)
     if sum(len(doc.text) for doc in sources) > 2_000_000:
         raise EpisodeEditError("EPISODE_SOURCE_TOO_LARGE")
-    return {doc.rel_path: doc.text for doc in sources}
+    return {**{doc.rel_path: doc.text for doc in sources}, **(source_texts or {})}
 
 
 def _editable(entry: dict, default_duration: int = 60) -> dict[str, Any]:
@@ -109,10 +108,12 @@ def _locked(root: Path, entries: list[dict]) -> list[int]:
     ]
 
 
-def read_episodes(manager: ProjectManager, project_id: str) -> dict[str, Any]:
+def read_episodes(
+    manager: ProjectManager, project_id: str, *, source_texts: dict[str, str] | None = None
+) -> dict[str, Any]:
     project = manager.load_project(project_id)
     root = manager.get_project_path(project_id)
-    sources = _sources(root)
+    sources = _sources(root, source_texts)
     entries = ordered_episode_entries(project)
     locked = _locked(root, entries)
     revision = _revision(project, sources, locked)
@@ -163,9 +164,17 @@ def read_episodes(manager: ProjectManager, project_id: str) -> dict[str, Any]:
     }
 
 
-def split_remaining(manager: ProjectManager, project_id: str, source: str, count: int, revision: str) -> list[dict]:
+def split_remaining(
+    manager: ProjectManager,
+    project_id: str,
+    source: str,
+    count: int,
+    revision: str,
+    *,
+    source_texts: dict[str, str] | None = None,
+) -> list[dict]:
     """Preview a deterministic paragraph split; never call a paid model or write files."""
-    snapshot = read_episodes(manager, project_id)
+    snapshot = read_episodes(manager, project_id, source_texts=source_texts)
     if snapshot["revision"] != revision:
         raise EpisodeEditError("VERSION_CONFLICT", 409)
     if snapshot["contentMode"] == "ad":
@@ -226,6 +235,7 @@ def save_episodes(
     key: str,
     actor: str,
     replay_only: bool = False,
+    source_texts: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root = manager.get_project_path(project_id)
     snapshot = manager.load_project(project_id)
@@ -242,7 +252,14 @@ def save_episodes(
         for path in sorted(paths):
             locks.enter_context(manager.file_lock(path))
         return _save_episodes_locked(
-            manager, project_id, edits, revision=revision, key=key, actor=actor, replay_only=replay_only
+            manager,
+            project_id,
+            edits,
+            revision=revision,
+            key=key,
+            actor=actor,
+            replay_only=replay_only,
+            source_texts=source_texts,
         )
 
 
@@ -255,6 +272,7 @@ def _save_episodes_locked(
     key: str,
     actor: str,
     replay_only: bool,
+    source_texts: dict[str, str] | None,
 ) -> dict[str, Any]:
     """Commit the ledger and derived text under its existing project lock.
 
@@ -274,7 +292,7 @@ def _save_episodes_locked(
             return previous
         if replay_only:
             raise EpisodeEditError("IDEMPOTENCY_RECEIPT_EXPIRED", 409)
-        sources = _sources(root)
+        sources = _sources(root, source_texts)
         entries = ordered_episode_entries(project)
         locked = _locked(root, entries)
         before = _revision(project, sources, locked)
@@ -340,7 +358,9 @@ def _save_episodes_locked(
         project["episodes"] = updated
         project["episode_order"] = numbers
         project["episode_edit_revision"] = project.get("episode_edit_revision", 0) + 1
-        project["source_fingerprints"] = compute_source_fingerprints(discover_sources(root))
+        project["source_fingerprints"] = {
+            rel: hashlib.sha256(text.encode("utf-8")).hexdigest() for rel, text in sources.items()
+        }
         # Cursor follows source coordinates, independently of presentation order.
         covered = [(rel, max(end for _, end in segments)) for rel, segments in ranges.items()]
         if covered:

@@ -7,6 +7,7 @@ export interface ControlEpisode {
   episode: number; title: string; state: string; issue: string | null; shots: number | null;
   finalVersionId: string | null; timelineId: string | null; approval: string | null;
   assetsReady: boolean;
+  scriptId?: string | null; scriptVersionId?: string | null; assetSnapshotId?: string | null;
 }
 export interface ProjectControl {
   project: Omit<ProjectDetail, "configuration"> & { configuration?: Partial<ProjectSetup> }; workspaceId: string; permissions: string[]; plannedCount: number; updatedAt: string; days: number;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetsStoryboardApiError, createAssetsStoryboardApi } from "./api";
 import type {
@@ -14,6 +14,11 @@ import type {
   WorkspaceProjectScope,
 } from "./contracts";
 import { BatchResultPanel, ConfirmDialog, LoadingState, StatePanel, TaskSummary, WorkspaceShell, button, panel, primaryButton } from "./ui";
+import { useProductionHandoffTranslation } from "./handoff-i18n";
+import { useDraftProtection } from "./useDraftProtection";
+import { clearProductionDraft, productionDraftSlot, type ProductionDraftScope } from "./draft-state";
+import { useRecoverableDraft } from "./useRecoverableDraft";
+import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
 
 export type AssetView = "extract" | "library" | "editor" | "turnaround" | "expressions" | "market" | "market-detail";
 
@@ -24,6 +29,7 @@ export interface AssetsWorkspaceProps {
   readonly projectName?: string;
   readonly api?: AssetsStoryboardPort;
   readonly onNavigate?: (view: AssetView, assetId?: string) => void;
+  readonly initialScriptVersionId?: string;
 }
 
 const defaultApi = createAssetsStoryboardApi();
@@ -101,24 +107,26 @@ function AssetFilters({ search, type, rights, onSearch, onType, onRights, onAppl
   </section>;
 }
 
-function AssetExtraction({ canManage, onRun, task, batch, busy }: { readonly canManage: boolean; readonly onRun: (scriptVersionId: string, types: AssetType[]) => void; readonly task?: TaskReceipt; readonly batch?: BatchReceipt; readonly busy: boolean }) {
-  const [scriptVersionId, setScriptVersionId] = useState("");
+function AssetExtraction({ canManage, onRun, task, batch, busy, initialScriptVersionId }: { readonly canManage: boolean; readonly onRun: (scriptVersionId: string, types: AssetType[]) => void; readonly task?: TaskReceipt; readonly batch?: BatchReceipt; readonly busy: boolean; readonly initialScriptVersionId?: string }) {
+  const [scriptVersionId, setScriptVersionId] = useState(initialScriptVersionId ?? "");
+  const { t } = useProductionHandoffTranslation();
   const [types, setTypes] = useState<AssetType[]>(["character", "scene", "prop", "costume", "voice"]);
   return <section className={`${panel} max-w-4xl p-6`}>
     <h2 className="text-lg font-semibold">提取输入</h2><p className="mt-2 text-sm text-[#B8BECC]">只接受已冻结剧本版本；角色与场景会从 M03 的已标注结构创建为真实资产，无法可靠推导的类别会明确跳过。</p>
-    <label className="mt-5 block text-sm">冻结剧本版本 ID<input value={scriptVersionId} onChange={(event) => setScriptVersionId(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2" /></label>
+    <label className="mt-5 block text-sm">冻结剧本版本 ID<input value={scriptVersionId} readOnly={Boolean(initialScriptVersionId)} onChange={(event) => setScriptVersionId(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2" /></label>{initialScriptVersionId ? <p className="mt-3 text-xs leading-6 text-slate-400">{t("frozenContext")} {t("boundReadOnly")}</p> : null}
     <fieldset className="mt-5"><legend className="text-sm">提取范围</legend><div className="mt-3 flex flex-wrap gap-3">{Object.entries(assetTypeLabels).map(([value, label]) => <label key={value} className="rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-sm"><input type="checkbox" className="mr-2 accent-[#8B5CF6]" checked={types.includes(value as AssetType)} onChange={() => setTypes((current) => current.includes(value as AssetType) ? current.filter((item) => item !== value) : [...current, value as AssetType])} />{label}</label>)}</div></fieldset>
     <button type="button" className={`${primaryButton} mt-6`} disabled={!canManage || busy || !scriptVersionId.trim() || types.length === 0} onClick={() => onRun(scriptVersionId.trim(), types)}>{busy ? "提交中…" : "开始提取资产"}</button>
     {task ? <TaskSummary task={task} message="提取任务已进入队列" /> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} /> : null}
   </section>;
 }
 
-function ManualAssetCreate({ canManage, busy, onCreate }: { readonly canManage: boolean; readonly busy: boolean; readonly onCreate: (payload: Record<string, unknown>) => void }) {
-  const [snapshot, setSnapshot] = useState(""); const [kind, setKind] = useState<AssetType>("character"); const [name, setName] = useState(""); const [description, setDescription] = useState("");
-  return <details className={`${panel} mb-5 p-5`}><summary className="cursor-pointer font-semibold text-[#F5F6FA]">从冻结剧本创建可编辑资产</summary><p className="mt-3 text-sm text-[#B8BECC]">此入口创建真实持久化的资产及首个版本。请输入 M03 中冻结的“剧本 ID@版本号”；角色三视图和表情集可在资产详情中提交到 M06 生成队列。</p><div className="mt-4 grid gap-3 md:grid-cols-2"><label className="text-sm text-[#B8BECC]">冻结剧本版本 ID<input value={snapshot} onChange={(event) => setSnapshot(event.target.value)} placeholder="script-...@1" className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><label className="text-sm text-[#B8BECC]">资产类型<select value={kind} onChange={(event) => setKind(event.target.value as AssetType)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3">{Object.entries(assetTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm text-[#B8BECC]">资产名称<input value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><label className="text-sm text-[#B8BECC]">资产说明<input value={description} onChange={(event) => setDescription(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label></div><button type="button" disabled={!canManage || busy || !snapshot.trim() || !name.trim()} onClick={() => onCreate({ frozenSnapshotId: snapshot.trim(), kind, name: name.trim(), metadata: { description } })} className={`${primaryButton} mt-4 disabled:opacity-50`}>{busy ? "正在创建…" : "创建资产"}</button></details>;
+function ManualAssetCreate({ canManage, busy, onCreate, initialScriptVersionId, onDirty }: { readonly canManage: boolean; readonly busy: boolean; readonly onCreate: (payload: Record<string, unknown>) => void; readonly initialScriptVersionId?: string; readonly onDirty: (value: boolean) => void }) {
+  const [snapshot, setSnapshot] = useState(initialScriptVersionId ?? ""); const [kind, setKind] = useState<AssetType>("character"); const [name, setName] = useState(""); const [description, setDescription] = useState("");
+  useEffect(() => { onDirty(Boolean(canManage && (name || description || snapshot !== (initialScriptVersionId ?? "")))); return () => onDirty(false); }, [canManage, name, description, snapshot, initialScriptVersionId, onDirty]);
+  return <details className={`${panel} mb-5 p-5`}><summary className="cursor-pointer font-semibold text-[#F5F6FA]">从冻结剧本创建可编辑资产</summary><p className="mt-3 text-sm text-[#B8BECC]">此入口创建真实持久化的资产及首个版本。请输入 M03 中冻结的“剧本 ID@版本号”；角色三视图和表情集可在资产详情中提交到 M06 生成队列。</p><div className="mt-4 grid gap-3 md:grid-cols-2"><label className="text-sm text-[#B8BECC]">冻结剧本版本 ID<input disabled={busy || !canManage} value={snapshot} readOnly={Boolean(initialScriptVersionId)} onChange={(event) => setSnapshot(event.target.value)} placeholder="script-...@1" className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><label className="text-sm text-[#B8BECC]">资产类型<select disabled={busy || !canManage} value={kind} onChange={(event) => setKind(event.target.value as AssetType)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3">{Object.entries(assetTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm text-[#B8BECC]">资产名称<input disabled={busy || !canManage} value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><label className="text-sm text-[#B8BECC]">资产说明<input disabled={busy || !canManage} value={description} onChange={(event) => setDescription(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label></div><button type="button" disabled={!canManage || busy || !snapshot.trim() || !name.trim()} onClick={() => onCreate({ frozenSnapshotId: snapshot.trim(), kind, name: name.trim(), metadata: { description } })} className={`${primaryButton} mt-4 disabled:opacity-50`}>{busy ? "正在创建…" : "创建资产"}</button></details>;
 }
 
-function MetadataEditor({ asset, values, onChange }: { readonly asset: AssetItem; readonly values: Record<string, string>; readonly onChange: (key: string, value: string) => void }) {
+function MetadataEditor({ asset, values, onChange }: { readonly asset: AssetItem; readonly values: Record<string, unknown>; readonly onChange: (key: string, value: string) => void }) {
   const configs: Record<AssetType, Array<[string, string]>> = {
     character: [["appearance", "角色外观"], ["personality", "角色性格"], ["voiceAssetId", "绑定声音资产 ID"]],
     scene: [["environment", "场景环境"], ["lighting", "场景光线"], ["timeOfDay", "场景时段"]],
@@ -126,7 +134,7 @@ function MetadataEditor({ asset, values, onChange }: { readonly asset: AssetItem
     costume: [["setting", "服装设定"], ["characterIds", "适用角色 ID"], ["continuity", "换装连续性"]],
     voice: [["timbre", "声音音色"], ["language", "声音语言"], ["emotion", "情绪范围"]],
   };
-  return <div className="grid gap-4 md:grid-cols-2">{configs[asset.type].map(([key, label]) => <label key={key} className="text-sm text-[#B8BECC]">{label}<input value={values[key] ?? ""} onChange={(event) => onChange(key, event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label>)}</div>;
+  return <div className="grid gap-4 md:grid-cols-2">{configs[asset.type].map(([key, label]) => <label key={key} className="text-sm text-[#B8BECC]">{label}<input value={typeof values[key] === "string" ? values[key] : ""} onChange={(event) => onChange(key, event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label>)}</div>;
 }
 
 interface ConfirmState { readonly kind: "primary" | "restore" | "rights"; readonly id?: string; readonly label: string }
@@ -138,18 +146,28 @@ interface RightsDraft {
   readonly proofSha256: string;
   readonly validTo: string;
 }
+interface AssetDraft { baseVersion: number; currentVersionId: string; name: string; description: string; metadata: Record<string, unknown>; rights: RightsDraft; proofPending: boolean }
+function validAssetDraft(value: unknown): value is AssetDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Partial<AssetDraft>;
+  return Number.isSafeInteger(draft.baseVersion) && typeof draft.currentVersionId === "string" && typeof draft.name === "string" && typeof draft.description === "string"
+    && Boolean(draft.metadata && typeof draft.metadata === "object" && !Array.isArray(draft.metadata)) && typeof draft.proofPending === "boolean"
+    && Boolean(draft.rights && [draft.rights.holder, draft.rights.licenseScope, draft.rights.proofObjectKey, draft.rights.proofSha256, draft.rights.validTo].every((item) => typeof item === "string"));
+}
 
-function RightsEditor({ value, editable, busy, onChange, onUpload, onSave }: {
+function RightsEditor({ value, editable, busy, onChange, onUpload, onSave, onDirty }: {
   readonly value: RightsDraft;
   readonly editable: boolean;
   readonly busy: boolean;
   readonly onChange: (value: RightsDraft) => void;
   readonly onUpload: (file: File) => Promise<RightsEvidenceUpload>;
   readonly onSave: () => void;
+  readonly onDirty: (value: boolean) => void;
 }) {
   const [file, setFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  useEffect(() => { onDirty(Boolean(file || uploading)); return () => onDirty(false); }, [file, uploading, onDirty]);
   const upload = async () => {
     if (!file) return;
     setUploading(true); setUploadError("");
@@ -157,7 +175,7 @@ function RightsEditor({ value, editable, busy, onChange, onUpload, onSave }: {
     catch (reason) { setUploadError(errorMessage(reason)); }
     finally { setUploading(false); }
   };
-  return <section className={`${panel} p-5`}><h2 className="font-semibold">授权记录</h2><p className="mt-1 text-xs text-[#7E8494]">上传后的文件会由服务端重新校验摘要；保存后进入待核验状态。</p><div className="mt-4 grid gap-3"><label className="text-xs text-[#B8BECC]">权利人<input disabled={!editable} value={value.holder} onChange={(event) => onChange({ ...value, holder: event.target.value })} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 disabled:opacity-60" /></label><label className="text-xs text-[#B8BECC]">许可范围<select disabled={!editable} value={value.licenseScope} onChange={(event) => onChange({ ...value, licenseScope: event.target.value })} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 disabled:opacity-60"><option value="owner_project_only">仅所属项目</option><option value="workspace">工作区复用</option></select></label><label className="text-xs text-[#B8BECC]">失效日期<input disabled={!editable} type="date" value={value.validTo} onChange={(event) => onChange({ ...value, validTo: event.target.value })} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-2 py-2 disabled:opacity-60" /></label>{editable ? <><label className="text-xs text-[#B8BECC]">权利证明（PDF、JPG、PNG、WebP）<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0])} className="mt-1 block w-full text-xs" /></label><button type="button" className={button} disabled={!file || uploading || busy} onClick={() => void upload()}>{uploading ? "正在上传…" : "上传并校验证明"}</button>{uploadError ? <StatePanel title="证明上传失败" detail={uploadError} tone="danger" /> : null}{value.proofObjectKey ? <p className="font-mono text-[11px] text-[#7E8494]">已校验对象：{value.proofObjectKey}</p> : null}<button type="button" className={button} disabled={!value.proofObjectKey || !value.proofSha256 || busy} onClick={onSave}>保存授权记录</button></> : null}</div></section>;
+  return <section className={`${panel} p-5`}><h2 className="font-semibold">授权记录</h2><p className="mt-1 text-xs text-[#7E8494]">上传后的文件会由服务端重新校验摘要；保存后进入待核验状态。</p><div className="mt-4 grid gap-3"><label className="text-xs text-[#B8BECC]">权利人<input disabled={!editable || busy} value={value.holder} onChange={(event) => onChange({ ...value, holder: event.target.value })} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 disabled:opacity-60" /></label><label className="text-xs text-[#B8BECC]">许可范围<select disabled={!editable || busy} value={value.licenseScope} onChange={(event) => onChange({ ...value, licenseScope: event.target.value })} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 disabled:opacity-60"><option value="owner_project_only">仅所属项目</option><option value="workspace">工作区复用</option></select></label><label className="text-xs text-[#B8BECC]">失效日期<input disabled={!editable || busy} type="date" value={value.validTo} onChange={(event) => onChange({ ...value, validTo: event.target.value })} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-2 py-2 disabled:opacity-60" /></label>{editable ? <><label className="text-xs text-[#B8BECC]">权利证明（PDF、JPG、PNG、WebP）<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0])} className="mt-1 block w-full text-xs" /></label><button type="button" className={button} disabled={!file || uploading || busy} onClick={() => void upload()}>{uploading ? "正在上传…" : "上传并校验证明"}</button>{uploadError ? <StatePanel title="证明上传失败" detail={uploadError} tone="danger" /> : null}{value.proofObjectKey ? <p className="font-mono text-[11px] text-[#7E8494]">已校验对象：{value.proofObjectKey}</p> : null}<button type="button" className={button} disabled={!value.proofObjectKey || !value.proofSha256 || busy} onClick={onSave}>保存授权记录</button></> : null}</div></section>;
 }
 
 function MarketReusePanel({ asset, busy, onCreate }: {
@@ -181,38 +199,58 @@ function MarketReusePanel({ asset, busy, onCreate }: {
   return <section className={`${panel} p-5`}><h2 className="font-semibold">授权复用</h2><p className="mt-2 text-sm text-[#B8BECC]">创建操作走市场正式 Fork：锁定当前市场版本和源版本，并保存授权、分成与来源血缘。</p><dl className="mt-4 grid grid-cols-2 gap-3 text-xs"><div><dt className="text-[#7E8494]">价格（最小计价单位）</dt><dd className="mt-1 font-mono text-[#F5F6FA]">{priceMinor}</dd></div><div><dt className="text-[#7E8494]">当前工作区使用记录</dt><dd className="mt-1 text-[#F5F6FA]">{asset.referenceCount} 次</dd></div><div><dt className="text-[#7E8494]">市场版本</dt><dd className="mt-1 font-mono text-[#F5F6FA]">v{asset.version}</dd></div><div><dt className="text-[#7E8494]">源版本</dt><dd className="mt-1 truncate font-mono text-[#F5F6FA]">{asset.currentVersionId}</dd></div></dl><label className="mt-4 block text-xs text-[#B8BECC]">新项目名称<input value={projectName} onChange={(event) => setProjectName(event.target.value)} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2" /></label><label className="mt-3 block text-xs text-[#B8BECC]"><input type="checkbox" checked={commercialUse} disabled={!commercialAllowed} onChange={(event) => setCommercialUse(event.target.checked)} className="mr-2 accent-[#8B5CF6]" />用于商业项目{commercialAllowed ? "" : "（当前许可不允许）"}</label><p className="mt-3 text-xs text-[#7E8494]">可继承范围：{inheritableScopes.join("、") || "无"}</p><button type="button" className={`${primaryButton} mt-4 w-full`} disabled={busy || !allowFork || !projectName.trim()} onClick={() => setConfirming(true)}>{busy ? "正在创建…" : allowFork ? "创建授权副本" : "当前素材禁止 Fork"}</button><ConfirmDialog open={confirming} title="确认创建授权副本" detail={`将锁定市场 v${asset.version} 与源版本 ${asset.currentVersionId}，并按当前许可创建项目。`} confirmLabel="确认创建副本" busy={busy} onCancel={() => setConfirming(false)} onConfirm={create} /></section>;
 }
 
-function AssetEditor({ asset, canManage, busy, conflict, marketDetail, onSave, onAction, onReload, onUploadRightsEvidence, onDerivative }: {
+function AssetEditor({ asset, canManage, busy, conflict, marketDetail, onSave, onAction, onReload, onUploadRightsEvidence, onDerivative, onDirty, draftScope }: {
   readonly asset: AssetItem;
   readonly canManage: boolean;
   readonly busy: boolean;
+  readonly onDirty: (value: boolean) => void;
+  readonly draftScope: ProductionDraftScope;
   readonly conflict?: AssetsStoryboardApiError;
   readonly marketDetail: boolean;
-  readonly onSave: (payload: Record<string, unknown>) => void;
-  readonly onAction: (action: string, payload: Record<string, unknown>, confirm?: ConfirmState) => void;
+  readonly onSave: (payload: Record<string, unknown>, version: number) => void;
+  readonly onAction: (action: string, payload: Record<string, unknown>, version: number) => void;
   readonly onReload: () => void;
   readonly onUploadRightsEvidence: (file: File) => Promise<RightsEvidenceUpload>;
   readonly onDerivative: (view: "turnaround" | "expressions") => void;
 }) {
   const [name, setName] = useState(asset.name);
   const [description, setDescription] = useState(asset.description ?? "");
-  const [metadata, setMetadata] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(asset.metadata).map(([key, value]) => [key, typeof value === "string" ? value : ""])));
+  const [metadata, setMetadata] = useState<Record<string, unknown>>(() => ({ ...asset.metadata }));
   const [rights, setRights] = useState<RightsDraft>({ holder: asset.rights?.holder ?? "", licenseScope: asset.rights?.licenseScope ?? "owner_project_only", proofObjectKey: asset.rights?.proofUploadId ?? "", proofSha256: "", validTo: asset.rights?.validTo ?? "" });
   const [confirm, setConfirm] = useState<ConfirmState>();
-  const confirmAction = () => { if (!confirm) return; if (confirm.kind === "rights") onAction("saveRights", { ...rights }); else onAction(confirm.kind === "primary" ? "setPrimaryVersion" : "restoreVersion", { versionId: confirm.id }); setConfirm(undefined); };
-  const canEdit = canManage && !marketDetail;
+  const [proofDirty, setProofDirty] = useState(false);
+  const [proofReselect, setProofReselect] = useState(false);
+  const [baseVersion] = useState(asset.version);
+  const [baseCurrentVersionId] = useState(asset.currentVersionId);
+  const [baseSourceVersion] = useState(() => JSON.stringify([asset.version, asset.currentVersionId]));
+  const [initial] = useState(() => ({ name, description, metadata, rights }));
+  const { t } = useProductionHandoffTranslation();
+  const dirty = canManage && !marketDetail && (proofDirty || proofReselect || JSON.stringify({ name, description, metadata, rights }) !== JSON.stringify(initial));
+  const recovery = useRecoverableDraft({ scope: draftScope, kind: "asset", objectId: asset.id, sourceVersion: baseSourceVersion, currentSourceVersion: JSON.stringify([asset.version, asset.currentVersionId]), dirty,
+    value: { baseVersion, currentVersionId: baseCurrentVersionId, name, description, metadata, rights, proofPending: proofDirty || proofReselect }, validate: validAssetDraft });
+  useEffect(() => {
+    onDirty(dirty || Boolean(recovery.pending));
+    return () => onDirty(false);
+  }, [dirty, recovery.pending, onDirty]);
+  const confirmAction = () => { if (!confirm) return; if (confirm.kind === "rights") onAction("saveRights", { ...rights }, baseVersion); else onAction(confirm.kind === "primary" ? "setPrimaryVersion" : "restoreVersion", { versionId: confirm.id }, baseVersion); setConfirm(undefined); };
+  const canEdit = canManage && !marketDetail && !recovery.pending;
   return <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
     <section className={`${panel} p-6`}>
+      {recovery.pending ? <DraftRecoveryNotice canResume={canManage && !marketDetail && recovery.canResume && recovery.pending.value.baseVersion === asset.version && recovery.pending.value.currentVersionId === asset.currentVersionId} busy={busy} value={recovery.pending} onResume={() => recovery.resume((value) => { if (value.baseVersion !== asset.version || value.currentVersionId !== asset.currentVersionId) return; setName(value.name); setDescription(value.description); setMetadata(value.metadata); setRights(value.rights); setProofReselect(value.proofPending); })} onDiscard={recovery.clear} /> : null}
+      {recovery.storageUnavailable ? <p role="alert" className="mb-4 text-xs text-amber-200">{t("storageUnavailable")}</p> : null}
+      {proofReselect ? <p role="status" className="mb-4 text-xs text-amber-200">{t("proofReselect")}</p> : null}
       <div className="flex items-start justify-between gap-4"><div><p className="text-xs text-[#8B5CF6]">{assetTypeLabels[asset.type]} · 稳定 ID</p><code className="mt-1 block text-xs text-[#7E8494]">{asset.id}</code></div><span className={`rounded-full border px-3 py-1 text-xs ${statusTone(asset.rightsStatus)}`}>{rightsLabels[asset.rightsStatus]}</span></div>
-      <div className="mt-6 grid gap-4"><label className="text-sm text-[#B8BECC]">资产名称<input value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label><label className="text-sm text-[#B8BECC]">资产说明<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label><MetadataEditor asset={asset} values={metadata} onChange={(key, value) => setMetadata((current) => ({ ...current, [key]: value }))} /></div>
-      {marketDetail ? <StatePanel title="市场素材为只读版本" detail="该素材的授权、价格与复用规则由市场服务端维护。导入项目或创建 Fork 必须走 M13 的正式授权流程，不能在这里伪造资产副本。" tone="warning" /> : <button type="button" className={`${primaryButton} mt-6`} disabled={!canEdit || busy || !name.trim()} onClick={() => onSave({ name: name.trim(), description, metadata })}>{busy ? "保存中…" : "保存资产"}</button>}
+      <fieldset disabled={busy || !canEdit} className="mt-6 grid gap-4"><label className="text-sm text-[#B8BECC]">资产名称<input disabled={busy || !canManage} value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label><label className="text-sm text-[#B8BECC]">资产说明<textarea disabled={busy || !canEdit} value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label><MetadataEditor asset={asset} values={metadata} onChange={(key, value) => setMetadata((current) => ({ ...current, [key]: value }))} /></fieldset>
+      {marketDetail ? <StatePanel title="市场素材为只读版本" detail="该素材的授权、价格与复用规则由市场服务端维护。导入项目或创建 Fork 必须走 M13 的正式授权流程，不能在这里伪造资产副本。" tone="warning" /> : <button type="button" className={`${primaryButton} mt-6`} disabled={!canEdit || busy || !name.trim()} onClick={() => onSave({ name: name.trim(), description, metadata }, baseVersion)}>{busy ? "保存中…" : "保存资产"}</button>}
       {!marketDetail && asset.type === "character" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" className={button} onClick={() => onDerivative("turnaround")}>生成角色三视图</button><button type="button" className={button} onClick={() => onDerivative("expressions")}>生成角色表情集</button></div> : null}
       {conflict ? <StatePanel title="版本冲突" detail="当前版本已被其他成员更新。你的输入仍保留，可以读取最新版本或另存新版本。" requestId={conflict.requestId} tone="warning" /> : null}
-      {conflict ? <div className="mt-3 flex flex-wrap gap-2"><button type="button" className={button} onClick={onReload}>重新读取服务端版本</button><button type="button" className={primaryButton} onClick={() => onAction("createVersion", { name: name.trim(), description, metadata })}>另存为新版本</button></div> : null}
+      {conflict ? <p className="mt-3 text-xs leading-6 text-slate-400">{t("saveConflict")}</p> : null}
+      {conflict ? <div className="mt-3 flex flex-wrap gap-2"><button type="button" className={button} onClick={onReload}>重新读取服务端版本</button><button type="button" className={primaryButton} onClick={() => onAction("createVersion", { name: name.trim(), description, metadata }, baseVersion)}>另存为新版本</button></div> : null}
     </section>
     <aside className="space-y-4">
-      {marketDetail ? <MarketReusePanel asset={asset} busy={busy} onCreate={(payload) => onAction("licenseMarketAsset", payload)} /> : null}
+      {marketDetail ? <MarketReusePanel asset={asset} busy={busy} onCreate={(payload) => onAction("licenseMarketAsset", payload, baseVersion)} /> : null}
       <section className={`${panel} p-5`}><h2 className="font-semibold">版本轨</h2><p className="mt-1 text-xs text-[#7E8494]">主版本与候选版本均绑定稳定资产 ID。</p><ol className="mt-4 space-y-3">{asset.versions.map((version) => <li key={version.id} className="rounded-[12px] border border-[#2A2E3A] bg-[#171922] p-3"><div className="flex items-center justify-between"><strong>v{version.versionNo}</strong><span className={`rounded-full border px-2 py-1 text-[11px] ${statusTone(version.status)}`}>{version.status}</span></div><code className="mt-2 block truncate text-[11px] text-[#7E8494]">{version.id}</code><div className="mt-3 flex gap-2"><button type="button" className={button} disabled={!canEdit || busy} aria-label={`设 v${version.versionNo} 为主版本`} onClick={() => setConfirm({ kind: "primary", id: version.id, label: `v${version.versionNo}` })}>设为主版本</button><button type="button" className={button} disabled={!canEdit || busy} onClick={() => setConfirm({ kind: "restore", id: version.id, label: `v${version.versionNo}` })}>恢复</button></div></li>)}</ol></section>
-      <RightsEditor value={rights} editable={canEdit} busy={busy} onChange={setRights} onUpload={async (file) => { const uploaded = await onUploadRightsEvidence(file); setRights((current) => ({ ...current, proofObjectKey: uploaded.objectKey, proofSha256: uploaded.sha256 })); return uploaded; }} onSave={() => setConfirm({ kind: "rights", label: "授权记录" })} />
+      <RightsEditor onDirty={setProofDirty} value={rights} editable={canEdit} busy={busy} onChange={setRights} onUpload={async (file) => { const uploaded = await onUploadRightsEvidence(file); setProofReselect(false); setRights((current) => ({ ...current, proofObjectKey: uploaded.objectKey, proofSha256: uploaded.sha256 })); return uploaded; }} onSave={() => setConfirm({ kind: "rights", label: "授权记录" })} />
     </aside>
     <ConfirmDialog open={Boolean(confirm)} title={confirm?.kind === "primary" ? "确认设为主版本" : confirm?.kind === "restore" ? "确认恢复资产版本" : "确认保存授权记录"} detail={confirm?.kind === "primary" ? `设为主版本会影响 ${asset.referenceCount} 个镜头引用，请确认下游影响。` : confirm?.kind === "restore" ? "恢复操作会创建新的资产版本，不覆盖历史记录。" : "权利证明会进入下游合规与正式导出门禁。"} confirmLabel={confirm?.kind === "primary" ? "确认设为主版本" : confirm?.kind === "restore" ? `确认恢复 ${confirm.label}` : "确认保存授权"} busy={busy} onCancel={() => setConfirm(undefined)} onConfirm={confirmAction} />
   </div>;
@@ -224,9 +262,12 @@ function CharacterDerivative({ asset, mode, canManage, busy, onRun, onAdopt, tas
   return <section className={`${panel} max-w-4xl p-6`}><p className="text-xs text-[#8B5CF6]">角色稳定 ID</p><code className="text-xs text-[#7E8494]">{asset.id}</code><h2 className="mt-4 text-xl font-semibold">{asset.name}</h2><label className="mt-5 block text-sm">{mode === "turnaround" ? "需要生成的视图（逗号分隔）" : "需要生成的表情（逗号分隔）"}<textarea rows={3} value={values} onChange={(event) => setValues(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{busy ? "提交中…" : mode === "turnaround" ? "生成三视图版本" : "生成表情集版本"}</button>{task ? <TaskSummary task={task} busy={busy} onAdoptOutput={onAdopt} message={mode === "turnaround" ? "三视图任务已创建" : "表情集任务已创建"} /> : null}</section>;
 }
 
-export function AssetsWorkspace({ scope, view = "library", assetId, projectName, api = defaultApi, onNavigate }: AssetsWorkspaceProps) {
+export function AssetsWorkspace({ scope, view = "library", assetId, projectName, api = defaultApi, onNavigate, initialScriptVersionId }: AssetsWorkspaceProps) {
   const [localNavigation, setLocalNavigation] = useState<{ readonly source: AssetView; readonly target: AssetView }>();
   const activeView = localNavigation?.source === view ? localNavigation.target : view;
+  const { t: handoff } = useProductionHandoffTranslation();
+  const [draftBlocked, setDraftBlocked] = useState(false), [draftReset, setDraftReset] = useState(0), [discardConfirm, setDiscardConfirm] = useState(false);
+  const operationLatch = useRef(false);
   const [context, setContext] = useState<SessionContext>();
   const [assets, setAssets] = useState<readonly AssetItem[]>();
   const [selectedAssetIds, setSelectedAssetIds] = useState<readonly string[]>([]);
@@ -235,6 +276,7 @@ export function AssetsWorkspace({ scope, view = "library", assetId, projectName,
   const [search, setSearch] = useState(""); const [type, setType] = useState<AssetType | "">(""); const [rights, setRights] = useState<RightsStatus | "">("");
   const [error, setError] = useState<unknown>(); const [forbidden, setForbidden] = useState<AssetsStoryboardApiError>(); const [conflict, setConflict] = useState<AssetsStoryboardApiError>();
   const [busy, setBusy] = useState(false); const [batch, setBatch] = useState<BatchReceipt>(); const [task, setTask] = useState<TaskReceipt>(); const [message, setMessage] = useState("");
+  const protection = useDraftProtection(draftBlocked || busy);
   const load = useCallback(async (query = activeQuery, append = false) => {
     await Promise.resolve();
     setError(undefined); setForbidden(undefined);
@@ -270,30 +312,32 @@ export function AssetsWorkspace({ scope, view = "library", assetId, projectName,
   const currentAsset = assetId
     ? assets?.find((item) => item.id === assetId)
     : (activeView === "market-detail" || activeView === "turnaround" || activeView === "expressions" ? assets?.[0] : undefined);
-  const navigate = (next: AssetView, id?: string) => { if (onNavigate) onNavigate(next, id); else setLocalNavigation({ source: view, target: next }); };
+  const navigate = (next: AssetView, id?: string) => { if (!protection.canNavigate()) return; if (onNavigate) onNavigate(next, id); else setLocalNavigation({ source: view, target: next }); };
   const run = async (action: string, payload: Record<string, unknown> = {}, target = currentAsset, version = target?.version) => {
-    setBusy(true); setError(undefined); setConflict(undefined); setMessage("");
+    if (operationLatch.current) return;
+    operationLatch.current = true; setBusy(true); setError(undefined); setConflict(undefined); setMessage("");
     try {
       const ownerProjectId = !scope.projectId && target?.projectId ? { ownerProjectId: target.projectId } : {};
       const result = await api.assetAction(scope, { action: action as never, targetId: target?.id, version, payload: { ...payload, ...ownerProjectId } });
+      if (result.asset && ["createAsset", "updateAsset", "createVersion", "saveRights", "restoreVersion", "setPrimaryVersion"].includes(action)) { if (context) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? result.asset.projectId ?? null }, "asset", result.asset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); }
       if (result.asset) setAssets((items) => items?.map((item) => item.id === result.asset?.id ? result.asset : item));
       if (result.batch) setBatch(result.batch); if (result.task) setTask(result.task); if (result.message) setMessage(result.message);
       // 以服务端最终状态为准：写入成功后重新读取，避免把乐观本地状态误当成保存结果。
       await load();
       return result;
-    } catch (cause) { if (isForbidden(cause)) { setForbidden(cause as AssetsStoryboardApiError); setAssets([]); setContext(undefined); } else if (isConflict(cause)) setConflict(cause as AssetsStoryboardApiError); else setError(cause); return undefined; } finally { setBusy(false); }
+    } catch (cause) { if (isForbidden(cause)) { setForbidden(cause as AssetsStoryboardApiError); setAssets([]); setContext(undefined); } else if (isConflict(cause)) setConflict(cause as AssetsStoryboardApiError); else setError(cause); return undefined; } finally { operationLatch.current = false; setBusy(false); }
   };
   const title = viewTitles[activeView];
   if (!context && !forbidden && !error) return <LoadingState />;
   if (forbidden) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title="没有资产查看权限" detail="服务端拒绝了当前工作区或项目的数据访问。请联系管理员申请 asset.view 权限。" requestId={forbidden.requestId} tone="danger" /></main>;
-  if (!context || error) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title="资产数据加载失败" detail={errorMessage(error)} requestId={errorRequestId(error)} actionLabel="重新加载" onAction={() => void load()} tone="danger" /></main>;
+  if (!context || !assets) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title="资产数据加载失败" detail={errorMessage(error)} requestId={errorRequestId(error)} actionLabel="重新加载" onAction={() => void load()} tone="danger" /></main>;
   const hasProjectContext = Boolean(scope.projectId);
   const actions = activeView === "library" && hasProjectContext ? <button type="button" className={button} onClick={() => navigate("extract")}>提取剧本资产</button> : null;
   return <WorkspaceShell context={context} title={title[0]} description={title[1]} eyebrow="M04 · ASSET CONTINUITY" projectName={projectName ?? context.project?.name} actions={actions}>
-    {message ? <StatePanel title={message} tone="success" /> : null}{error ? <StatePanel title="操作失败" detail={errorMessage(error)} requestId={errorRequestId(error)} actionLabel="重试加载" onAction={() => void load()} tone="danger" /> : null}
-    {activeView === "extract" ? <AssetExtraction canManage={canManage} busy={busy} task={task} batch={batch} onRun={(scriptVersionId, types) => void run("extractAssets", { scriptVersionId, assetTypes: types }, undefined, undefined)} /> : null}
-    {activeView === "library" || activeView === "market" ? <>{activeView === "library" && hasProjectContext ? <ManualAssetCreate canManage={canManage} busy={busy} onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : null}<AssetFilters search={search} type={type} rights={rights} onSearch={setSearch} onType={setType} onRights={setRights} onApply={() => { const query = { search: search || undefined, assetType: type || undefined, rightsStatus: rights || undefined }; setActiveQuery(query); void load(query); }} />{activeView === "library" && canManage && selectedAssetIds.length > 0 ? <div className="mb-4 flex items-center justify-between rounded-[14px] border border-[#8B5CF6]/40 bg-[#8B5CF6]/10 p-3"><span className="text-sm">已选择 {selectedAssetIds.length} 项</span><button type="button" className={primaryButton} disabled={busy} onClick={() => void run("confirmAssets", { itemIds: selectedAssetIds }, undefined, undefined)}>批量确认授权</button></div> : null}{assets?.length === 0 ? <StatePanel title="当前范围没有资产" detail={activeView === "market" ? "没有符合当前筛选和授权范围的市场素材。" : hasProjectContext ? "先从冻结剧本提取主体，或从冻结剧本创建可编辑资产。" : "当前工作区还没有可复用资产。请先在项目资产库中创建或提取资产。"} actionLabel={activeView === "market" ? "清除筛选" : hasProjectContext ? "开始资产提取" : undefined} onAction={() => { if (activeView === "market") { setSearch(""); setType(""); setRights(""); setActiveQuery({}); void load({}); } else if (hasProjectContext) navigate("extract"); }} /> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{assets?.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.includes(asset.id)} canManage={activeView === "library" && canManage} onSelect={() => setSelectedAssetIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])} onOpen={() => navigate(activeView === "market" ? "market-detail" : "editor", asset.id)} />)}</section>}{nextToken ? <button type="button" className={`${button} mt-4`} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : null}</> : null}
-    {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor key={`${currentAsset.id}:${currentAsset.version}`} asset={currentAsset} canManage={canManage} busy={busy} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload) => void run("updateAsset", payload)} onAction={(action, payload) => void run(action, payload)} onUploadRightsEvidence={(file) => api.uploadRightsEvidence(scope, currentAsset, file)} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
+    {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}{draftBlocked ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { if (currentAsset) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }, "asset", currentAsset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); setConflict(undefined); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}{message ? <StatePanel title={message} tone="success" /> : null}{error ? <StatePanel title="操作失败" detail={errorMessage(error)} requestId={errorRequestId(error)} actionLabel="重试加载" onAction={() => void load()} tone="danger" /> : null}
+    {activeView === "extract" ? <AssetExtraction key={initialScriptVersionId ?? "manual"} initialScriptVersionId={initialScriptVersionId} canManage={canManage} busy={busy} task={task} batch={batch} onRun={(scriptVersionId, types) => void run("extractAssets", { scriptVersionId, assetTypes: types }, undefined, undefined)} /> : null}
+    {activeView === "library" || activeView === "market" ? <>{activeView === "library" && hasProjectContext ? <ManualAssetCreate key={`${initialScriptVersionId ?? "manual"}:${draftReset}`} initialScriptVersionId={initialScriptVersionId} onDirty={setDraftBlocked} canManage={canManage} busy={busy} onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : null}<AssetFilters search={search} type={type} rights={rights} onSearch={setSearch} onType={setType} onRights={setRights} onApply={() => { const query = { search: search || undefined, assetType: type || undefined, rightsStatus: rights || undefined }; setActiveQuery(query); void load(query); }} />{activeView === "library" && canManage && selectedAssetIds.length > 0 ? <div className="mb-4 flex items-center justify-between rounded-[14px] border border-[#8B5CF6]/40 bg-[#8B5CF6]/10 p-3"><span className="text-sm">已选择 {selectedAssetIds.length} 项</span><button type="button" className={primaryButton} disabled={busy} onClick={() => void run("confirmAssets", { itemIds: selectedAssetIds }, undefined, undefined)}>批量确认授权</button></div> : null}{assets?.length === 0 ? <StatePanel title="当前范围没有资产" detail={activeView === "market" ? "没有符合当前筛选和授权范围的市场素材。" : hasProjectContext ? "先从冻结剧本提取主体，或从冻结剧本创建可编辑资产。" : "当前工作区还没有可复用资产。请先在项目资产库中创建或提取资产。"} actionLabel={activeView === "market" ? "清除筛选" : hasProjectContext ? "开始资产提取" : undefined} onAction={() => { if (activeView === "market") { setSearch(""); setType(""); setRights(""); setActiveQuery({}); void load({}); } else if (hasProjectContext) navigate("extract"); }} /> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{assets?.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.includes(asset.id)} canManage={activeView === "library" && canManage} onSelect={() => setSelectedAssetIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])} onOpen={() => navigate(activeView === "market" ? "market-detail" : "editor", asset.id)} />)}</section>}{nextToken ? <button type="button" className={`${button} mt-4`} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : null}</> : null}
+    {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor key={`${currentAsset.id}:${draftReset}`} draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }} onDirty={setDraftBlocked} asset={currentAsset} canManage={canManage} busy={busy} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)} onAction={(action, payload, version) => void run(action, payload, currentAsset, version)} onUploadRightsEvidence={(file) => api.uploadRightsEvidence(scope, currentAsset, file)} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
     {activeView === "turnaround" || activeView === "expressions" ? <CharacterDerivative asset={currentAsset} mode={activeView} canManage={canManage} busy={busy} task={task} onRun={(payload) => void run(activeView === "turnaround" ? "generateTurnaround" : "generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}
   </WorkspaceShell>;
 }

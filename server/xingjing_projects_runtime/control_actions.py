@@ -17,6 +17,7 @@ from server.xingjing_platform_persistence.persistence import AuditRow, ProjectRo
 from server.xingjing_team_persistence.repository import MemberRow
 
 from .control import production_facts
+from .episode_sources import authorize, sources
 
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
@@ -31,7 +32,7 @@ FORWARD = {
     "analyzed": ("asset_preparing", "director", {"script.view"}),
     "asset_preparing": ("asset_ready", "assetsReady", {"script.view", "asset.view", "final.view"}),
     "asset_ready": ("storyboard_preparing", "assetsReady", {"script.view", "asset.view", "final.view"}),
-    "storyboard_preparing": ("production", "boardsReady", {"shot.view"}),
+    "storyboard_preparing": ("production", "boardsReady", {"shot.view", "script.view", "asset.view", "final.view"}),
     "production": ("review", "finalsReady", {"final.view"}),
     "review": ("finishing", "approved", {"final.view", "review.view"}),
     "finishing": ("compliance_check", "approved", {"final.view", "review.view"}),
@@ -205,6 +206,9 @@ async def transition(
     async with PersistenceUnitOfWork(
         runtime._require_sessions(), Scope(context.tenant_id, context.workspace_id)
     ) as uow:
+        context = await authorize(uow.session, context, project_id)
+        if "project.manage" not in context.permissions:
+            raise EpisodeEditError("FORBIDDEN", 403)
         row = await uow.session.scalar(
             select(ProjectRow)
             .where(
@@ -251,7 +255,10 @@ async def transition(
             raise EpisodeEditError("INVALID_STATE_TRANSITION", 409)
         if edit:
             return await update_overview(uow, context, row, edit, expected, key, digest)
-        snapshot = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        collection = await sources(uow.session, context, project_id)
+        snapshot = await asyncio.to_thread(
+            read_episodes, get_project_manager(), project_id, source_texts=collection.texts
+        )
         evidence = await production_facts(uow.session, context, project_id, snapshot, row.target_platform)
         option = next(
             (o for o in transition_options(row, context.permissions, evidence["facts"]) if o["action"] == action), None

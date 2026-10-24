@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -22,9 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from server.xingjing_audio_persistence.models import (
     audio_track_versions,
     audio_tracks,
+    lip_sync_versions,
     subtitle_track_versions,
     subtitle_tracks,
 )
+from server.xingjing_audio_persistence.repository import AudioScope
+from server.xingjing_audio_runtime.artifact_storage import AudioArtifactStorageError, LocalAudioObjectStorage
 from server.xingjing_editing import (
     AccessContext,
     EditingError,
@@ -77,9 +81,12 @@ class FFprobeRenderMediaProbe:
     """Reads a real media duration from ffprobe; absence or invalid output fails closed."""
 
     async def probe_duration_ms(self, path: Path) -> int | None:
+        executable = shutil.which("ffprobe")
+        if executable is None:
+            return None
         try:
             process = await asyncio.create_subprocess_exec(
-                "ffprobe",
+                executable,
                 "-v",
                 "error",
                 "-show_entries",
@@ -90,23 +97,36 @@ class FFprobeRenderMediaProbe:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            output, _ = await process.communicate()
+            try:
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+            except (TimeoutError, asyncio.CancelledError) as error:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                return None
         except (OSError, subprocess.SubprocessError):
             return None
         if process.returncode != 0:
             return None
         try:
             duration_ms = round(float(output.decode("utf-8").strip()) * 1_000)
-        except (UnicodeDecodeError, ValueError):
+        except (UnicodeDecodeError, ValueError, OverflowError):
             return None
         return duration_ms if duration_ms >= 0 else None
 
 
 class GeneratedAssetMediaVersionCatalog:
-    """Exposes only verified, immutable M06 video outputs as M08 timeline sources."""
+    """Resolves immutable generation, audio, subtitle and lip-sync outputs for editing."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], *, audio_storage_root: str | Path | None = None
+    ) -> None:
         self._session_factory = session_factory
+        root = audio_storage_root or os.environ.get("XINGJING_M07_ARTIFACT_ROOT")
+        self._audio_storage = LocalAudioObjectStorage(root) if root else None
+        self._media_probe = FFprobeRenderMediaProbe()
 
     async def get_version(self, *, tenant_id: str, workspace_id: str, version_id: str) -> SourceMediaVersion | None:
         async with self._session_factory() as session:
@@ -149,6 +169,7 @@ class GeneratedAssetMediaVersionCatalog:
                             audio_tracks.c.project_id,
                             audio_tracks.c.track_kind,
                             audio_track_versions.c.id.label("version_id"),
+                            audio_track_versions.c.created_at,
                             audio_track_versions.c.object_key,
                             audio_track_versions.c.object_sha256,
                             audio_track_versions.c.cue_payload,
@@ -158,14 +179,14 @@ class GeneratedAssetMediaVersionCatalog:
                             (audio_track_versions.c.track_id == audio_tracks.c.id)
                             & (audio_track_versions.c.tenant_id == audio_tracks.c.tenant_id)
                             & (audio_track_versions.c.workspace_id == audio_tracks.c.workspace_id)
-                            & (audio_track_versions.c.project_id == audio_tracks.c.project_id)
-                            & (audio_track_versions.c.revision == audio_tracks.c.current_revision),
+                            & (audio_track_versions.c.project_id == audio_tracks.c.project_id),
                         )
                         .where(
                             audio_track_versions.c.id == version_id,
                             audio_tracks.c.tenant_id == tenant_id,
                             audio_tracks.c.workspace_id == workspace_id,
                             audio_tracks.c.state == "ready",
+                            audio_tracks.c.project_id.in_(self._active_projects(tenant_id, workspace_id)),
                         )
                     )
                 )
@@ -182,6 +203,7 @@ class GeneratedAssetMediaVersionCatalog:
                             subtitle_tracks.c.id.label("track_id"),
                             subtitle_tracks.c.project_id,
                             subtitle_track_versions.c.id.label("version_id"),
+                            subtitle_track_versions.c.created_at,
                             subtitle_track_versions.c.object_key,
                             subtitle_track_versions.c.object_sha256,
                             subtitle_track_versions.c.cues,
@@ -191,25 +213,35 @@ class GeneratedAssetMediaVersionCatalog:
                             (subtitle_track_versions.c.track_id == subtitle_tracks.c.id)
                             & (subtitle_track_versions.c.tenant_id == subtitle_tracks.c.tenant_id)
                             & (subtitle_track_versions.c.workspace_id == subtitle_tracks.c.workspace_id)
-                            & (subtitle_track_versions.c.project_id == subtitle_tracks.c.project_id)
-                            & (subtitle_track_versions.c.revision == subtitle_tracks.c.current_revision),
+                            & (subtitle_track_versions.c.project_id == subtitle_tracks.c.project_id),
                         )
                         .where(
                             subtitle_track_versions.c.id == version_id,
                             subtitle_tracks.c.tenant_id == tenant_id,
                             subtitle_tracks.c.workspace_id == workspace_id,
                             subtitle_tracks.c.state == "ready",
+                            subtitle_tracks.c.project_id.in_(self._active_projects(tenant_id, workspace_id)),
                         )
                     )
                 )
                 .mappings()
                 .one_or_none()
             )
-        return (
-            None
-            if subtitle_row is None
-            else self._subtitle_source(subtitle_row, tenant_id=tenant_id, workspace_id=workspace_id)
-        )
+        if subtitle_row is not None:
+            return self._subtitle_source(subtitle_row, tenant_id=tenant_id, workspace_id=workspace_id)
+        async with self._session_factory() as session:
+            lip_sync = (
+                (
+                    await session.execute(
+                        self._lip_sync_query(tenant_id, workspace_id).where(
+                            lip_sync_versions.c.id == version_id,
+                        )
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return None if lip_sync is None else await self._lip_sync_source(lip_sync)
 
     async def list_versions(
         self,
@@ -237,19 +269,20 @@ class GeneratedAssetMediaVersionCatalog:
                             ProjectRow.tenant_id == tenant_id,
                             ProjectRow.deleted_at.is_(None),
                         )
-                        .order_by(GeneratedAssetRow.created_at.desc(), GeneratedAssetRow.asset_id.asc())
-                        .offset(offset)
-                        .limit(limit)
+                        .order_by(GeneratedAssetRow.created_at.desc(), GeneratedAssetRow.asset_id.desc())
+                        .limit(offset + limit)
                     )
                 )
                 .scalars()
                 .all()
             )
         results: list[SourceMediaVersion] = []
+        ranks: dict[str, tuple[str, str]] = {}
         for asset in assets:
             raw_duration = asset.artifact_metadata.get("duration_ms")
             if not isinstance(raw_duration, int) or isinstance(raw_duration, bool) or raw_duration <= 0:
                 continue
+            ranks[asset.asset_id] = (asset.created_at.isoformat(), asset.asset_id)
             results.append(
                 SourceMediaVersion(
                     asset_id=asset.asset_id,
@@ -271,6 +304,7 @@ class GeneratedAssetMediaVersionCatalog:
                         audio_tracks.c.project_id,
                         audio_tracks.c.track_kind,
                         audio_track_versions.c.id.label("version_id"),
+                        audio_track_versions.c.created_at,
                         audio_track_versions.c.object_key,
                         audio_track_versions.c.object_sha256,
                         audio_track_versions.c.cue_payload,
@@ -288,16 +322,17 @@ class GeneratedAssetMediaVersionCatalog:
                         audio_tracks.c.workspace_id == workspace_id,
                         audio_tracks.c.project_id == project_id,
                         audio_tracks.c.state == "ready",
+                        audio_tracks.c.project_id.in_(self._active_projects(tenant_id, workspace_id)),
                     )
-                    .order_by(audio_tracks.c.updated_at.desc(), audio_tracks.c.id.asc())
-                    .offset(offset)
-                    .limit(limit)
+                    .order_by(audio_track_versions.c.created_at.desc(), audio_track_versions.c.id.desc())
+                    .limit(offset + limit)
                 )
             ).mappings()
         for row in audio_rows:
             source = self._audio_source(row, tenant_id=tenant_id, workspace_id=workspace_id)
             if source is not None:
                 results.append(source)
+                ranks[source.version_id] = (row["created_at"].isoformat(), source.version_id)
         async with self._session_factory() as session:
             subtitle_rows = (
                 await session.execute(
@@ -305,6 +340,7 @@ class GeneratedAssetMediaVersionCatalog:
                         subtitle_tracks.c.id.label("track_id"),
                         subtitle_tracks.c.project_id,
                         subtitle_track_versions.c.id.label("version_id"),
+                        subtitle_track_versions.c.created_at,
                         subtitle_track_versions.c.object_key,
                         subtitle_track_versions.c.object_sha256,
                         subtitle_track_versions.c.cues,
@@ -322,17 +358,92 @@ class GeneratedAssetMediaVersionCatalog:
                         subtitle_tracks.c.workspace_id == workspace_id,
                         subtitle_tracks.c.project_id == project_id,
                         subtitle_tracks.c.state == "ready",
+                        subtitle_tracks.c.project_id.in_(self._active_projects(tenant_id, workspace_id)),
                     )
-                    .order_by(subtitle_tracks.c.updated_at.desc(), subtitle_tracks.c.id.asc())
-                    .offset(offset)
-                    .limit(limit)
+                    .order_by(subtitle_track_versions.c.created_at.desc(), subtitle_track_versions.c.id.desc())
+                    .limit(offset + limit)
                 )
             ).mappings()
         for row in subtitle_rows:
             source = self._subtitle_source(row, tenant_id=tenant_id, workspace_id=workspace_id)
             if source is not None:
                 results.append(source)
-        return tuple(results)
+                ranks[source.version_id] = (row["created_at"].isoformat(), source.version_id)
+        async with self._session_factory() as session:
+            lip_rows = (
+                (
+                    await session.execute(
+                        self._lip_sync_query(tenant_id, workspace_id)
+                        .where(
+                            lip_sync_versions.c.project_id == project_id,
+                            lip_sync_versions.c.is_selected.is_(True),
+                        )
+                        .order_by(lip_sync_versions.c.created_at.desc(), lip_sync_versions.c.id.desc())
+                        .limit(offset + limit)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        for row in lip_rows:
+            source = await self._lip_sync_source(row)
+            if source is not None:
+                results.append(source)
+                ranks[source.version_id] = (row["created_at"].isoformat(), source.version_id)
+        results.sort(key=lambda source: ranks[source.version_id], reverse=True)
+        return tuple(results[offset : offset + limit])
+
+    @staticmethod
+    def _active_projects(tenant_id: str, workspace_id: str):
+        return select(ProjectRow.id).where(
+            ProjectRow.tenant_id == tenant_id, ProjectRow.workspace_id == workspace_id, ProjectRow.deleted_at.is_(None)
+        )
+
+    @staticmethod
+    def _lip_sync_query(tenant_id: str, workspace_id: str):
+        return (
+            select(lip_sync_versions)
+            .join(
+                ProjectRow,
+                (ProjectRow.id == lip_sync_versions.c.project_id)
+                & (ProjectRow.tenant_id == lip_sync_versions.c.tenant_id)
+                & (ProjectRow.workspace_id == lip_sync_versions.c.workspace_id),
+            )
+            .where(
+                lip_sync_versions.c.tenant_id == tenant_id,
+                lip_sync_versions.c.workspace_id == workspace_id,
+                lip_sync_versions.c.state == "ready",
+                ProjectRow.deleted_at.is_(None),
+            )
+        )
+
+    async def _lip_sync_source(self, row) -> SourceMediaVersion | None:
+        # A fallback without an output is not a lip-synced video. Duration and hash
+        # must come from the actual M07 output, never its input clip or audio cues.
+        if self._audio_storage is None or not row["output_video_key"] or not row["output_sha256"]:
+            return None
+        scope = AudioScope(row["tenant_id"], row["workspace_id"], row["project_id"])
+        try:
+            stored = await self._audio_storage.inspect(scope=scope, object_key=row["output_video_key"])
+            if stored.sha256 != row["output_sha256"] or stored.size_bytes != row["output_size_bytes"]:
+                return None
+            path = self._audio_storage.file_for(scope=scope, object_key=stored.key)
+            duration = await self._media_probe.probe_duration_ms(path)
+        except (AudioArtifactStorageError, OSError):
+            return None
+        if duration is None or duration <= 0:
+            return None
+        return SourceMediaVersion(
+            asset_id=row["id"],
+            version_id=row["id"],
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            owner_project_id=scope.project_id,
+            content_sha256=stored.sha256,
+            object_key=stored.key,
+            duration_ms=duration,
+            media_kind=TrackKind.VIDEO,
+        )
 
     @staticmethod
     def _audio_source(
@@ -347,6 +458,9 @@ class GeneratedAssetMediaVersionCatalog:
         duration_ms = payload.get("durationMs") if isinstance(payload, dict) else None
         kind = {
             "voice": TrackKind.VOICE,
+            "dialogue": TrackKind.VOICE,
+            "voiceover": TrackKind.VOICE,
+            "mix": TrackKind.VOICE,
             "bgm": TrackKind.BGM,
             "sfx": TrackKind.SFX,
         }.get(str(row["track_kind"]))
@@ -380,7 +494,8 @@ class GeneratedAssetMediaVersionCatalog:
     ) -> SourceMediaVersion | None:
         object_key = row["object_key"]
         content_sha256 = row["object_sha256"]
-        cues = row["cues"]
+        payload = row["cues"]
+        cues = payload.get("cues") if isinstance(payload, dict) else payload
         if not isinstance(object_key, str) or not isinstance(content_sha256, str) or not isinstance(cues, list):
             return None
         ends: list[int] = []
@@ -390,7 +505,14 @@ class GeneratedAssetMediaVersionCatalog:
             end_ms = cue.get("endMs")
             if isinstance(end_ms, int) and not isinstance(end_ms, bool):
                 ends.append(end_ms)
-        duration_ms = max(ends, default=0)
+        declared_duration = payload.get("durationMs") if isinstance(payload, dict) else None
+        duration_ms = (
+            declared_duration
+            if isinstance(declared_duration, int) and not isinstance(declared_duration, bool)
+            else max(ends, default=0)
+        )
+        if any(end > duration_ms for end in ends):
+            return None
         if duration_ms <= 0:
             return None
         return SourceMediaVersion(

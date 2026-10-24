@@ -39,14 +39,16 @@ def project_shot(storyboard: Storyboard, shot: Shot) -> dict[str, object]:
             "version": index,
             "selected": candidate_id == shot.selected_media_id,
             "status": shot.generation_status.value,
-            **({"mediaUrl": (
-                f"/api/v1/generation-assets/{candidate_id}/content"
-                f"?projectId={storyboard.project_id}"
+            **(
+                {
+                    "mediaUrl": (f"/api/v1/generation-assets/{candidate_id}/content?projectId={storyboard.project_id}"),
+                    "thumbnailUrl": (
+                        f"/api/v1/generation-assets/{candidate_id}/content?projectId={storyboard.project_id}"
+                    ),
+                }
+                if candidate_id in generated_candidate_ids
+                else {}
             ),
-            "thumbnailUrl": (
-                f"/api/v1/generation-assets/{candidate_id}/content"
-                f"?projectId={storyboard.project_id}"
-            )} if candidate_id in generated_candidate_ids else {}),
         }
         for index, candidate_id in enumerate(candidate_ids, 1)
     ]
@@ -89,6 +91,14 @@ def project_shot(storyboard: Storyboard, shot: Shot) -> dict[str, object]:
         ],
         "generationStatus": shot.generation_status.value,
         "generationTaskId": shot.generation_task_id,
+        **(
+            {
+                "generationSubmissionPending": shot.generation_submission.get("state") == "pending",
+                "generationPendingMediaType": shot.generation_submission.get("media_type"),
+            }
+            if shot.generation_submission is not None
+            else {}
+        ),
         "issueCount": len(issues),
         "qualityIssues": issues,
         "candidates": candidates,

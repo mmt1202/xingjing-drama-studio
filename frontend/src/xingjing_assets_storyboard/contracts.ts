@@ -153,6 +153,8 @@ export interface QualityIssue {
 
 export interface ShotItem {
   readonly id: string;
+  readonly generationSubmissionPending?: boolean;
+  readonly generationPendingMediaType?: "image" | "video";
   readonly storyboardId: string;
   readonly episodeId?: string;
   readonly shotNo: string;

@@ -13,14 +13,17 @@ export interface AssetsStoryboardRouteProps {
   readonly projectName?: string;
   readonly api?: AssetsStoryboardPort;
   readonly onNavigate?: AssetsWorkspaceProps["onNavigate"];
+  readonly onNavigateStoryboard?: StoryboardWorkspaceProps["onNavigate"];
+  readonly scriptVersionId?: string;
+  readonly assetSnapshotId?: string;
 }
 
-function assetProps(props: AssetsStoryboardRouteProps): Pick<AssetsWorkspaceProps, "scope" | "assetId" | "projectName" | "api" | "onNavigate"> {
-  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, assetId: props.assetId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigate };
+function assetProps(props: AssetsStoryboardRouteProps): Pick<AssetsWorkspaceProps, "scope" | "assetId" | "projectName" | "api" | "onNavigate" | "initialScriptVersionId"> {
+  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, assetId: props.assetId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigate, initialScriptVersionId: props.scriptVersionId };
 }
 
-function shotProps(props: AssetsStoryboardRouteProps): Pick<StoryboardWorkspaceProps, "scope" | "shotId" | "projectName" | "api"> {
-  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, shotId: props.shotId, projectName: props.projectName, api: props.api };
+function shotProps(props: AssetsStoryboardRouteProps): Pick<StoryboardWorkspaceProps, "scope" | "shotId" | "projectName" | "api" | "onNavigate" | "initialScriptVersionId" | "initialAssetSnapshotId"> {
+  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, shotId: props.shotId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigateStoryboard, initialScriptVersionId: props.scriptVersionId, initialAssetSnapshotId: props.assetSnapshotId };
 }
 
 export const AssetExtractionPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="extract" />;

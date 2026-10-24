@@ -116,7 +116,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     const [path, supplied = ""] = target.split("?");
     const query = new URLSearchParams(supplied);
     const scriptId = params.get("scriptId");
-    if (scriptId && scriptRoutes.has(path) && scriptRoutes.has(slug) && !query.has("scriptId")) query.set("scriptId", scriptId);
+    if (number === undefined && scriptId && scriptRoutes.has(path) && scriptRoutes.has(slug) && !query.has("scriptId")) query.set("scriptId", scriptId);
     let restoringVersionReturn = false;
     if (path === "version-history" && slug !== "version-history" && number === undefined && !supplied && workspaceAccess) {
       const previous = readVersionReturn(workspaceAccess.actorId, workspaceId, projectId);
@@ -129,6 +129,11 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     }
     const selected = number === null ? undefined : number === undefined ? episode : validData?.episodes.find((e) => e.episode === number);
     if (selected && !query.has("episodeId") && !restoringVersionReturn) query.set("episodeId", String(selected.episode));
+    if (selected && scriptRoutes.has(path) && !query.has("scriptId") && selected.scriptId) query.set("scriptId", selected.scriptId);
+    if (selected && (path.startsWith("assets") || path.startsWith("shots") || path === "storyboard")) {
+      if (!query.has("scriptVersionId") && selected.scriptVersionId) query.set("scriptVersionId", selected.scriptVersionId);
+      if (!query.has("assetSnapshotId") && selected.assetSnapshotId) query.set("assetSnapshotId", selected.assetSnapshotId);
+    }
     if (/^(release|export|cover|compliance|rights|provenance|aigc)/.test(path) && selected?.finalVersionId) {
       if (!query.has("projectVersion")) query.set("projectVersion", selected.finalVersionId);
       if (!query.has("target")) query.set("target", validData?.project.targetPlatform ?? "douyin");
@@ -146,6 +151,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const active = activeStage(slug);
   const stages = validData?.stages.map((stage) => {
     if (stage.reason || !episode) return stage;
+    if (stage.id === "assets" && !episode.scriptVersionId) return { ...stage, reason: "frozen", recovery: "episodes" };
     if (["review", "export", "compliance"].includes(stage.id) && !episode.finalVersionId) return { ...stage, reason: "finals", recovery: "postproduction" };
     if (stage.id === "shots" && !episode.assetsReady && !episode.shots) return { ...stage, reason: "assets", recovery: "episodes" };
     if (stage.id === "storyboard" && !episode.shots) return { ...stage, reason: "shots", recovery: "shots" };

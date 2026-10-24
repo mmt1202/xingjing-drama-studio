@@ -18,6 +18,11 @@ import {
 } from "./contracts";
 import { QualityPolicyNotice } from "./QualityPolicyNotice";
 import { qualityErrorMessage, useStoryboardQualityTranslation } from "./quality-i18n";
+import { useProductionHandoffTranslation } from "./handoff-i18n";
+import { useDraftProtection } from "./useDraftProtection";
+import { clearProductionDraft, productionDraftSlot, type ProductionDraftScope } from "./draft-state";
+import { useRecoverableDraft } from "./useRecoverableDraft";
+import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
 import {
   BatchResultPanel,
   ConfirmDialog,
@@ -49,6 +54,8 @@ export interface StoryboardWorkspaceProps {
   readonly projectName?: string;
   readonly api?: AssetsStoryboardPort;
   readonly onNavigate?: (view: StoryboardView, shotId?: string) => void;
+  readonly initialScriptVersionId?: string;
+  readonly initialAssetSnapshotId?: string;
 }
 
 const defaultApi = createAssetsStoryboardApi();
@@ -743,8 +750,19 @@ function ImportView({
   );
 }
 
+interface SmartDraft { episodeId: string; scriptVersionId: string; assetSnapshotId: string }
+function validSmartDraft(value: unknown): value is SmartDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Partial<SmartDraft>;
+  return [draft.episodeId, draft.scriptVersionId, draft.assetSnapshotId].every((item) => typeof item === "string" && item.length <= 1024);
+}
 function SmartView({
   episodeId: initialEpisodeId,
+  initialScriptVersionId,
+  initialAssetSnapshotId,
+  onDirty,
+  draftScope,
+  collectionVersion,
   shots,
   canManage,
   busy,
@@ -755,27 +773,43 @@ function SmartView({
   onMove,
 }: {
   readonly episodeId?: string;
+  readonly initialScriptVersionId?: string;
+  readonly initialAssetSnapshotId?: string;
+  readonly onDirty: (value: boolean) => void;
+  readonly draftScope: ProductionDraftScope;
+  readonly collectionVersion?: number;
   readonly shots: readonly ShotItem[];
   readonly canManage: boolean;
   readonly busy: boolean;
-  readonly onGenerate: (payload: Record<string, unknown>) => void;
+  readonly onGenerate: (payload: Record<string, unknown>) => Promise<boolean>;
   readonly onShotAction: (action: string, shot: ShotItem) => void;
   readonly selected: readonly string[];
   readonly onSelect: (id: string) => void;
   readonly onMove: (id: string, delta: -1 | 1) => void;
 }) {
-  const [scriptVersionId, setScriptVersionId] = useState("");
-  const [assetSnapshotId, setAssetSnapshotId] = useState("");
+  const [scriptVersionId, setScriptVersionId] = useState(initialScriptVersionId ?? "");
+  const [assetSnapshotId, setAssetSnapshotId] = useState(initialAssetSnapshotId ?? "");
   const [episodeId, setEpisodeId] = useState(initialEpisodeId ?? "");
+  const { t } = useProductionHandoffTranslation();
+  const [baseline, setBaseline] = useState(() => JSON.stringify([initialEpisodeId ?? "", initialScriptVersionId ?? "", initialAssetSnapshotId ?? ""]));
+  const signature = JSON.stringify([episodeId, scriptVersionId, assetSnapshotId]);
+  const [sourceVersion] = useState(() => JSON.stringify([initialEpisodeId ?? null, initialScriptVersionId ?? null, initialAssetSnapshotId ?? null, collectionVersion ?? null]));
+  const recovery = useRecoverableDraft({ scope: draftScope, kind: "smart", objectId: initialEpisodeId ?? "project", sourceVersion, currentSourceVersion: JSON.stringify([initialEpisodeId ?? null, initialScriptVersionId ?? null, initialAssetSnapshotId ?? null, collectionVersion ?? null]), dirty: signature !== baseline,
+    value: { episodeId, scriptVersionId, assetSnapshotId }, validate: validSmartDraft });
+  useEffect(() => { onDirty(signature !== baseline || Boolean(recovery.pending)); return () => onDirty(false); }, [signature, baseline, recovery.pending, onDirty]);
   return (
     <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
       <aside className={`${panel} h-fit p-5`}>
+        {recovery.pending ? <DraftRecoveryNotice canResume={recovery.canResume && canManage} busy={busy} value={recovery.pending} onResume={() => recovery.resume((value) => { setEpisodeId(value.episodeId); setScriptVersionId(value.scriptVersionId); setAssetSnapshotId(value.assetSnapshotId); })} onDiscard={recovery.clear} /> : null}
+        {recovery.storageUnavailable ? <p role="alert" className="mb-4 text-xs text-amber-200">{t("storageUnavailable")}</p> : null}
         <h2 className="font-semibold">生成输入</h2>
         <div className="mt-4 grid gap-3">
           <label className="text-xs">
             目标剧集 ID
             <input
               value={episodeId}
+              readOnly={Boolean(initialEpisodeId)}
+              disabled={busy || Boolean(recovery.pending)}
               onChange={(event) => setEpisodeId(event.target.value)}
               placeholder="episode-id"
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
@@ -785,6 +819,8 @@ function SmartView({
             冻结剧本版本 ID
             <input
               value={scriptVersionId}
+              readOnly={Boolean(initialScriptVersionId)}
+              disabled={busy || Boolean(recovery.pending)}
               onChange={(event) => setScriptVersionId(event.target.value)}
               placeholder="script-id@1"
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
@@ -794,6 +830,8 @@ function SmartView({
             资产快照 ID
             <input
               value={assetSnapshotId}
+              readOnly={Boolean(initialAssetSnapshotId)}
+              disabled={busy || Boolean(recovery.pending)}
               onChange={(event) => setAssetSnapshotId(event.target.value)}
               placeholder="已提取资产对应的冻结快照"
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
@@ -803,23 +841,26 @@ function SmartView({
         <p className="mt-3 text-xs text-[#7E8494]">
           导演设定随冻结剧本版本读取；服务端会拒绝未冻结剧本、跨项目快照和空资产快照。
         </p>
+        {initialScriptVersionId ? <p className="mt-3 text-xs leading-6 text-slate-400">{t("frozenContext")} {t("boundReadOnly")}</p> : null}
+        {initialAssetSnapshotId ? <p className="mt-3 text-xs leading-6 text-slate-400">{t("snapshotContext")}</p> : null}
         <button
           type="button"
           className={`${primaryButton} mt-5 w-full`}
           disabled={
             !canManage ||
             busy ||
+            Boolean(recovery.pending) ||
             !episodeId.trim() ||
             !scriptVersionId ||
             !assetSnapshotId
           }
-          onClick={() =>
-            onGenerate({
+          onClick={() => {
+            void onGenerate({
               episodeId: episodeId.trim(),
               scriptVersionId,
               assetSnapshotId,
-            })
-          }
+            }).then((accepted) => { if (accepted) { recovery.clear(); setBaseline(signature); } });
+          }}
         >
           {busy ? "生成中…" : "从冻结剧本创建镜头草案"}
         </button>
@@ -881,6 +922,7 @@ function StoryboardViewPanel({
   ) => void;
   readonly onConfirm: (storyboardId: string) => void;
 }) {
+  const { t } = useStoryboardQualityTranslation();
   const [confirm, setConfirm] = useState(false);
   const storyboardId = shots[0]?.storyboardId ?? "";
   return (
@@ -986,7 +1028,7 @@ function StoryboardViewPanel({
                     disabled={
                       !canManage ||
                       busy ||
-                      shot.status === "frozen" ||
+                      (shot.generationSubmissionPending && shot.generationPendingMediaType !== "image") ||
                       !shot.prompt?.trim()
                     }
                     onClick={() => onGenerateMedia(shot, "image")}
@@ -999,7 +1041,7 @@ function StoryboardViewPanel({
                     disabled={
                       !canManage ||
                       busy ||
-                      shot.status === "frozen" ||
+                      (shot.generationSubmissionPending && shot.generationPendingMediaType !== "video") ||
                       !shot.prompt?.trim()
                     }
                     onClick={() => onGenerateMedia(shot, "video")}
@@ -1007,6 +1049,9 @@ function StoryboardViewPanel({
                     生成候选视频
                   </button>
                 </div>
+                {shot.generationSubmissionPending ? (
+                  <p className="mt-2 text-xs text-[#B8BECC]">{t("submissionPending")}</p>
+                ) : null}
                 {shot.candidates.length > 1 ? (
                   <fieldset className="mt-4">
                     <legend className="text-xs text-[#7E8494]">候选画面</legend>
@@ -1036,7 +1081,7 @@ function StoryboardViewPanel({
       <ConfirmDialog
         open={confirm}
         title="确认冻结故事板"
-        detail={`将冻结当前 ${shots.length} 个镜头及其资产、提示词和候选画面引用。后续修改会创建新版本。`}
+        detail={t("freezePlanHelp", { count: shots.length })}
         confirmLabel={`确认冻结版本 ${collectionVersion ?? "—"}`}
         busy={busy}
         onCancel={() => setConfirm(false)}
@@ -1527,6 +1572,8 @@ export function StoryboardWorkspace({
   projectName,
   api = defaultApi,
   onNavigate,
+  initialScriptVersionId,
+  initialAssetSnapshotId,
 }: StoryboardWorkspaceProps) {
   const [localNavigation, setLocalNavigation] = useState<{
     readonly source: StoryboardView;
@@ -1545,6 +1592,9 @@ export function StoryboardWorkspace({
   const [versionConflict, setVersionConflict] =
     useState<AssetsStoryboardApiError>();
   const [busy, setBusy] = useState(false);
+  const [draftBlocked, setDraftBlocked] = useState(false), [draftReset, setDraftReset] = useState(0), [discardConfirm, setDiscardConfirm] = useState(false);
+  const { t: handoff } = useProductionHandoffTranslation();
+  const protection = useDraftProtection(draftBlocked || busy);
   const [batch, setBatch] = useState<BatchReceipt>();
   const [task, setTask] = useState<TaskReceipt>();
   const [taskShotId, setTaskShotId] = useState<string>();
@@ -1712,6 +1762,7 @@ export function StoryboardWorkspace({
     });
   };
   const navigate = (next: StoryboardView, id?: string) => {
+    if (!protection.canNavigate()) return;
     if (onNavigate) onNavigate(next, id);
     else setLocalNavigation({ source: view, target: next });
   };
@@ -1779,6 +1830,8 @@ export function StoryboardWorkspace({
       projectName={projectName ?? context.project?.name}
       actions={actions}
     >
+      {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}
+      {draftBlocked ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? null }, "smart", scope.episodeId ?? "project")); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}
       {versionConflict ? (
         <StatePanel
           title="版本冲突"
@@ -1941,6 +1994,12 @@ export function StoryboardWorkspace({
       ) : null}
       {activeView === "smart" ? (
         <SmartView
+          key={`${scope.episodeId ?? "project"}:${initialScriptVersionId ?? ""}:${initialAssetSnapshotId ?? ""}:${draftReset}`}
+          initialScriptVersionId={initialScriptVersionId}
+          initialAssetSnapshotId={initialAssetSnapshotId}
+          onDirty={setDraftBlocked}
+          draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? null }}
+          collectionVersion={collectionVersion}
           episodeId={scope.episodeId}
           shots={items}
           canManage={canManage}
@@ -1948,9 +2007,7 @@ export function StoryboardWorkspace({
           selected={selected}
           onSelect={toggle}
           onMove={move}
-          onGenerate={(payload) =>
-            void run("generateShots", payload, undefined, undefined)
-          }
+          onGenerate={async (payload) => Boolean(await run("generateShots", payload, undefined, undefined))}
           onShotAction={(action, shot) =>
             void run(action, { selectedShotIds: selected }, shot)
           }

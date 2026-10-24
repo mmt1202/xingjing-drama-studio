@@ -18,9 +18,9 @@ from server.xingjing_generation_persistence.repository import GenerationBillingH
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_platform_persistence.persistence import AuditRow, ProjectRow
 from server.xingjing_review_persistence.models import ReviewDeliveryRow, ReviewLinkRow
-from server.xingjing_storyboard_persistence.repository import StoryboardRow
 
 from .episode_production import production_catalog, project_production
+from .episode_sources import enrich_working_scripts, source_context, sources
 
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
@@ -59,6 +59,7 @@ async def production_facts(
     snapshot: dict[str, Any],
     target_platform: str = "",
 ) -> dict[str, Any]:
+    snapshot = await enrich_working_scripts(session, context, project_id, snapshot)
     catalog = await production_catalog(session, context, project_id)
     production = project_production(snapshot, catalog)
     scripts = []
@@ -107,10 +108,7 @@ async def production_facts(
                 )
             ).all()
         )
-    frozen_boards = set()
-    if "shot.view" in context.permissions:
-        boards = (await session.scalars(select(StoryboardRow).where(*scoped(StoryboardRow, context, project_id)))).all()
-        frozen_boards = {b.episode_id for b in boards if b.payload.get("status") == "frozen" and b.payload.get("shots")}
+    frozen_boards = {b["episodeId"] for b in catalog["boards"] if b.get("frozen")}
     approvals: dict[str, str] = {}
     if "review.view" in context.permissions:
         rows = (
@@ -148,6 +146,14 @@ async def production_facts(
             {
                 "episode": episode["episode"],
                 "title": episode["title"],
+                "scriptId": (episode.get("workingScript") or {}).get("scriptId")
+                or (
+                    str(binding.get("scriptVersionId", "")).rsplit("@", 1)[0]
+                    if "script.view" in context.permissions
+                    else None
+                ),
+                "scriptVersionId": binding.get("scriptVersionId") if "script.view" in context.permissions else None,
+                "assetSnapshotId": binding.get("assetSnapshotId") if "asset.view" in context.permissions else None,
                 "state": produced["state"] if can_check_bindings else "restricted",
                 "issue": produced["issue"] if can_check_bindings else None,
                 "shots": sum(b["shots"] for b in produced["boards"]) if "shot.view" in context.permissions else None,
@@ -168,19 +174,43 @@ async def production_facts(
             for e, p in zip(snapshot["items"], production["items"], strict=True)
         )
     )
+    # Imported novels and unused candidate drafts are not episode production inputs.
+    working_ids = [
+        (e.get("workingScript") or {}).get("scriptId")
+        or str(e["production"].get("scriptVersionId", "")).rsplit("@", 1)[0]
+        for e in snapshot["items"]
+    ]
+    working_scripts = {s.script_id: s for s in scripts}
+    all_working = (
+        all_planned
+        and all(working_ids)
+        and all(identity in working_scripts for identity in working_ids)
+        and all((e.get("workingScript") or {}).get("rangeMatches", True) for e in snapshot["items"])
+    )
     facts = {
         "source": bool(scripts),
-        "analyzed": bool(scripts)
+        "analyzed": all_working
         and all(
-            s.script_id in latest and bool(latest[s.script_id].analysis) and not latest[s.script_id].validation_errors
-            for s in scripts
+            identity in latest and bool(latest[identity].analysis) and not latest[identity].validation_errors
+            for identity in working_ids
         ),
-        "director": bool(scripts) and all(any(s.director_profile.values()) for s in scripts),
+        "director": all_working
+        and all(
+            all(
+                working_scripts[identity].director_profile.get(field)
+                for field in ("audience", "pacing", "visual_style", "camera_language")
+            )
+            for identity in working_ids
+        ),
         "frozen": bool(catalog["scripts"]),
         "assets": any(s["valid"] and s["assets"] for s in catalog["snapshots"]),
         "assetsReady": asset_ready,
         "shots": any(b["shots"] for b in catalog["boards"]),
-        "boardsReady": all_planned and all(str(e["episode"]) in frozen_boards for e in items),
+        "boardsReady": all_planned
+        and all(
+            str(e["episode"]) in frozen_boards and not p["issue"]
+            for e, p in zip(items, production["items"], strict=True)
+        ),
         "finals": bool(catalog["finals"]),
         "finalsReady": all_finals,
         "approved": all_finals and all(i["approval"] in {"approved", "confirmed"} for i in items),
@@ -234,10 +264,13 @@ async def overview(runtime: ProjectsRuntime, context: TrustedWorkspaceContext, r
     from .runtime import _iso, _summary
 
     snapshot = {"items": [], "revision": "", "plannedCount": 0}
-    if row.setup_state == "ready":
-        snapshot = await asyncio.to_thread(read_episodes, get_project_manager(), row.id)
     since = datetime.now(UTC) - timedelta(days=days) if days else None
     async with runtime._require_sessions()() as session:
+        if row.setup_state == "ready":
+            collection = await sources(session, context, row.id)
+            snapshot = await asyncio.to_thread(
+                read_episodes, get_project_manager(), row.id, source_texts=collection.texts
+            )
         evidence = await production_facts(session, context, row.id, snapshot, row.target_platform)
         tasks = None
         task_scope = (TaskRow.workspace_id == context.workspace_id, TaskRow.project_id == row.id)
@@ -361,7 +394,7 @@ def register_control_routes(runtime: ProjectsRuntime, router: APIRouter):
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=10, ge=1, le=50),
     ):
-        context = await runtime._context(request, "project.view")
+        context = await source_context(runtime, request, project_id)
         row = await runtime._row(context.tenant_id, context.workspace_id, project_id, include_deleted=True)
         if row is None:
             raise EpisodeEditError("PROJECT_NOT_FOUND", 404)

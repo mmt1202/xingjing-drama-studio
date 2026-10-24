@@ -3,6 +3,21 @@ import { createAuthenticatedFetcher } from "@/utils/auth";
 import { CreatorApiError } from "./api";
 
 export interface EpisodeProduction { scriptVersionId: string; assetSnapshotId: string; finalVideoVersionId: string }
+export interface EpisodeSource { path: string; label: string; kind: "file" | "sql_original"; scriptId: string | null; digest: string; length: number; coordinateSystem: "nfc_lf" }
+export interface EpisodeSourceText extends EpisodeSource { text: string }
+export function episodeSourceLabel(source: EpisodeSource, sources: EpisodeSource[]) {
+  const duplicates = sources.filter((item) => item.label === source.label);
+  if (duplicates.length < 2) return source.label;
+  const identity = source.scriptId ?? source.path;
+  const short = identity.slice(-8);
+  const ambiguous = duplicates.some((item) => (item.scriptId ?? item.path) !== identity && (item.scriptId ?? item.path).slice(-8) === short);
+  return `${source.label} · ${ambiguous ? identity : short}`;
+}
+export interface WorkingScript {
+  scriptId: string; revision: number; versionNumber: number; lockedVersionNumber: number | null;
+  validationState: "valid" | "invalid"; rangeMatches: boolean; createdAt: string;
+  sourceRef: { kind: "file" | "sql_original"; sourceId: string; sourceScriptId: string | null; digest: string; coordinateSystem: "nfc_lf"; start: number; end: number };
+}
 export const emptyProduction = (): EpisodeProduction => ({ scriptVersionId: "", assetSnapshotId: "", finalVideoVersionId: "" });
 export interface ProductionCatalog {
   revision: string;
@@ -28,6 +43,7 @@ export interface EpisodeDraft {
   production?: EpisodeProduction;
 }
 export interface Episode extends EpisodeDraft {
+  workingScript?: WorkingScript | null;
   locked: boolean;
   status: string;
   scriptStatus: string;
@@ -39,7 +55,8 @@ export interface Episode extends EpisodeDraft {
 export interface EpisodesSnapshot {
   revision: string;
   items: Episode[];
-  sources: { path: string; text: string }[];
+  sources: EpisodeSource[];
+  permissions?: { canReadSources: boolean; canCreateWorkingScript: boolean };
   contentMode: string;
   generationMode: string;
   plannedCount: number;
@@ -71,7 +88,22 @@ export function createEpisodesApi(getAccessToken: () => string | null) {
   }
   return {
     list: (id: string) => request<EpisodesSnapshot>(id, "?limit=500"),
-    preview: (id: string, revision: string, source: string, count: number) => request<EpisodeDraft[]>(id, "/split-preview", { method: "POST", headers: { "If-Match": `"${revision}"` }, body: JSON.stringify({ source, count }) }),
+    source: (id: string, sourceId: string, signal?: AbortSignal) => request<{ source: EpisodeSourceText }>(id, "/source?" + new URLSearchParams({ sourceId }).toString(), { signal }).then((data) => data.source),
+    preview: (id: string, revision: string, source: string, count: number, sourceDigest: string) => request<EpisodeDraft[]>(id, "/split-preview", { method: "POST", headers: { "If-Match": `"${revision}"` }, body: JSON.stringify({ source, count, sourceDigest }) }),
+    createWorkingScript: async (id: string, episode: number, revision: string, sourceDigest: string, previousWorkingScriptId?: string) => {
+      const body = JSON.stringify({ sourceDigest, ...(previousWorkingScriptId ? { previousWorkingScriptId } : {}) });
+      const operation = `working:${id}:${episode}:${revision}:${body}`;
+      const key = keys.get(operation) ?? crypto.randomUUID();
+      keys.set(operation, key);
+      try {
+        const result = await request<{ workingScript: WorkingScript; revision: string; created: boolean }>(id, `/${episode}/working-script`, { method: "POST", body, headers: { "If-Match": `"${revision}"`, "Idempotency-Key": key } });
+        keys.delete(operation);
+        return result;
+      } catch (error) {
+        if (error instanceof CreatorApiError && !error.retryable && error.status !== 401) keys.delete(operation);
+        throw error;
+      }
+    },
     costs: (id: string) => request<EpisodeCosts>(id, "/costs"),
     production: (id: string) => request<ProductionCatalog>(id, "/production"),
     prepare: (id: string, revision: string, episodes: number[], action: "storyboards" | "packages", target: string) => request<ProductionCommand[]>(id, "/production/prepare", { method: "POST", headers: { "If-Match": `"${revision}"` }, body: JSON.stringify({ episodes, action, target }) }),

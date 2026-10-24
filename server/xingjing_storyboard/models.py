@@ -160,6 +160,7 @@ class Shot:
     prompt_variables: dict[str, str] | None = None
     prompt_model_adapter_version: str | None = None
     generation_task_id: str | None = None
+    generation_submission: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.shot_id, "SHOT_ID_REQUIRED")
@@ -194,13 +195,14 @@ class Shot:
             "replacements": [item.to_dict() for item in self.replacements],
             "negative_prompt": self.negative_prompt,
             "prompt_template_id": self.prompt_template_id,
-            "prompt_variables": (
-                dict(self.prompt_variables)
-                if self.prompt_variables is not None
-                else None
-            ),
+            "prompt_variables": (dict(self.prompt_variables) if self.prompt_variables is not None else None),
             "prompt_model_adapter_version": self.prompt_model_adapter_version,
             "generation_task_id": self.generation_task_id,
+            **(
+                {"generation_submission": dict(self.generation_submission)}
+                if self.generation_submission is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -224,15 +226,17 @@ class Shot:
             negative_prompt=str(value.get("negative_prompt") or ""),
             prompt_template_id=_optional_string(value, "prompt_template_id"),
             prompt_variables=(
-                {
-                    str(key): str(item)
-                    for key, item in _object_dict(value, "prompt_variables").items()
-                }
+                {str(key): str(item) for key, item in _object_dict(value, "prompt_variables").items()}
                 if value.get("prompt_variables") is not None
                 else None
             ),
             prompt_model_adapter_version=_optional_string(value, "prompt_model_adapter_version"),
             generation_task_id=_optional_string(value, "generation_task_id"),
+            generation_submission=(
+                dict(_mapping(value["generation_submission"]))
+                if value.get("generation_submission") is not None
+                else None
+            ),
         )
 
 

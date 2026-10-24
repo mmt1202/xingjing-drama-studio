@@ -2,6 +2,8 @@ import { paymentButton, usePaymentTranslation } from "@/xingjing_payments/i18n";
 import { PaymentsWorkspace } from "@/xingjing_payments/PaymentsWorkspace";
 import { VersionWorkspace } from "@/xingjing_versions/VersionWorkspace";
 import { useMemo } from "react";
+import { useProductionHandoffTranslation } from "@/xingjing_assets_storyboard/handoff-i18n";
+import type { StoryboardView } from "@/xingjing_assets_storyboard/StoryboardWorkspace";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
 import { createProjectControlApi } from "@/xingjing_creator_projects/control-api";
@@ -211,6 +213,7 @@ function ProjectBusinessContent({
   const [, navigate] = useLocation();
   const search = useSearch();
   const projectFlow = useOptionalProjectFlow();
+  const { t: handoff } = useProductionHandoffTranslation();
   const surface = resolveProjectSurface(slug, itemId);
   const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const creatorApi = useMemo(
@@ -252,10 +255,12 @@ function ProjectBusinessContent({
     [search],
   );
   const go = (target: string, nextProjectId = projectId) => {
+    if (projectFlow && nextProjectId === projectId) { projectFlow.go(target); return; }
     const [path, rawQuery = ""] = target.split("?");
     const query = new URLSearchParams(rawQuery);
     const episode = complianceQuery.get("episodeId");
     if (nextProjectId === projectId && episode && !query.has("episodeId")) query.set("episodeId", episode);
+    if (nextProjectId === projectId) for (const key of ["scriptId", "scriptVersionId", "assetSnapshotId"]) { const value = complianceQuery.get(key); if (value && !query.has(key)) query.set(key, value); }
     navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(nextProjectId)}/${path}${query.size ? `?${query}` : ""}`);
   };
   const scriptPageProps = {
@@ -291,7 +296,7 @@ function ProjectBusinessContent({
         />
       );
     case "episodes":
-      return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} initialEpisodeId={complianceQuery.has("episodeId") ? Number(complianceQuery.get("episodeId")) : undefined} mode={surface.mode} onNavigate={go} />;
+      return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} initialEpisodeId={complianceQuery.has("episodeId") ? Number(complianceQuery.get("episodeId")) : undefined} selectedScriptId={complianceQuery.get("scriptId") ?? undefined} onCommitted={projectFlow?.refresh} mode={surface.mode} onNavigate={go} />;
     case "script-import":
       return <ScriptImportPage {...scriptPageProps} />;
     case "ai-director":
@@ -370,6 +375,9 @@ function ProjectBusinessContent({
         </>
       );
     case "assets-storyboard": {
+      const selectedEpisode = projectFlow?.data.episodes.find((episode) => String(episode.episode) === complianceQuery.get("episodeId"));
+      const staleBinding = selectedEpisode && (["scriptVersionId", "assetSnapshotId"] as const).some((key) => complianceQuery.has(key) && complianceQuery.get(key) !== (selectedEpisode[key] ?? ""));
+      if (staleBinding) return <section role="status" className="rounded-xl border border-amber-300/30 p-6"><p className="text-sm leading-7 text-amber-100">{handoff("staleBinding")}</p><button type="button" className="mt-4 rounded-lg border border-white/15 px-4 py-2 text-sm" onClick={() => go(`episodes?episodeId=${selectedEpisode.episode}`)}>{handoff("returnEpisodes")}</button></section>;
       const route = assetsStoryboardRouteExports.find(
         (candidate) => candidate.pageId === surface.pageId,
       );
@@ -409,6 +417,10 @@ function ProjectBusinessContent({
             `/app/workspaces/${encodeURIComponent(workspaceId)}/asset-market/${encodeURIComponent(nextAssetId)}`,
           );
       };
+      const navigateStoryboard = (view: StoryboardView, nextShotId?: string) => {
+        const targets: Record<StoryboardView, string> = { list: "shots", batch: "shots-batch", quality: "shots-quality", replace: "shots-replace", export: "shots-export", import: "shots-import", smart: "shots-smart", storyboard: "storyboard", compare: "shots-compare", prompts: "prompts" };
+        go(targets[view] + (nextShotId ? `/${encodeURIComponent(nextShotId)}` : ""));
+      };
       return (
         <Page
           workspaceId={workspaceId}
@@ -416,8 +428,11 @@ function ProjectBusinessContent({
           assetId={assetId}
           shotId={shotId}
           episodeId={complianceQuery.get("episodeId") ?? undefined}
+          scriptVersionId={complianceQuery.get("scriptVersionId") ?? selectedEpisode?.scriptVersionId ?? undefined}
+          assetSnapshotId={complianceQuery.get("assetSnapshotId") ?? selectedEpisode?.assetSnapshotId ?? undefined}
           api={assetsStoryboardApi}
           onNavigate={navigateAsset}
+          onNavigateStoryboard={navigateStoryboard}
         />
       );
     }

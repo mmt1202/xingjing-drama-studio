@@ -1,18 +1,22 @@
 # pyright: reportMissingImports=false, reportAttributeAccessIssue=false, reportArgumentType=false, reportGeneralTypeIssues=false, reportUnnecessaryIsInstance=false
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import inspect
+import re
 import uuid
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 
-from server.xingjing_generation import GenerationRequest, MediaType
+from server.xingjing_generation import GenerationRequest, MediaType, TaskStatus
 from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_storyboard.errors import (
@@ -24,7 +28,7 @@ from server.xingjing_storyboard.errors import (
     VersionConflict,
 )
 from server.xingjing_storyboard.exchange import ExportFormat, import_shots
-from server.xingjing_storyboard.models import AssetKind, AssetReference, Storyboard
+from server.xingjing_storyboard.models import AssetKind, AssetReference, Storyboard, StoryboardStatus
 from server.xingjing_storyboard.ports import AuditEvent
 from server.xingjing_storyboard.service import AccessContext, ShotEdit
 
@@ -32,6 +36,25 @@ from .dependencies import ProjectScopeAuthorizer, StoryboardHttpDependencies
 from .projection import project_shot
 
 _configured_dependencies: StoryboardHttpDependencies | None = None
+
+_GENERATION_ADMISSION_REJECTIONS = frozenset(
+    {
+        "GENERATION_PROVIDER_SUBMISSION_UNAVAILABLE",
+        "GENERATION_BILLING_POLICY_UNAVAILABLE",
+        "MODEL_ROUTE_CONTROL_UNAVAILABLE",
+        "MODEL_ROUTE_UNAVAILABLE",
+        "MODEL_FALLBACK_NOT_ALLOWED",
+        "MODEL_PROVIDER_ADAPTER_UNAVAILABLE",
+        "PROJECT_MODEL_UNAVAILABLE",
+        "PROJECT_NOT_FOUND",
+        "GENERATION_INPUT_ASSET_NOT_ACCESSIBLE",
+        "GENERATION_INSUFFICIENT_CREDITS",
+        "GENERATION_BILLING_ACCOUNT_MISSING",
+        "GENERATION_BILLING_CURRENCY_MISMATCH",
+        "GENERATION_ESTIMATED_COST_INVALID",
+        "GENERATION_WORKSPACE_CONCURRENCY_LIMIT",
+    }
+)
 
 
 class HttpContractError(RuntimeError):
@@ -384,18 +407,28 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             generation = dependencies.generation_runtime
             if generation is None:
                 raise HttpContractError("GENERATION_RUNTIME_UNAVAILABLE", status_code=503)
+            if generation.repository is None:
+                raise HttpContractError("GENERATION_RUNTIME_UNAVAILABLE", status_code=503)
             storyboard = _storyboard_for_shots(
                 _all_storyboards(dependencies, context), (_required_text(body, "targetId"),)
             )
             expected = _expected_version(request, payload)
-            if storyboard.version != expected:
-                raise VersionConflict("VERSION_CONFLICT", details={"current_version": storyboard.version})
-            shot = next(item for item in storyboard.shots if item.shot_id == _required_text(body, "targetId"))
-            if not shot.prompt.strip():
-                raise HttpContractError("SHOT_PROMPT_REQUIRED")
             media_type = _required_text(payload, "mediaType")
             if media_type not in {"image", "video"}:
                 raise HttpContractError("GENERATION_MEDIA_TYPE_INVALID")
+            prepared = dependencies.service.prepare_shot_generation(
+                context,
+                storyboard_id=storyboard.storyboard_id,
+                expected_version=expected,
+                shot_id=_required_text(body, "targetId"),
+                media_type=media_type,
+                provider_id=_optional_text(payload, "providerId"),
+                model_id=_optional_text(payload, "modelId"),
+                idempotency_key=request.headers.get("Idempotency-Key", ""),
+            )
+            shot = prepared.shot
+            submission = cast(dict[str, object], shot.generation_submission)
+            media_type = cast(str, submission["media_type"])
             trusted = TrustedWorkspaceContext(
                 tenant_id=context.tenant_id,
                 workspace_id=context.workspace_id,
@@ -412,7 +445,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 prompt=shot.prompt,
                 parameters={
                     "storyboard_id": storyboard.storyboard_id,
-                    "storyboard_version": storyboard.version,
+                    "storyboard_version": submission["source_version"],
                     "shot_id": shot.shot_id,
                     "negative_prompt": shot.negative_prompt,
                     "prompt_template_id": shot.prompt_template_id,
@@ -420,25 +453,65 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                     "duration_ms": shot.duration_ms,
                 },
                 input_asset_ids=tuple(dict.fromkeys(item.asset_id for item in shot.asset_references)),
-                requested_provider_id=_optional_text(payload, "providerId"),
-                requested_model_id=_optional_text(payload, "modelId"),
+                requested_provider_id=cast(str | None, submission["provider_id"]),
+                requested_model_id=cast(str | None, submission["model_id"]),
             )
-            try:
-                task = await generation.submit(
-                    trusted,
-                    context.project_id,
-                    generation_request,
-                    idempotency_key=request.headers.get("Idempotency-Key", ""),
+            submission_key = cast(str, submission["idempotency_key"])
+            task = await generation.repository.get_by_idempotency_scope(
+                f"{context.workspace_id}:{submission_key}", project_id=context.project_id
+            )
+            if task is None:
+                dispatch_token = uuid.uuid4().hex
+                dependencies.service.claim_generation_dispatch(
+                    context,
+                    storyboard_id=storyboard.storyboard_id,
+                    shot_id=shot.shot_id,
+                    submission_key=submission_key,
+                    dispatch_token=dispatch_token,
                 )
-            except (GenerationRuntimeUnavailable, RuntimeError, ValueError) as error:
-                raise HttpContractError(str(error), status_code=503) from error
-            recorded = dependencies.service.record_shot_generation_task(
+                try:
+                    task = await generation.submit(
+                        trusted, context.project_id, generation_request, idempotency_key=submission_key
+                    )
+                except asyncio.CancelledError:
+                    dependencies.service.finish_generation_dispatch(
+                        context,
+                        storyboard_id=storyboard.storyboard_id,
+                        shot_id=shot.shot_id,
+                        submission_key=submission_key,
+                        dispatch_token=dispatch_token,
+                        rejection_code=None,
+                    )
+                    raise
+                except Exception as error:
+                    code = str(error)
+                    if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}", code):
+                        code = "GENERATION_SUBMISSION_FAILED"
+                    absent = False
+                    if code in _GENERATION_ADMISSION_REJECTIONS:
+                        try:
+                            absent = (
+                                await generation.repository.get_by_idempotency_scope(
+                                    f"{context.workspace_id}:{submission_key}", project_id=context.project_id
+                                )
+                            ) is None
+                        except Exception:
+                            pass
+                    dependencies.service.finish_generation_dispatch(
+                        context,
+                        storyboard_id=storyboard.storyboard_id,
+                        shot_id=shot.shot_id,
+                        submission_key=submission_key,
+                        dispatch_token=dispatch_token,
+                        rejection_code=code if absent else None,
+                    )
+                    raise HttpContractError(code, status_code=503) from error
+            recorded = dependencies.service.bind_prepared_generation_task(
                 context,
                 storyboard_id=storyboard.storyboard_id,
-                expected_version=expected,
                 shot_id=shot.shot_id,
                 task_id=task.task_id,
-                idempotency_key=request.headers.get("Idempotency-Key", ""),
+                submission_key=cast(str, submission["idempotency_key"]),
             )
             return _action_response(
                 context,
@@ -465,13 +538,15 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 role="",
             )
             try:
-                generated_asset, _path = await generation.generated_artifact_file(
+                generated_asset, artifact_path = await generation.generated_artifact_file(
                     trusted, context.project_id, generated_asset_id
                 )
                 task = await generation.get_task(trusted, context.project_id, task_id)
             except (GenerationRuntimeUnavailable, RuntimeError, LookupError) as error:
                 raise HttpContractError("GENERATED_ASSET_NOT_FOUND", status_code=404) from error
             parameters = task.request.parameters
+            if task.status is not TaskStatus.SUCCEEDED:
+                raise HttpContractError("GENERATED_ASSET_TASK_NOT_SUCCEEDED", status_code=409)
             if (
                 generated_asset.task_id != task_id
                 or generated_asset_id not in task.output_asset_ids
@@ -483,6 +558,12 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 != task_id
             ):
                 raise HttpContractError("GENERATED_ASSET_SCOPE_MISMATCH", status_code=409)
+            await asyncio.to_thread(
+                _verify_generated_artifact,
+                artifact_path,
+                generated_asset.size_bytes,
+                generated_asset.content_sha256,
+            )
             result_value = dependencies.service.replace_shot_media(
                 context,
                 storyboard_id=storyboard.storyboard_id,
@@ -491,6 +572,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 new_media_id=generated_asset_id,
                 reason="generation_output_adopted",
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
+                allow_frozen_execution=True,
             )
             persisted = dependencies.service.get_storyboard(context, result_value.storyboard.storyboard_id)
             adopted = next(item for item in persisted.shots if item.shot_id == _required_text(body, "targetId"))
@@ -567,6 +649,40 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
         elif action == "selectStoryboardCandidate":
+            verified_execution = storyboard.status is StoryboardStatus.FROZEN
+            if verified_execution:
+                generation = dependencies.generation_runtime
+                if generation is None:
+                    raise HttpContractError("GENERATION_RUNTIME_UNAVAILABLE", status_code=503)
+                candidate_id = _required_text(payload, "candidateId")
+                trusted = TrustedWorkspaceContext(
+                    tenant_id=context.tenant_id,
+                    workspace_id=context.workspace_id,
+                    actor_id=context.actor_id,
+                    request_id=context.request_id,
+                    permissions=context.permissions,
+                    role="",
+                )
+                try:
+                    generated_asset, artifact_path = await generation.generated_artifact_file(
+                        trusted, context.project_id, candidate_id
+                    )
+                    task = await generation.get_task(trusted, context.project_id, generated_asset.task_id)
+                except (GenerationRuntimeUnavailable, RuntimeError, LookupError) as error:
+                    raise HttpContractError("GENERATED_ASSET_NOT_FOUND", status_code=404) from error
+                if (
+                    task.status is not TaskStatus.SUCCEEDED
+                    or candidate_id not in task.output_asset_ids
+                    or task.request.parameters.get("storyboard_id") != storyboard.storyboard_id
+                    or task.request.parameters.get("shot_id") != _required_text(body, "targetId")
+                ):
+                    raise HttpContractError("GENERATED_ASSET_SCOPE_MISMATCH", status_code=409)
+                await asyncio.to_thread(
+                    _verify_generated_artifact,
+                    artifact_path,
+                    generated_asset.size_bytes,
+                    generated_asset.content_sha256,
+                )
             result_value = dependencies.service.select_shot_candidate(
                 context,
                 storyboard_id=storyboard.storyboard_id,
@@ -574,6 +690,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 shot_id=_required_text(body, "targetId"),
                 candidate_id=_required_text(payload, "candidateId"),
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
+                allow_frozen_execution=verified_execution,
             )
         elif action == "restoreVersion":
             result_value = dependencies.service.restore_shot_version(
@@ -1061,7 +1178,6 @@ async def _with_generation_facts(
     )
     try:
         task = await runtime.get_task(trusted, context.project_id, task_id)
-        billing = await runtime.billing_for_task(trusted, context.project_id, task_id)
     except (GenerationRuntimeUnavailable, RuntimeError, LookupError):
         return projected
     enriched = {
@@ -1069,6 +1185,12 @@ async def _with_generation_facts(
         "generationStatus": task.status.value,
         "generationFailure": task.failure.message if task.failure else None,
     }
+    if "billing.view" not in context.permissions:
+        return enriched
+    try:
+        billing = await runtime.billing_for_task(trusted, context.project_id, task_id)
+    except (GenerationRuntimeUnavailable, RuntimeError, LookupError):
+        return enriched
     if billing is not None:
         enriched.update(
             {
@@ -1167,6 +1289,19 @@ def _positive_query(request: Request, key: str) -> int:
     )
 
 
+def _verify_generated_artifact(path: str, size_bytes: int, content_sha256: str) -> None:
+    try:
+        artifact = Path(path)
+        if not artifact.is_file() or artifact.stat().st_size != size_bytes:
+            raise HttpContractError("GENERATED_ASSET_FILE_INVALID", status_code=409)
+        with artifact.open("rb") as stream:
+            actual_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual_digest != content_sha256:
+            raise HttpContractError("GENERATED_ASSET_FILE_INVALID", status_code=409)
+    except OSError as error:
+        raise HttpContractError("GENERATED_ASSET_FILE_INVALID", status_code=409) from error
+
+
 def _optional_bool(value: str | None) -> bool | None:
     if value is None:
         return None
@@ -1201,7 +1336,11 @@ def _integer(value: str | None, *, default: int, code: str) -> int:
 
 
 def _storyboard_error_response(request: Request, error: StoryboardError) -> JSONResponse:
-    if error.code in {"QUALITY_POLICY_REQUIRED", "STORYBOARD_QUALITY_POLICY_INVALID"}:
+    if error.code in {
+        "QUALITY_POLICY_REQUIRED",
+        "STORYBOARD_QUALITY_POLICY_INVALID",
+        "GENERATION_SUBMISSION_VERIFICATION_REQUIRED",
+    }:
         return _error_response(request, error.code, 503, {})
     if isinstance(error, PermissionDenied):
         return _error_response(request, error.code, 403, {})

@@ -24,6 +24,7 @@ from .episode_production import (
     project_production,
     validate_production_edits,
 )
+from .episode_sources import create_working_script, enrich_working_scripts, source_context, sources
 
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
@@ -38,6 +39,50 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             raise EpisodeEditError("PROJECT_SETUP_REQUIRED", 409)
         return row
 
+    async def snapshot(context, project_id: str):
+        async with runtime._require_sessions()() as session:
+            collection = await sources(session, context, project_id)
+            data = await asyncio.to_thread(
+                read_episodes, get_project_manager(), project_id, source_texts=collection.texts
+            )
+            data["sources"] = collection.options
+            return await enrich_working_scripts(session, context, project_id, data)
+
+    @router.get("/projects/{project_id}/episodes/source")
+    async def source(request: Request, project_id: str, sourceId: str):
+        context = await source_context(runtime, request, project_id)
+        await ready(context, project_id)
+        if "script.view" not in context.permissions:
+            raise EpisodeEditError("FORBIDDEN", 403)
+        async with runtime._require_sessions()() as session:
+            collection = await sources(session, context, project_id)
+        option = next((item for item in collection.options if item["path"] == sourceId), None)
+        if option is None:
+            raise EpisodeEditError("EPISODE_SOURCE_NOT_FOUND", 404)
+        return {
+            "data": {"source": {**option, "text": collection.texts[sourceId]}},
+            "meta": {"requestId": context.request_id},
+        }
+
+    @router.post("/projects/{project_id}/episodes/{episode}/working-script")
+    async def working_script(request: Request, project_id: str, episode: int):
+        context = await source_context(runtime, request, project_id, manage=True)
+        key = request.headers.get("Idempotency-Key", "").strip()
+        if not key or len(key) > 128:
+            raise EpisodeEditError("IDEMPOTENCY_KEY_REQUIRED", 400)
+        if not 1 <= episode <= 1_000_000:
+            raise EpisodeEditError("EPISODE_NOT_FOUND", 404)
+        data = await create_working_script(
+            runtime,
+            context,
+            project_id,
+            episode,
+            revision=_revision_header(request),
+            key=key,
+            body=await _body(request),
+        )
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
     @router.get("/projects/{project_id}/episodes")
     async def episodes(
         request: Request,
@@ -47,9 +92,9 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ):
-        context = await runtime._context(request, "project.view")
+        context = await source_context(runtime, request, project_id)
         row = await ready(context, project_id)
-        data = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        data = await snapshot(context, project_id)
         items = data["items"]
         data["summary"] = {
             "total": len(items),
@@ -70,12 +115,23 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
 
     @router.post("/projects/{project_id}/episodes/split-preview")
     async def preview(request: Request, project_id: str):
-        context = await runtime._context(request, "project.manage")
+        context = await source_context(runtime, request, project_id, manage=True)
         await ready(context, project_id)
         body = await _body(request)
         revision = _revision_header(request)
         if not isinstance(body.get("source"), str):
             raise EpisodeEditError("EPISODE_SPLIT_INVALID")
+        if "script.view" not in context.permissions:
+            raise EpisodeEditError("FORBIDDEN", 403)
+        async with runtime._require_sessions()() as session:
+            collection = await sources(session, context, project_id)
+        option = next((item for item in collection.options if item["path"] == body["source"]), None)
+        if option is None:
+            raise EpisodeEditError("EPISODE_SOURCE_NOT_FOUND", 404)
+        if (option["kind"] == "sql_original" or body.get("sourceDigest") is not None) and body.get(
+            "sourceDigest"
+        ) != option["digest"]:
+            raise EpisodeEditError("EPISODE_SOURCE_CHANGED", 409)
         data = await asyncio.to_thread(
             split_remaining,
             get_project_manager(),
@@ -83,23 +139,24 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             body.get("source", ""),
             body.get("count", 0),
             revision,
+            source_texts=collection.texts,
         )
         return {"data": data, "meta": {"requestId": context.request_id}}
 
     @router.get("/projects/{project_id}/episodes/production")
     async def production(request: Request, project_id: str):
-        context = await runtime._context(request, "project.view")
+        context = await source_context(runtime, request, project_id)
         await ready(context, project_id)
-        snapshot = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        current_snapshot = await snapshot(context, project_id)
         async with runtime._require_sessions()() as session:
             catalog = await production_catalog(session, context, project_id)
-        data = project_production(snapshot, catalog)
+        data = project_production(current_snapshot, catalog)
         data["permissions"] = sorted(context.permissions)
         return {"data": data, "meta": {"requestId": context.request_id}}
 
     @router.post("/projects/{project_id}/episodes/production/prepare")
     async def prepare(request: Request, project_id: str):
-        context = await runtime._context(request, "project.manage")
+        context = await source_context(runtime, request, project_id, manage=True)
         await ready(context, project_id)
         revision = _revision_header(request)
         body = await _body(request)
@@ -121,17 +178,17 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             raise EpisodeEditError("FORBIDDEN", 403)
         if not isinstance(target, str) or len(target) > 128 or (action == "packages" and not target.strip()):
             raise EpisodeEditError("EPISODE_EXPORT_TARGET_REQUIRED")
-        snapshot = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
-        if snapshot["revision"] != revision:
+        current_snapshot = await snapshot(context, project_id)
+        if current_snapshot["revision"] != revision:
             raise EpisodeEditError("VERSION_CONFLICT", 409)
         async with runtime._require_sessions()() as session:
             catalog = await production_catalog(session, context, project_id)
-        data = prepare_production_batch(context, project_id, snapshot, catalog, numbers, action, target.strip())
+        data = prepare_production_batch(context, project_id, current_snapshot, catalog, numbers, action, target.strip())
         return {"data": data, "meta": {"requestId": context.request_id}}
 
     @router.put("/projects/{project_id}/episodes")
     async def save(request: Request, project_id: str):
-        context = await runtime._context(request, "project.manage")
+        context = await source_context(runtime, request, project_id, manage=True)
         revision = _revision_header(request)
         key = request.headers.get("Idempotency-Key", "").strip()
         if not key or len(key) > 128:
@@ -179,11 +236,14 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             if claimed_row is None:
                 raise EpisodeEditError("VERSION_CONFLICT", 409)
             claimed = await uow.inbox.claim(f"episodes.save:{project_id}", key)
+            collection = await sources(uow.session, context, project_id)
             manager = get_project_manager()
             project = await asyncio.to_thread(manager.load_project, project_id)
             if not any(receipt["key"] == key for receipt in project.get("episode_edit_receipts", [])):
-                snapshot = await asyncio.to_thread(read_episodes, manager, project_id)
-                await validate_production_edits(uow.session, context, project_id, edits, snapshot)
+                current_snapshot = await asyncio.to_thread(
+                    read_episodes, manager, project_id, source_texts=collection.texts
+                )
+                await validate_production_edits(uow.session, context, project_id, edits, current_snapshot)
             receipt = await asyncio.to_thread(
                 save_episodes,
                 manager,
@@ -193,6 +253,7 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
                 key=key,
                 actor=context.actor_id,
                 replay_only=not claimed,
+                source_texts=collection.texts,
             )
             if claimed:
                 await uow.audit.append(
@@ -218,7 +279,7 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
                     },
                 )
             await uow.commit()
-        data = await asyncio.to_thread(read_episodes, get_project_manager(), project_id)
+        data = await snapshot(context, project_id)
         return {"data": data, "meta": {"requestId": context.request_id}}
 
     @router.get("/projects/{project_id}/episodes/costs")
