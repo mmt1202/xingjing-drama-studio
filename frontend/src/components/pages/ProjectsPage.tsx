@@ -406,7 +406,7 @@ function TopBar({
       <div className="mx-auto flex max-w-[1320px] items-center gap-4 px-6 py-3">
         <div className="flex items-center gap-2.5">
           <img
-            src="/android-chrome-192x192.png"
+            src="/xingjing-mark.svg"
             alt={BRAND.name}
             className="h-8 w-8 rounded-lg"
           />

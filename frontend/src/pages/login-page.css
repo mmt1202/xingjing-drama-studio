@@ -1,0 +1,55 @@
+.xj-login {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 48px 24px;
+  color: #f5f7fb;
+  background: radial-gradient(ellipse at 20% 8%, rgb(139 92 246 / 16%), transparent 46%), radial-gradient(ellipse at 85% 85%, rgb(255 107 74 / 8%), transparent 42%), #05060a;
+}
+.xj-login-layout { display: grid; grid-template-columns: minmax(0, 1fr) 420px; align-items: stretch; gap: 24px; width: min(100%, 1120px); }
+.xj-login-intro, .xj-login-card { border: 1px solid rgb(255 255 255 / 10%); border-radius: 22px; }
+.xj-login-intro { display: flex; flex-direction: column; justify-content: space-between; gap: 48px; padding: 40px; background: linear-gradient(145deg, rgb(29 24 48 / 90%), rgb(12 16 24 / 94%) 72%); }
+.xj-login-brand { display: flex; align-items: center; gap: 14px; font-size: 22px; font-weight: 700; letter-spacing: .06em; }
+.xj-login-brand img { display: block; flex: 0 0 48px; }
+.xj-login-eyebrow { margin: 0 0 16px; color: #c4b5fd; font-size: 12px; font-weight: 500; letter-spacing: .14em; }
+.xj-login-intro h1 { margin: 0; font-size: clamp(32px, 3.2vw, 44px); font-weight: 650; line-height: 1.4; letter-spacing: -.025em; }
+.xj-login-intro h1 span { color: #cbb8ff; }
+.xj-login-description { max-width: 460px; margin: 20px 0 0; color: #a9b2c5; font-size: 14px; line-height: 2; }
+.xj-login-workflow { display: flex; flex-wrap: wrap; gap: 16px 24px; margin: 0; padding: 24px 0 0; list-style: none; border-top: 1px solid rgb(255 255 255 / 9%); }
+.xj-login-workflow li { display: flex; align-items: center; gap: 8px; color: #c3cbda; font-size: 12px; }
+.xj-login-workflow svg { color: #ac91f9; }
+.xj-login-card { padding: 36px 32px; background: linear-gradient(180deg, #151822, #0c1018); box-shadow: 0 24px 80px rgb(0 0 0 / 20%); }
+.xj-login-card-heading { margin-bottom: 30px; }
+.xj-login-card-heading h2 { margin: 0; color: #f5f7fb; font-size: 25px; font-weight: 600; letter-spacing: -.02em; }
+.xj-login-card-heading p { margin: 10px 0 0; color: #8590a7; font-size: 13px; line-height: 1.8; }
+.xj-login-card input { min-height: 46px; border-radius: 12px; font-size: 14px; }
+.xj-login-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px; margin-top: 8px; padding: 10px 16px; border: 0; border-radius: 12px; background: linear-gradient(115deg, #8b5cf6, #c056f5 58%, #ff6b4a); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: filter .15s; }
+.xj-login-primary:hover:not(:disabled) { filter: brightness(1.12); }
+.xj-login-primary:disabled { opacity: .55; cursor: wait; }
+.xj-login-links { display: flex; justify-content: space-between; gap: 16px; margin-top: 20px; font-size: 13px; }
+.xj-login-links a { color: #bda6ff; text-decoration: none; }
+.xj-login-links a:last-child { color: #9ba7bd; }
+.xj-login-links a:hover { color: #f5f7fb; }
+.xj-login-enterprise { margin-top: 26px; padding-top: 22px; border-top: 1px solid rgb(255 255 255 / 9%); }
+.xj-login-enterprise-toggle { width: 100%; min-height: 44px; padding: 10px 16px; border: 1px solid rgb(255 255 255 / 12%); border-radius: 12px; background: rgb(255 255 255 / 2%); color: #c3cbda; font-size: 13px; cursor: pointer; }
+.xj-login-enterprise-toggle:hover { border-color: rgb(189 166 255 / 45%); background: rgb(139 92 246 / 7%); }
+.xj-login a:focus-visible, .xj-login button:focus-visible { outline: 2px solid #bda6ff; outline-offset: 4px; }
+@media (max-width: 900px) {
+  .xj-login { padding: 32px 20px; }
+  .xj-login-layout { grid-template-columns: minmax(0, 1fr); max-width: 460px; gap: 20px; }
+  .xj-login-intro { gap: 28px; padding: 28px; }
+  .xj-login-intro h1 { font-size: 30px; }
+  .xj-login-workflow { gap: 16px; }
+  .xj-login-card { padding: 30px 28px; }
+}
+@media (max-width: 480px) {
+  .xj-login { padding: 20px 16px; }
+  .xj-login-intro { gap: 22px; padding: 24px; }
+  .xj-login-intro h1 { font-size: 27px; }
+  .xj-login-description { margin-top: 12px; font-size: 13px; }
+  .xj-login-workflow { display: none; }
+  .xj-login-card { padding: 26px 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .xj-login-primary { transition: none; }
+}

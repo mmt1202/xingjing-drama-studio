@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Loader2 } from "lucide-react";
+import { Clapperboard, FileText, Layers3, Loader2 } from "lucide-react";
 import { useAutoFocus } from "@/hooks/useAutoFocus";
 import { errMsg, voidPromise } from "@/utils/async";
 import { Link, useLocation, useSearch } from "wouter";
@@ -9,17 +9,8 @@ import { createIdentityClient, createMemoryTokenStore, resolveLoginContext, type
 import { safeReturnPath } from "@/utils/safe-url";
 import { BRAND } from "@/branding";
 import { FieldLabel } from "@/components/ui/FieldLabel";
-import {
-  ACCENT_BTN_CLS,
-  ACCENT_BUTTON_STYLE,
-  CARD_STYLE,
-  INPUT_CLS,
-  ambientGlowStyle,
-  posterGridStyle,
-} from "@/components/ui/darkroom-tokens";
-
-const POSTER_GRID_STYLE = posterGridStyle({ size: 44, maskShape: "60% 60% at 50% 35%", opacity: 0.05 });
-const AMBIENT_GLOW_STYLE = ambientGlowStyle();
+import { INPUT_CLS } from "@/components/ui/darkroom-tokens";
+import "./login-page.css";
 
 export function LoginPage() {
   const { t, i18n } = useTranslation(["common", "auth"]);
@@ -100,7 +91,7 @@ export function LoginPage() {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-        throw new Error(payload?.error?.message ?? "企业身份登录失败");
+        throw new Error(payload?.error?.message ?? t("auth:enterprise_failed"));
       }
       const envelope = await response.json() as { data: {
         accessToken: string;
@@ -119,33 +110,37 @@ export function LoginPage() {
       );
       setLocation("/workspace-select");
     } catch (error) {
-      setError(errMsg(error, "企业身份登录失败"));
+      setError(errMsg(error, t("auth:enterprise_failed")));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div
-      data-testid="login-page"
-      className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg px-4 text-text"
-    >
-      <div aria-hidden className="pointer-events-none absolute inset-0" style={AMBIENT_GLOW_STYLE} />
-      <div aria-hidden className="pointer-events-none absolute inset-0" style={POSTER_GRID_STYLE} />
-
-      <div
-        className="relative w-full max-w-sm overflow-hidden rounded-2xl border border-hairline p-8 shadow-2xl"
-        style={CARD_STYLE}
-      >
-        <div className="mb-6 text-center">
-          <div className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-text-4">
-            system · login
-          </div>
-          <h1 className="font-editorial mt-1 flex items-center justify-center gap-2 text-[28px] tracking-tight text-text">
-            <img src="/android-chrome-192x192.png" alt="" aria-hidden className="h-7 w-7" />
+    <main data-testid="login-page" className="xj-login">
+      <div className="xj-login-layout">
+        <section className="xj-login-intro" aria-labelledby="login-brand-title">
+          <div className="xj-login-brand">
+            <img src="/xingjing-mark.svg" alt="" aria-hidden="true" width="48" height="48" />
             <span>{BRAND.name}</span>
-          </h1>
-        </div>
+          </div>
+          <div className="xj-login-intro-copy">
+            <p className="xj-login-eyebrow">{t("auth:workspace_label")}</p>
+            <h1 id="login-brand-title">{t("auth:studio_title")}<br /><span>{t("auth:studio_title_accent")}</span></h1>
+            <p className="xj-login-description">{t("auth:studio_description")}</p>
+          </div>
+          <ul className="xj-login-workflow">
+            <li><FileText size={19} aria-hidden="true" /><span>{t("auth:workflow_script")}</span></li>
+            <li><Layers3 size={19} aria-hidden="true" /><span>{t("auth:workflow_assets")}</span></li>
+            <li><Clapperboard size={19} aria-hidden="true" /><span>{t("auth:workflow_delivery")}</span></li>
+          </ul>
+        </section>
+
+        <section className="xj-login-card" aria-labelledby="login-form-title">
+          <div className="xj-login-card-heading">
+            <h2 id="login-form-title">{t("auth:account_login")}</h2>
+            <p>{t("auth:login_description")}</p>
+          </div>
 
         <form onSubmit={voidPromise(handleSubmit)} className="space-y-4">
           <div>
@@ -189,28 +184,30 @@ export function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className={`${ACCENT_BTN_CLS} w-full justify-center`}
-            style={ACCENT_BUTTON_STYLE}
+            className="xj-login-primary"
           >
             {loading && <Loader2 aria-hidden className="h-4 w-4 motion-safe:animate-spin" />}
             {loading ? t("auth:logging_in") : t("auth:login")}
           </button>
         </form>
-        <div className="mt-5 flex items-center justify-between text-sm">
-          <Link href="/register" className="text-amber-200 hover:text-amber-100">创建账号</Link>
-          <Link href="/password-reset" className="text-stone-400 hover:text-stone-200">忘记密码？</Link>
+        <div className="xj-login-links">
+          <Link href="/register">{t("auth:create_account")}</Link>
+          <Link href="/password-reset">{t("auth:forgot_password")}</Link>
         </div>
-        <div className="mt-5 border-t border-hairline pt-5">
-          <button type="button" className="w-full rounded-lg border border-hairline px-4 py-2 text-sm text-text-2" onClick={() => setEnterpriseOpen((value) => !value)}>
-            {enterpriseOpen ? "收起企业身份登录" : "使用企业身份登录"}
+        <div className="xj-login-enterprise">
+          <button type="button" className="xj-login-enterprise-toggle" aria-expanded={enterpriseOpen} aria-controls="enterprise-login-form" onClick={() => setEnterpriseOpen((value) => !value)}>
+            {enterpriseOpen ? t("auth:enterprise_close") : t("auth:enterprise_open")}
           </button>
-          {enterpriseOpen && <form className="mt-4 space-y-3" onSubmit={voidPromise(handleEnterpriseLogin)}>
-            <input className={INPUT_CLS} placeholder="OIDC 提供方标识" required maxLength={80} value={oidcProvider} onChange={(event) => setOidcProvider(event.target.value)} />
-            <input className={INPUT_CLS} type="password" placeholder="企业身份访问凭证" required maxLength={4096} value={oidcAccessToken} onChange={(event) => setOidcAccessToken(event.target.value)} />
-            <button disabled={loading} className={`${ACCENT_BTN_CLS} w-full justify-center`}>{loading ? "正在验证…" : "企业身份登录"}</button>
+          {enterpriseOpen && <form id="enterprise-login-form" className="mt-4 space-y-3" onSubmit={voidPromise(handleEnterpriseLogin)}>
+            <label htmlFor="login-oidc-provider" className="sr-only">{t("auth:enterprise_provider")}</label>
+            <input id="login-oidc-provider" className={INPUT_CLS} placeholder={t("auth:enterprise_provider")} required maxLength={80} value={oidcProvider} onChange={(event) => setOidcProvider(event.target.value)} />
+            <label htmlFor="login-oidc-token" className="sr-only">{t("auth:enterprise_credential")}</label>
+            <input id="login-oidc-token" className={INPUT_CLS} type="password" placeholder={t("auth:enterprise_credential")} required maxLength={4096} value={oidcAccessToken} onChange={(event) => setOidcAccessToken(event.target.value)} />
+            <button disabled={loading} className="xj-login-primary">{loading ? t("auth:enterprise_verifying") : t("auth:enterprise_login")}</button>
           </form>}
         </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
