@@ -18,6 +18,8 @@ export default {
   'import': 'Import',
   'upload': 'Upload',
   'loading': 'Loading...',
+  'media_access_denied': 'The media session has expired or access is unavailable. Refresh your session before retrying.',
+  'media_unavailable': 'This media could not be loaded.',
   'error': 'Error',
   'success': 'Success',
   'unsaved': 'Unsaved',

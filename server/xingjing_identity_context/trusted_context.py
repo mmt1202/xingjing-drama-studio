@@ -20,6 +20,7 @@ from server.xingjing_identity_context.permissions import (
     PLATFORM_ADMIN_PERMISSIONS,
     permissions_for_identity_role,
 )
+from server.xingjing_identity_context.provisioning import provision_missing_team_membership
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,8 +136,10 @@ class TrustedWorkspaceContextResolver:
             tenant_id=workspace_id,
             workspace_id=workspace_id,
             actor_id=actor_id,
+            actor_email=user.get("email") if isinstance(user.get("email"), str) else None,
             identity_role=role,
             project_id=project_id,
+            request_id=request_id,
         )
         return TrustedWorkspaceContext(
             tenant_id=workspace_id,
@@ -162,8 +165,10 @@ async def _resolve_current_permissions(
     tenant_id: str,
     workspace_id: str,
     actor_id: str,
+    actor_email: str | None = None,
     identity_role: str,
     project_id: str | None,
+    request_id: str = "identity-permission-context",
 ) -> tuple[frozenset[str], str]:
     if identity_role == "PLATFORM_ADMIN":
         return PLATFORM_ADMIN_PERMISSIONS, identity_role
@@ -187,6 +192,9 @@ async def _resolve_current_permissions(
             workspace_id=workspace_id,
             actor_id=actor_id,
             project_id=project_id,
+            actor_email=actor_email,
+            identity_role=identity_role,
+            request_id=request_id,
         )
     except _MembershipNotActive as error:
         raise HTTPException(
@@ -218,8 +226,21 @@ class _DynamicPermissionEngine:
         workspace_id: str,
         actor_id: str,
         project_id: str | None,
+        actor_email: str | None = None,
+        identity_role: str | None = None,
+        request_id: str = "identity-permission-context",
     ) -> tuple[frozenset[str], str]:
-        with self._engine.connect() as connection:
+        with self._engine.begin() as connection:
+            if identity_role is not None:
+                provision_missing_team_membership(
+                    connection,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    actor_id=actor_id,
+                    actor_email=actor_email,
+                    identity_role=identity_role,
+                    request_id=request_id,
+                )
             row = connection.execute(
                 text(
                     """
@@ -271,9 +292,7 @@ class _DynamicPermissionEngine:
         if not isinstance(assignment, list) or not all(isinstance(item, str) for item in assignment):
             raise _MembershipNotActive(f"{actor_id}:{project_id}")
         governance_permissions = {
-            permission
-            for permission in workspace_permissions
-            if permission.startswith("workspace.")
+            permission for permission in workspace_permissions if permission.startswith("workspace.")
         }
         return frozenset(assignment) | governance_permissions, role_id.upper()
 

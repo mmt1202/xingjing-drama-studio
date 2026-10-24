@@ -12,6 +12,7 @@ policy，装配天职是开会话时现场读 DB / 扫盘则允许 I/O 归本类
 
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from lib.agent_session_store import (
     session_store_mode,
 )
 from lib.agent_session_store.store import DbSessionStore
+from lib.config.env_keys import AGENT_SUBPROCESS_ENV_KEY, application_private_env_keys
 from lib.db.base import DEFAULT_USER_ID
 from lib.db.engine import async_session_factory as default_async_session_factory
 from lib.i18n import DEFAULT_LOCALE, LOCALE_LANGUAGE_MAP
@@ -260,7 +262,13 @@ class OptionsAssembler:
                 ],
             }
 
-        provider_env = await self.build_provider_env_overrides()
+        provider_env = dict(await self.build_provider_env_overrides())
+        # The SDK merges these overrides into the full parent environment.
+        # Blank private server configuration before either CLI or Bash inherits
+        # it, including on Windows where POSIX env-scrub wrapping is unavailable.
+        for name in application_private_env_keys((*os.environ, *provider_env)):
+            provider_env[name] = ""
+        provider_env[AGENT_SUBPROCESS_ENV_KEY] = "1"
         sandbox_typed = policy.build_sandbox_settings(project_cwd)
 
         # Windows 回退：sandbox 关闭时 Bash 系列被剥离出 allowed_tools，

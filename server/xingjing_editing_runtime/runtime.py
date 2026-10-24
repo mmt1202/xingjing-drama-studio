@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from inspect import isawaitable
 from pathlib import Path
@@ -34,6 +35,7 @@ from server.xingjing_editing import (
     TrackKind,
     Uuid7IdGenerator,
 )
+from server.xingjing_editing.render_service import FinalVersionSelectionService
 from server.xingjing_editing_http import create_editing_dependencies, create_editing_router
 from server.xingjing_editing_http.callback_auth import HmacRenderCallbackContextResolver
 from server.xingjing_editing_http.renderer import HttpRendererGateway
@@ -106,9 +108,7 @@ class GeneratedAssetMediaVersionCatalog:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
-    async def get_version(
-        self, *, tenant_id: str, workspace_id: str, version_id: str
-    ) -> SourceMediaVersion | None:
+    async def get_version(self, *, tenant_id: str, workspace_id: str, version_id: str) -> SourceMediaVersion | None:
         async with self._session_factory() as session:
             asset = await session.scalar(
                 select(GeneratedAssetRow)
@@ -142,61 +142,69 @@ class GeneratedAssetMediaVersionCatalog:
                 )
         async with self._session_factory() as session:
             row = (
-                await session.execute(
-                    select(
-                        audio_tracks.c.id.label("track_id"),
-                        audio_tracks.c.project_id,
-                        audio_tracks.c.track_kind,
-                        audio_track_versions.c.id.label("version_id"),
-                        audio_track_versions.c.object_key,
-                        audio_track_versions.c.object_sha256,
-                        audio_track_versions.c.cue_payload,
-                    )
-                    .join(
-                        audio_track_versions,
-                        (audio_track_versions.c.track_id == audio_tracks.c.id)
-                        & (audio_track_versions.c.tenant_id == audio_tracks.c.tenant_id)
-                        & (audio_track_versions.c.workspace_id == audio_tracks.c.workspace_id)
-                        & (audio_track_versions.c.project_id == audio_tracks.c.project_id)
-                        & (audio_track_versions.c.revision == audio_tracks.c.current_revision),
-                    )
-                    .where(
-                        audio_track_versions.c.id == version_id,
-                        audio_tracks.c.tenant_id == tenant_id,
-                        audio_tracks.c.workspace_id == workspace_id,
-                        audio_tracks.c.state == "ready",
+                (
+                    await session.execute(
+                        select(
+                            audio_tracks.c.id.label("track_id"),
+                            audio_tracks.c.project_id,
+                            audio_tracks.c.track_kind,
+                            audio_track_versions.c.id.label("version_id"),
+                            audio_track_versions.c.object_key,
+                            audio_track_versions.c.object_sha256,
+                            audio_track_versions.c.cue_payload,
+                        )
+                        .join(
+                            audio_track_versions,
+                            (audio_track_versions.c.track_id == audio_tracks.c.id)
+                            & (audio_track_versions.c.tenant_id == audio_tracks.c.tenant_id)
+                            & (audio_track_versions.c.workspace_id == audio_tracks.c.workspace_id)
+                            & (audio_track_versions.c.project_id == audio_tracks.c.project_id)
+                            & (audio_track_versions.c.revision == audio_tracks.c.current_revision),
+                        )
+                        .where(
+                            audio_track_versions.c.id == version_id,
+                            audio_tracks.c.tenant_id == tenant_id,
+                            audio_tracks.c.workspace_id == workspace_id,
+                            audio_tracks.c.state == "ready",
+                        )
                     )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         if row is not None:
             return self._audio_source(row, tenant_id=tenant_id, workspace_id=workspace_id)
         async with self._session_factory() as session:
             subtitle_row = (
-                await session.execute(
-                    select(
-                        subtitle_tracks.c.id.label("track_id"),
-                        subtitle_tracks.c.project_id,
-                        subtitle_track_versions.c.id.label("version_id"),
-                        subtitle_track_versions.c.object_key,
-                        subtitle_track_versions.c.object_sha256,
-                        subtitle_track_versions.c.cues,
-                    )
-                    .join(
-                        subtitle_track_versions,
-                        (subtitle_track_versions.c.track_id == subtitle_tracks.c.id)
-                        & (subtitle_track_versions.c.tenant_id == subtitle_tracks.c.tenant_id)
-                        & (subtitle_track_versions.c.workspace_id == subtitle_tracks.c.workspace_id)
-                        & (subtitle_track_versions.c.project_id == subtitle_tracks.c.project_id)
-                        & (subtitle_track_versions.c.revision == subtitle_tracks.c.current_revision),
-                    )
-                    .where(
-                        subtitle_track_versions.c.id == version_id,
-                        subtitle_tracks.c.tenant_id == tenant_id,
-                        subtitle_tracks.c.workspace_id == workspace_id,
-                        subtitle_tracks.c.state == "ready",
+                (
+                    await session.execute(
+                        select(
+                            subtitle_tracks.c.id.label("track_id"),
+                            subtitle_tracks.c.project_id,
+                            subtitle_track_versions.c.id.label("version_id"),
+                            subtitle_track_versions.c.object_key,
+                            subtitle_track_versions.c.object_sha256,
+                            subtitle_track_versions.c.cues,
+                        )
+                        .join(
+                            subtitle_track_versions,
+                            (subtitle_track_versions.c.track_id == subtitle_tracks.c.id)
+                            & (subtitle_track_versions.c.tenant_id == subtitle_tracks.c.tenant_id)
+                            & (subtitle_track_versions.c.workspace_id == subtitle_tracks.c.workspace_id)
+                            & (subtitle_track_versions.c.project_id == subtitle_tracks.c.project_id)
+                            & (subtitle_track_versions.c.revision == subtitle_tracks.c.current_revision),
+                        )
+                        .where(
+                            subtitle_track_versions.c.id == version_id,
+                            subtitle_tracks.c.tenant_id == tenant_id,
+                            subtitle_tracks.c.workspace_id == workspace_id,
+                            subtitle_tracks.c.state == "ready",
+                        )
                     )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         return (
             None
             if subtitle_row is None
@@ -214,41 +222,47 @@ class GeneratedAssetMediaVersionCatalog:
     ) -> tuple[SourceMediaVersion, ...]:
         async with self._session_factory() as session:
             assets = (
-                await session.execute(
-                    select(GeneratedAssetRow)
-                    .join(
-                        ProjectRow,
-                        (ProjectRow.id == GeneratedAssetRow.project_id)
-                        & (ProjectRow.workspace_id == GeneratedAssetRow.workspace_id),
+                (
+                    await session.execute(
+                        select(GeneratedAssetRow)
+                        .join(
+                            ProjectRow,
+                            (ProjectRow.id == GeneratedAssetRow.project_id)
+                            & (ProjectRow.workspace_id == GeneratedAssetRow.workspace_id),
+                        )
+                        .where(
+                            GeneratedAssetRow.workspace_id == workspace_id,
+                            GeneratedAssetRow.project_id == project_id,
+                            GeneratedAssetRow.media_type == "video",
+                            ProjectRow.tenant_id == tenant_id,
+                            ProjectRow.deleted_at.is_(None),
+                        )
+                        .order_by(GeneratedAssetRow.created_at.desc(), GeneratedAssetRow.asset_id.asc())
+                        .offset(offset)
+                        .limit(limit)
                     )
-                    .where(
-                        GeneratedAssetRow.workspace_id == workspace_id,
-                        GeneratedAssetRow.project_id == project_id,
-                        GeneratedAssetRow.media_type == "video",
-                        ProjectRow.tenant_id == tenant_id,
-                        ProjectRow.deleted_at.is_(None),
-                    )
-                    .order_by(GeneratedAssetRow.created_at.desc(), GeneratedAssetRow.asset_id.asc())
-                    .offset(offset)
-                    .limit(limit)
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         results: list[SourceMediaVersion] = []
         for asset in assets:
             raw_duration = asset.artifact_metadata.get("duration_ms")
             if not isinstance(raw_duration, int) or isinstance(raw_duration, bool) or raw_duration <= 0:
                 continue
-            results.append(SourceMediaVersion(
-                asset_id=asset.asset_id,
-                version_id=asset.asset_id,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                owner_project_id=asset.project_id,
-                content_sha256=asset.content_sha256,
-                duration_ms=raw_duration,
-                object_key=asset.object_key,
-                media_kind=TrackKind.VIDEO,
-            ))
+            results.append(
+                SourceMediaVersion(
+                    asset_id=asset.asset_id,
+                    version_id=asset.asset_id,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    owner_project_id=asset.project_id,
+                    content_sha256=asset.content_sha256,
+                    duration_ms=raw_duration,
+                    object_key=asset.object_key,
+                    media_kind=TrackKind.VIDEO,
+                )
+            )
         async with self._session_factory() as session:
             audio_rows = (
                 await session.execute(
@@ -367,11 +381,7 @@ class GeneratedAssetMediaVersionCatalog:
         object_key = row["object_key"]
         content_sha256 = row["object_sha256"]
         cues = row["cues"]
-        if (
-            not isinstance(object_key, str)
-            or not isinstance(content_sha256, str)
-            or not isinstance(cues, list)
-        ):
+        if not isinstance(object_key, str) or not isinstance(content_sha256, str) or not isinstance(cues, list):
             return None
         ends: list[int] = []
         for cue in cues:
@@ -405,12 +415,13 @@ class EditingRuntime:
         session_factory: async_sessionmaker[AsyncSession],
         context_resolver: TrustedContextResolver,
         engine: AsyncEngine,
-        renderer_url: str,
-        renderer_token: str,
         object_storage_root: Path,
-        callback_secret: str,
-        billing_policy: EditingRenderBillingPolicy,
+        renderer_url: str | None = None,
+        renderer_token: str | None = None,
+        callback_secret: str | None = None,
+        billing_policy: EditingRenderBillingPolicy | None = None,
         timeout_sweep_interval_seconds: int = 30,
+        render_unavailable_code: str = "EDITING_RENDER_SERVICE_NOT_CONFIGURED",
     ) -> None:
         self._session_factory = session_factory
         self._context_resolver = context_resolver
@@ -421,16 +432,23 @@ class EditingRuntime:
         audit = SqlAlchemyAuditRecorder(session_factory)
         self._media_catalog = GeneratedAssetMediaVersionCatalog(session_factory)
         storage = LocalRenderObjectStorage(root=object_storage_root, media_probe=FFprobeRenderMediaProbe())
-        renderer = HttpRendererGateway(base_url=renderer_url, service_token=renderer_token)
-        render_service = RenderService(
+        selection_service = FinalVersionSelectionService(
             repository=render_repository,
-            renderer=renderer,
-            object_storage=storage,
             audit=audit,
             ids=ids,
             clock=_UtcClock(),
-            billing_policy=billing_policy,
         )
+        render_service = None
+        if renderer_url and renderer_token and callback_secret and billing_policy is not None:
+            render_service = RenderService(
+                repository=render_repository,
+                renderer=HttpRendererGateway(base_url=renderer_url, service_token=renderer_token),
+                object_storage=storage,
+                audit=audit,
+                ids=ids,
+                clock=_UtcClock(),
+                billing_policy=billing_policy,
+            )
         self._render_repository = render_repository
         self._render_service = render_service
         self._timeout_sweep_interval_seconds = timeout_sweep_interval_seconds
@@ -447,21 +465,27 @@ class EditingRuntime:
             render_repository=render_repository,
             audit_reader=audit,
             access_context_resolver=self.access_context,
-            callback_context_resolver=HmacRenderCallbackContextResolver(secret=callback_secret),
+            callback_context_resolver=HmacRenderCallbackContextResolver(
+                secret=callback_secret if render_service is not None and callback_secret else ""
+            ),
             project_scope_authorizer=self.authorize_project,
             render_input_validator=self.validate_render_input,
+            final_selection_service=selection_service,
+            render_unavailable_code=render_unavailable_code,
         )
 
     def router(self) -> APIRouter:
         return create_editing_router(self._dependencies)
 
     async def start(self) -> None:
-        if self._timeout_sweeper is None:
+        if self._render_service is not None and self._timeout_sweeper is None:
             self._timeout_sweeper = asyncio.create_task(
                 self._run_timeout_sweeper(), name="xingjing-m08-timeout-sweeper"
             )
 
     async def expire_overdue_tasks(self) -> int:
+        if self._render_service is None:
+            return 0
         tasks = await self._render_repository.list_overdue_render_tasks(at=datetime.now(UTC))
         expired = 0
         for task in tasks:
@@ -581,7 +605,7 @@ def create_production_editing_runtime(
     billing_minor_per_megapixel_second: int | None = None,
     timeout_sweep_interval_seconds: int | None = None,
 ) -> EditingRuntime:
-    """Build M08 exclusively from real database, renderer, storage, and identity dependencies."""
+    """Build persistent editing independently of separately configured render execution."""
 
     url = _required(
         database_url or os.environ.get("XINGJING_EDITING_DATABASE_URL"),
@@ -589,6 +613,66 @@ def create_production_editing_runtime(
     )
     if "+aiosqlite" not in url and "+asyncpg" not in url:
         raise EditingRuntimeConfigurationError("XINGJING_EDITING_DATABASE_URL_MUST_BE_ASYNC")
+    root = Path(
+        _required(
+            object_storage_root or os.environ.get("XINGJING_EDITING_OBJECT_STORAGE_ROOT"),
+            "XINGJING_EDITING_OBJECT_STORAGE_ROOT_REQUIRED",
+        )
+    ).expanduser()
+    if not root.is_dir():
+        raise EditingRuntimeConfigurationError("XINGJING_EDITING_OBJECT_STORAGE_ROOT_INVALID")
+    render_unavailable_code = "EDITING_RENDER_SERVICE_NOT_CONFIGURED"
+    try:
+        rendering = _render_configuration(
+            renderer_url=renderer_url,
+            renderer_token=renderer_token,
+            callback_secret=callback_secret,
+            billing_currency=billing_currency,
+            billing_pricing_version=billing_pricing_version,
+            billing_minor_per_megapixel_second=billing_minor_per_megapixel_second,
+            timeout_sweep_interval_seconds=timeout_sweep_interval_seconds,
+        )
+    except EditingRuntimeConfigurationError as error:
+        rendering = None
+        render_unavailable_code = str(error)
+        logger.warning("External rendering unavailable: %s", render_unavailable_code)
+    try:
+        engine = create_async_engine(url, pool_pre_ping=True)
+    except (ModuleNotFoundError, SQLAlchemyError, ValueError) as error:
+        raise EditingRuntimeConfigurationError("EDITING_DATABASE_UNAVAILABLE") from error
+    return EditingRuntime(
+        session_factory=async_sessionmaker(engine, expire_on_commit=False),
+        context_resolver=context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway()),
+        engine=engine,
+        object_storage_root=root,
+        renderer_url=rendering.renderer_url if rendering else None,
+        renderer_token=rendering.renderer_token if rendering else None,
+        callback_secret=rendering.callback_secret if rendering else None,
+        billing_policy=rendering.billing_policy if rendering else None,
+        timeout_sweep_interval_seconds=rendering.sweep_interval_seconds if rendering else 30,
+        render_unavailable_code=render_unavailable_code,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _RenderConfiguration:
+    renderer_url: str
+    renderer_token: str
+    callback_secret: str
+    billing_policy: EditingRenderBillingPolicy
+    sweep_interval_seconds: int
+
+
+def _render_configuration(
+    *,
+    renderer_url: str | None,
+    renderer_token: str | None,
+    callback_secret: str | None,
+    billing_currency: str | None,
+    billing_pricing_version: str | None,
+    billing_minor_per_megapixel_second: int | None,
+    timeout_sweep_interval_seconds: int | None,
+) -> _RenderConfiguration:
     configured_renderer_url = _required(
         renderer_url or os.environ.get("XINGJING_EDITING_RENDERER_URL"), "XINGJING_EDITING_RENDERER_URL_REQUIRED"
     )
@@ -609,13 +693,13 @@ def create_production_editing_runtime(
             configured_sweep_interval = int(os.environ.get("XINGJING_EDITING_TIMEOUT_SWEEP_SECONDS", "30"))
         except ValueError as error:
             raise EditingRuntimeConfigurationError("XINGJING_EDITING_TIMEOUT_SWEEP_SECONDS_INVALID") from error
-    if not 5 <= configured_sweep_interval <= 3600:
+    if isinstance(configured_sweep_interval, bool) or not 5 <= configured_sweep_interval <= 3600:
         raise EditingRuntimeConfigurationError("XINGJING_EDITING_TIMEOUT_SWEEP_SECONDS_INVALID")
     configured_currency = _required(
         billing_currency or os.environ.get("XINGJING_EDITING_BILLING_CURRENCY"),
         "XINGJING_EDITING_BILLING_CURRENCY_REQUIRED",
     ).upper()
-    if len(configured_currency) != 3:
+    if len(configured_currency) != 3 or not configured_currency.isascii() or not configured_currency.isalpha():
         raise EditingRuntimeConfigurationError("XINGJING_EDITING_BILLING_CURRENCY_INVALID")
     configured_pricing_version = _required(
         billing_pricing_version or os.environ.get("XINGJING_EDITING_BILLING_PRICING_VERSION"),
@@ -627,34 +711,18 @@ def create_production_editing_runtime(
             raw_rate = int(os.environ.get("XINGJING_EDITING_BILLING_MINOR_PER_MEGAPIXEL_SECOND", ""))
         except ValueError as error:
             raise EditingRuntimeConfigurationError("XINGJING_EDITING_BILLING_RATE_INVALID") from error
-    if raw_rate <= 0:
+    if isinstance(raw_rate, bool) or raw_rate <= 0:
         raise EditingRuntimeConfigurationError("XINGJING_EDITING_BILLING_RATE_INVALID")
-    root = Path(
-        _required(
-            object_storage_root or os.environ.get("XINGJING_EDITING_OBJECT_STORAGE_ROOT"),
-            "XINGJING_EDITING_OBJECT_STORAGE_ROOT_REQUIRED",
-        )
-    ).expanduser()
-    if not root.is_dir():
-        raise EditingRuntimeConfigurationError("XINGJING_EDITING_OBJECT_STORAGE_ROOT_INVALID")
-    try:
-        engine = create_async_engine(url, pool_pre_ping=True)
-    except (ModuleNotFoundError, SQLAlchemyError, ValueError) as error:
-        raise EditingRuntimeConfigurationError("EDITING_DATABASE_UNAVAILABLE") from error
-    return EditingRuntime(
-        session_factory=async_sessionmaker(engine, expire_on_commit=False),
-        context_resolver=context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway()),
-        engine=engine,
+    return _RenderConfiguration(
         renderer_url=configured_renderer_url,
         renderer_token=configured_renderer_token,
-        object_storage_root=root,
         callback_secret=configured_callback_secret,
         billing_policy=EditingRenderBillingPolicy(
             currency=configured_currency,
             pricing_version=configured_pricing_version,
             minor_per_megapixel_second=raw_rate,
         ),
-        timeout_sweep_interval_seconds=configured_sweep_interval,
+        sweep_interval_seconds=configured_sweep_interval,
     )
 
 

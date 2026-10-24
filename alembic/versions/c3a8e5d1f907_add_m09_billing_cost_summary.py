@@ -19,15 +19,18 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "xingjing_compliance_billing_settlements",
-        sa.Column(
-            "cost_summary",
-            postgresql.JSONB(astext_type=sa.Text()),
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
-    )
+    table = "xingjing_compliance_billing_settlements"
+    existing = {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table)}
+    if "cost_summary" not in existing:
+        op.add_column(
+            table,
+            sa.Column(
+                "cost_summary",
+                postgresql.JSONB(astext_type=sa.Text()),
+                nullable=False,
+                server_default=sa.text("'[]'::jsonb"),
+            ),
+        )
     op.alter_column("xingjing_compliance_billing_settlements", "cost_summary", server_default=None)
 
 

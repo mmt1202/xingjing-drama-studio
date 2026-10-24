@@ -265,7 +265,26 @@ cd ..
 
 On PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
 
-### 2. Initialize the compatibility development database
+### 2. Start the complete local platform
+
+The workspace entry requires the Java identity service and PostgreSQL. Open Docker Desktop, configure `infra/compose/.env` (copy the example in that directory when needed), then run from the repository root:
+
+```powershell
+uv run python scripts/local_platform.py start
+```
+
+The launcher starts infrastructure, builds the Java 21 service, runs Flyway followed by Alembic, and starts FastAPI and React. Open `http://127.0.0.1:5173` and register an account. It does not install sample accounts, orders, balances, or generated media. An occupied service port stops startup with an actionable error instead of terminating another process.
+
+```powershell
+uv run python scripts/local_platform.py status
+uv run python scripts/local_platform.py stop
+```
+
+Connection settings, storage paths and stable local secrets are stored in the Git-ignored `.env.local`; explicit process variables and `.env` take precedence. Stop only terminates application processes owned by this launcher and preserves Docker and its volumes. External generation, payments and rendering remain unavailable without their actual dependencies; reads and local editing are independent. See [Local platform startup](docs/local-platform.md).
+
+### 3. Run individual development components
+
+The following commands support individual components and do not replace the complete platform startup above. Identity and workspace pages still require a running Java service and the shared database configuration.
 
 ```bash
 uv run alembic upgrade head
@@ -273,7 +292,7 @@ uv run alembic upgrade head
 
 The default compatibility development mode uses SQLite. Xingjing platform domains such as multitenancy, billing, client review, and compliance require their corresponding PostgreSQL URLs. See [`.env.example`](.env.example) for variables and fail-closed behavior.
 
-### 3. Start the FastAPI backend
+#### FastAPI backend
 
 ```bash
 uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
@@ -281,7 +300,7 @@ uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --po
 
 Keep the `--reload-dir` limits. Without them, the file watcher scans large trees such as `node_modules`, `.venv`, and `.git`.
 
-### 4. Start the React frontend
+#### React frontend
 
 In another terminal:
 
@@ -292,7 +311,7 @@ pnpm dev
 
 Open `http://localhost:5173`. Vite proxies `/api` to `http://127.0.0.1:1241`.
 
-### 5. Start platform infrastructure and the Java service (optional)
+#### Start infrastructure and Java manually
 
 Start PostgreSQL, RabbitMQ, and MinIO:
 
@@ -310,7 +329,7 @@ $env:DATABASE_PASSWORD = "xingjing-local"
 .\gradlew.bat :platform-services:platform-app:bootRun
 ```
 
-The platform service listens on `http://localhost:8080` by default. On POSIX, use `./gradlew` and provide the same database environment variables.
+The platform service listens on `http://localhost:8080` by default. On POSIX, use `./gradlew` and provide the same database environment variables. Manual startup must distinguish the Java JDBC URL from Python SQLAlchemy URLs, keep them on the same physical database, and migrate identity tables first. The local launcher handles this ordering.
 
 ### Configuration notes
 

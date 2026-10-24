@@ -5,6 +5,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+AGENT_SUBPROCESS_ENV_KEY = "ARCREEL_AGENT_SUBPROCESS"
+APPLICATION_PRIVATE_ENV_PREFIXES: tuple[str, ...] = ("AUTH_", "DATABASE_", "XINGJING_", "PLATFORM_")
+
+
+def application_private_env_keys(names: Iterable[str]) -> tuple[str, ...]:
+    """Identify server-only configuration that must not enter creative Agent processes."""
+    return tuple(sorted({name for name in names if name.upper().startswith(APPLICATION_PRIVATE_ENV_PREFIXES)}))
+
+
 # —— SDK 子进程需要的 Anthropic env keys（通过 options.env 注入）——
 ANTHROPIC_ENV_KEYS: tuple[str, ...] = (
     "ANTHROPIC_API_KEY",

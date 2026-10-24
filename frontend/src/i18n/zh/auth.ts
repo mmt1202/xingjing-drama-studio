@@ -4,6 +4,7 @@ export default {
   'login': '登录',
   'logging_in': '登录中...',
   'login_failed': '登录失败',
+  'workspace_context_failed': '身份已验证，但未能确认工作区，请重试登录。',
   'username': '用户名',
   'password': '密码',
 } satisfies Record<keyof typeof enAuth, string>;

@@ -8,6 +8,7 @@ from fastapi import Request
 
 from server.xingjing_editing import AccessContext, RenderService, TimelineService
 from server.xingjing_editing.ports import AuditReader, RenderRepository
+from server.xingjing_editing.render_service import FinalVersionSelectionService
 
 AccessContextResolver = Callable[[Request], AccessContext | Awaitable[AccessContext]]
 ProjectScopeAuthorizer = Callable[[Request, str], bool | Awaitable[bool]]
@@ -24,6 +25,8 @@ class EditingDependencies:
     callback_context_resolver: AccessContextResolver
     project_scope_authorizer: ProjectScopeAuthorizer | None = None
     render_input_validator: RenderInputValidator | None = None
+    final_selection_service: FinalVersionSelectionService | None = None
+    render_unavailable_code: str = "EDITING_RENDER_SERVICE_NOT_CONFIGURED"
 
     async def access_context(self, request: Request) -> AccessContext:
         context = self.access_context_resolver(request)
@@ -39,8 +42,13 @@ class EditingDependencies:
 
     def require_render_service(self) -> RenderService:
         if self.render_service is None:
-            raise RuntimeError("EDITING_RENDER_SERVICE_NOT_CONFIGURED")
+            raise RuntimeError(self.render_unavailable_code)
         return self.render_service
+
+    def require_final_selection_service(self) -> FinalVersionSelectionService | RenderService:
+        if self.final_selection_service is not None:
+            return self.final_selection_service
+        return self.require_render_service()
 
     def require_render_repository(self) -> RenderRepository:
         if self.render_repository is None:
@@ -81,6 +89,8 @@ def create_editing_dependencies(
     callback_context_resolver: AccessContextResolver | None = None,
     project_scope_authorizer: ProjectScopeAuthorizer | None = None,
     render_input_validator: RenderInputValidator | None = None,
+    final_selection_service: FinalVersionSelectionService | None = None,
+    render_unavailable_code: str = "EDITING_RENDER_SERVICE_NOT_CONFIGURED",
 ) -> EditingDependencies:
     return EditingDependencies(
         timeline_service=timeline_service,
@@ -91,6 +101,8 @@ def create_editing_dependencies(
         callback_context_resolver=callback_context_resolver or access_context_resolver,
         project_scope_authorizer=project_scope_authorizer,
         render_input_validator=render_input_validator,
+        final_selection_service=final_selection_service,
+        render_unavailable_code=render_unavailable_code,
     )
 
 

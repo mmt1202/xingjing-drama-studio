@@ -1,8 +1,8 @@
 """M10 团队治理的同步 PostgreSQL 生产组合。
 
-本模块不挂载 HTTP 路由、不创建 schema，也不会初始化工作区、成员或角色。
-每次调用都以 Java 平台会话解析的租户、工作区、操作者和权限构造新的、严格
-工作区范围的 ``SqlAlchemyTeamRepository``。
+本模块不挂载 HTTP 路由、不创建 schema。仅从 Java 平台会话初始化缺失的
+团队成员投影，保留已有角色、权限和停用状态；每次调用都构造严格工作区
+范围的 ``SqlAlchemyTeamRepository``。
 """
 
 from __future__ import annotations
@@ -19,14 +19,13 @@ from uuid import uuid4
 
 from fastapi import Request
 from sqlalchemy import case, create_engine, func, select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from server.xingjing_billing_persistence.models import TeamPlanRow
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContext
-from server.xingjing_identity_context.permissions import DEFAULT_ROLE_PERMISSIONS
+from server.xingjing_identity_context.provisioning import provision_missing_team_membership
 from server.xingjing_platform_persistence.persistence import ProjectRow, TaskRow
 from server.xingjing_team import (
     Actor,
@@ -154,7 +153,7 @@ class JavaTeamTrustedContextResolver:
 
 
 class TeamRuntime:
-    """M10 的未来 HTTP 调用边界；所有写入均委托已迁移的持久化适配器。"""
+    """M10 的 HTTP 调用边界；所有写入均委托已迁移的持久化适配器。"""
 
     def __init__(
         self, *, session_factory: SessionFactory, context_resolver: TeamContextResolver, engine: Engine
@@ -473,59 +472,17 @@ class TeamRuntime:
         idempotent and never trusts client-supplied tenant, workspace, actor or
         role values.
         """
-        role_permissions = {role_id: sorted(permissions) for role_id, permissions in DEFAULT_ROLE_PERMISSIONS.items()}
-        current_role = context.trusted.role.casefold()
-        if current_role not in role_permissions:
-            current_role = "member"
         try:
             with self._session_factory() as session, session.begin():
-                session.execute(
-                    pg_insert(WorkspaceRow)
-                    .values(
-                        tenant_id=context.trusted.tenant_id,
-                        workspace_id=context.trusted.workspace_id,
-                        seat_limit=max(int(os.environ.get("XINGJING_DEFAULT_TEAM_SEATS", "5")), 1),
-                        permission_version=1,
-                    )
-                    .on_conflict_do_nothing()
+                provision_missing_team_membership(
+                    session,
+                    tenant_id=context.trusted.tenant_id,
+                    workspace_id=context.trusted.workspace_id,
+                    actor_id=context.trusted.actor_id,
+                    actor_email=context.trusted.actor_email,
+                    identity_role=context.trusted.role,
+                    request_id=context.trusted.request_id,
                 )
-                for role_id, permissions in role_permissions.items():
-                    session.execute(
-                        pg_insert(RoleRow)
-                        .values(
-                            tenant_id=context.trusted.tenant_id,
-                            workspace_id=context.trusted.workspace_id,
-                            role_id=role_id,
-                            name=role_id.title(),
-                            permissions=permissions,
-                            version=1,
-                        )
-                        .on_conflict_do_nothing()
-                    )
-                if context.trusted.actor_email:
-                    session.execute(
-                        pg_insert(MemberRow)
-                        .values(
-                            tenant_id=context.trusted.tenant_id,
-                            workspace_id=context.trusted.workspace_id,
-                            member_id=context.trusted.actor_id,
-                            email=context.trusted.actor_email,
-                            role_id=current_role,
-                            active=True,
-                        )
-                        .on_conflict_do_update(
-                            index_elements=[
-                                MemberRow.tenant_id,
-                                MemberRow.workspace_id,
-                                MemberRow.member_id,
-                            ],
-                            set_={
-                                "email": context.trusted.actor_email,
-                                "role_id": current_role,
-                                "active": True,
-                            },
-                        )
-                    )
         except (SQLAlchemyError, ValueError) as error:
             raise TeamRuntimeConfigurationError("TEAM_IDENTITY_PROJECTION_UNAVAILABLE") from error
 
@@ -555,7 +512,10 @@ class TeamRuntime:
                     )
                     .order_by(MemberRow.member_id)
                 ).all()
-                return tuple(TeamMember(row.member_id, row.workspace_id, row.email, row.role_id, row.active, row.version) for row in rows)
+                return tuple(
+                    TeamMember(row.member_id, row.workspace_id, row.email, row.role_id, row.active, row.version)
+                    for row in rows
+                )
         except SQLAlchemyError as error:
             raise TeamRuntimeConfigurationError("TEAM_MEMBER_READ_UNAVAILABLE") from error
 
@@ -595,16 +555,19 @@ class TeamRuntime:
                 if role is None:
                     raise NotFound("role not found")
                 current_permissions = frozenset(role.permissions)
-                active_members = session.scalar(
-                    select(func.count())
-                    .select_from(MemberRow)
-                    .where(
-                        MemberRow.tenant_id == context.trusted.tenant_id,
-                        MemberRow.workspace_id == context.trusted.workspace_id,
-                        MemberRow.role_id == role_id,
-                        MemberRow.active.is_(True),
+                active_members = (
+                    session.scalar(
+                        select(func.count())
+                        .select_from(MemberRow)
+                        .where(
+                            MemberRow.tenant_id == context.trusted.tenant_id,
+                            MemberRow.workspace_id == context.trusted.workspace_id,
+                            MemberRow.role_id == role_id,
+                            MemberRow.active.is_(True),
+                        )
                     )
-                ) or 0
+                    or 0
+                )
                 project_assignments = session.execute(
                     text(
                         """
@@ -715,15 +678,18 @@ class TeamRuntime:
                         RoleRow.workspace_id == context.trusted.workspace_id,
                     )
                 ).all()
-                project_count = session.scalar(
-                    select(func.count())
-                    .select_from(ProjectRow)
-                    .where(
-                        ProjectRow.tenant_id == context.trusted.tenant_id,
-                        ProjectRow.workspace_id == context.trusted.workspace_id,
-                        ProjectRow.deleted_at.is_(None),
+                project_count = (
+                    session.scalar(
+                        select(func.count())
+                        .select_from(ProjectRow)
+                        .where(
+                            ProjectRow.tenant_id == context.trusted.tenant_id,
+                            ProjectRow.workspace_id == context.trusted.workspace_id,
+                            ProjectRow.deleted_at.is_(None),
+                        )
                     )
-                ) or 0
+                    or 0
+                )
                 task_counts = {
                     str(status): int(count)
                     for status, count in session.execute(
@@ -778,9 +744,7 @@ class TeamRuntime:
         except SQLAlchemyError as error:
             raise TeamRuntimeConfigurationError("TEAM_OVERVIEW_READ_UNAVAILABLE") from error
 
-    def _member_performance_sync(
-        self, context: TeamRequestContext, days: int
-    ) -> tuple[dict[str, object], ...]:
+    def _member_performance_sync(self, context: TeamRequestContext, days: int) -> tuple[dict[str, object], ...]:
         """Aggregate attributable workflow work without inventing unavailable cost/review facts."""
         since = datetime.now(UTC) - timedelta(days=days)
         terminal = ("succeeded", "completed", "failed", "cancelled", "timed_out")

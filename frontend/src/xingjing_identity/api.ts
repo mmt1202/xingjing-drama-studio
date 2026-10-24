@@ -52,6 +52,27 @@ export function createMemoryTokenStore(initial: SessionTokens | null = null): To
   return { get: () => value, set: (tokens) => { value = tokens; }, clear: () => { value = null; } };
 }
 
+function validSessionContext(value: SessionContext): boolean {
+  return Boolean(value && typeof value.user?.id === "string" && value.user.id.trim()
+    && Array.isArray(value.workspaces) && value.workspaces.every((workspace) => typeof workspace?.id === "string" && workspace.id.trim())
+    && (value.currentWorkspace === null || typeof value.currentWorkspace?.id === "string"
+      && value.workspaces.some((workspace) => workspace.id === value.currentWorkspace?.id)));
+}
+
+/** A selected workspace is accepted only after a fresh identity read confirms it. */
+export async function resolveLoginContext(client: IdentityClient): Promise<SessionContext> {
+  const initial = await client.getSessionContext();
+  if (!validSessionContext(initial)) throw new ApiError({ status: 502, code: "SESSION_CONTEXT_INVALID", message: "SESSION_CONTEXT_INVALID", retryable: true });
+  if (initial.currentWorkspace || initial.workspaces.length !== 1) return initial;
+  const requestedId = initial.workspaces[0].id;
+  await client.selectWorkspace(requestedId);
+  const confirmed = await client.getSessionContext();
+  if (!validSessionContext(confirmed) || confirmed.user.id !== initial.user.id || confirmed.currentWorkspace?.id !== requestedId) {
+    throw new ApiError({ status: 409, code: "WORKSPACE_SELECTION_NOT_CONFIRMED", message: "WORKSPACE_SELECTION_NOT_CONFIRMED", retryable: true });
+  }
+  return confirmed;
+}
+
 interface ClientOptions {
   fetcher?: typeof fetch;
   tokenStore: TokenStore;

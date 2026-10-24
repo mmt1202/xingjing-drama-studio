@@ -363,10 +363,11 @@ class AgentAccessPolicy:
         Bash 命令都重扫。测试需要切环境时调
         ``cls._collect_env_keys_to_scrub.cache_clear()``。
         """
-        from lib.config.env_keys import ANTHROPIC_ENV_KEYS, OTHER_PROVIDER_ENV_KEYS
+        from lib.config.env_keys import ANTHROPIC_ENV_KEYS, OTHER_PROVIDER_ENV_KEYS, application_private_env_keys
 
         keys: set[str] = set(ANTHROPIC_ENV_KEYS)
         keys.update(OTHER_PROVIDER_ENV_KEYS)
+        keys.update(application_private_env_keys(os.environ))
         for name in os.environ:
             upper = name.upper()
             if any(pat in upper for pat in cls._SECRET_ENV_NAME_PATTERNS):

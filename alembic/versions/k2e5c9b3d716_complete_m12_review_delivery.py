@@ -20,16 +20,29 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     if op.get_bind().dialect.name != "postgresql":
         raise RuntimeError("M12 review persistence requires PostgreSQL")
-    op.add_column("xingjing_review_sessions", sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("xingjing_review_sessions", sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True))
+    _add_column_if_missing(
+        "xingjing_review_sessions", sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True)
+    )
+    _add_column_if_missing(
+        "xingjing_review_sessions", sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True)
+    )
     op.execute("UPDATE xingjing_review_sessions SET last_seen_at = created_at WHERE last_seen_at IS NULL")
     op.alter_column("xingjing_review_sessions", "last_seen_at", nullable=False)
-    op.add_column("xingjing_review_comments", sa.Column("parent_comment_id", sa.String(128), nullable=True))
-    op.add_column("xingjing_review_links", sa.Column("watermark_text", sa.String(255), nullable=True))
-    op.create_foreign_key(
-        "fk_xj_review_comment_parent", "xingjing_review_comments", "xingjing_review_comments",
-        ["tenant_id", "workspace_id", "parent_comment_id"], ["tenant_id", "workspace_id", "id"], ondelete="RESTRICT",
-    )
+    _add_column_if_missing("xingjing_review_comments", sa.Column("parent_comment_id", sa.String(128), nullable=True))
+    _add_column_if_missing("xingjing_review_links", sa.Column("watermark_text", sa.String(255), nullable=True))
+    inspector = sa.inspect(op.get_bind())
+    foreign_keys = {item["name"] for item in inspector.get_foreign_keys("xingjing_review_comments")}
+    if "fk_xj_review_comment_parent" not in foreign_keys:
+        op.create_foreign_key(
+            "fk_xj_review_comment_parent",
+            "xingjing_review_comments",
+            "xingjing_review_comments",
+            ["tenant_id", "workspace_id", "parent_comment_id"],
+            ["tenant_id", "workspace_id", "id"],
+            ondelete="RESTRICT",
+        )
+    if inspector.has_table("xingjing_review_screenshots"):
+        return
     op.create_table(
         "xingjing_review_screenshots",
         sa.Column("tenant_id", sa.String(128), primary_key=True),
@@ -53,6 +66,12 @@ def upgrade() -> None:
         sa.CheckConstraint("size_bytes > 0", name="ck_xj_review_screenshot_size"),
         sa.CheckConstraint("timecode_ms >= 0", name="ck_xj_review_screenshot_timecode"),
     )
+
+
+def _add_column_if_missing(table: str, column: sa.Column) -> None:
+    existing = {item["name"] for item in sa.inspect(op.get_bind()).get_columns(table)}
+    if column.name not in existing:
+        op.add_column(table, column)
 
 
 def downgrade() -> None:

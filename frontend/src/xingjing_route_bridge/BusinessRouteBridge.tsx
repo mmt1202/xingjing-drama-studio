@@ -314,6 +314,7 @@ function ProjectBusinessContent({
     case "audio":
       return (
         <GenerationAudioWorkspace
+          workspaceId={workspaceId}
           projectId={projectId}
           pageId={surface.pageId as AudioPageId}
           api={generationApi}

@@ -19,6 +19,8 @@ export default {
   'import': '导入',
   'upload': '上传',
   'loading': '加载中...',
+  'media_access_denied': '媒体访问凭据已过期或当前无权读取，请恢复会话后重试。',
+  'media_unavailable': '媒体暂时无法读取。',
   'error': '错误',
   'success': '成功',
   'unsaved': '未保存',

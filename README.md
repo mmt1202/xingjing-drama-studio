@@ -265,7 +265,26 @@ cd ..
 
 PowerShell 可使用 `Copy-Item .env.example .env` 代替 `cp`。
 
-### 2. 初始化兼容开发数据库
+### 2. 启动完整本地平台
+
+新工作区入口需要 Java 身份服务和 PostgreSQL。先打开 Docker Desktop，配置 `infra/compose/.env`（首次可从同目录 `.env.example` 复制），再在仓库根执行：
+
+```powershell
+uv run python scripts/local_platform.py start
+```
+
+工具依次启动基础设施、构建 Java 21 平台服务、执行 Flyway 与 Alembic，再启动 FastAPI 和 React。访问 `http://127.0.0.1:5173`，从注册页创建账号；不预置演示账号、订单、余额或生成产物。现有服务端口被其他进程占用时会停止启动并提示，不自动结束该进程。
+
+```powershell
+uv run python scripts/local_platform.py status
+uv run python scripts/local_platform.py stop
+```
+
+连接配置、存储目录与稳定本地密钥保存在被 Git 忽略的 `.env.local`，显式进程环境与 `.env` 优先。停止命令只处理本工具拥有的应用进程，Docker 和数据卷保留。模型、支付和外部渲染没有凭据时保持不可执行；数据读取和本地编辑可独立使用。详细说明见 [本地平台启动](docs/local-platform.md)。
+
+### 3. 单独运行兼容开发组件
+
+以下命令用于单独开发组件，不替代上述完整平台启动流程。新身份和工作区页面仍需要已经运行的 Java 服务及同库配置。
 
 ```bash
 uv run alembic upgrade head
@@ -273,7 +292,7 @@ uv run alembic upgrade head
 
 默认兼容开发模式使用 SQLite。需要星镜多租户、账务、审片、合规等平台领域时，应配置对应的 PostgreSQL URL；各变量和拒绝式降级行为见 [`.env.example`](.env.example)。
 
-### 3. 启动 FastAPI 后端
+#### FastAPI 后端
 
 ```bash
 uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
@@ -281,7 +300,7 @@ uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --po
 
 必须限定 `--reload-dir`，否则文件监视器会扫描 `node_modules`、`.venv`、`.git` 等大型目录。
 
-### 4. 启动 React 前端
+#### React 前端
 
 在另一个终端运行：
 
@@ -292,7 +311,7 @@ pnpm dev
 
 访问 `http://localhost:5173`。Vite 会把 `/api` 代理到 `http://127.0.0.1:1241`。
 
-### 5. 启动平台基础设施与 Java 服务（可选）
+#### 手动启动基础设施与 Java 服务
 
 先启动 PostgreSQL、RabbitMQ 和 MinIO：
 
@@ -310,7 +329,7 @@ $env:DATABASE_PASSWORD = "xingjing-local"
 .\gradlew.bat :platform-services:platform-app:bootRun
 ```
 
-平台服务默认监听 `http://localhost:8080`。POSIX 环境使用 `./gradlew`，并以同名环境变量传入数据库配置。
+平台服务默认监听 `http://localhost:8080`。POSIX 环境使用 `./gradlew`，并以同名环境变量传入数据库配置。手动方式必须自行区分 Java JDBC URL 和 Python SQLAlchemy URL，保持同一物理库，并先完成 Java 身份表迁移；推荐用本地启动工具避免遗漏。
 
 ### 配置说明
 

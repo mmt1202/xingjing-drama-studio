@@ -19,6 +19,8 @@ export default {
   'import': 'Nhập',
   'upload': 'Tải lên',
   'loading': 'Đang tải...',
+  'media_access_denied': 'Phiên truy cập phương tiện đã hết hạn hoặc không được phép. Hãy khôi phục phiên rồi thử lại.',
+  'media_unavailable': 'Hiện chưa thể tải phương tiện này.',
   'error': 'Lỗi',
   'success': 'Thành công',
   'unsaved': 'Chưa lưu',

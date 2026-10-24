@@ -19,16 +19,17 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "xingjing_editing_audit_events",
-        sa.Column("project_id", sa.String(length=128), nullable=True),
-    )
-    op.create_index(
-        "ix_xj_editing_audit_project_time",
-        "xingjing_editing_audit_events",
-        ["tenant_id", "workspace_id", "project_id", "occurred_at", "event_id"],
-    )
     bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    table = "xingjing_editing_audit_events"
+    if "project_id" not in {column["name"] for column in inspector.get_columns(table)}:
+        op.add_column(table, sa.Column("project_id", sa.String(length=128), nullable=True))
+    if "ix_xj_editing_audit_project_time" not in {index["name"] for index in inspector.get_indexes(table)}:
+        op.create_index(
+            "ix_xj_editing_audit_project_time",
+            table,
+            ["tenant_id", "workspace_id", "project_id", "occurred_at", "event_id"],
+        )
     EditingPersistenceBase.metadata.tables["xingjing_editing_render_billing_holds"].create(bind, checkfirst=True)
     EditingPersistenceBase.metadata.tables["xingjing_editing_render_billing_journals"].create(bind, checkfirst=True)
     EditingPersistenceBase.metadata.tables["xingjing_editing_final_video_selections"].create(bind, checkfirst=True)

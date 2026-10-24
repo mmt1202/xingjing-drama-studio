@@ -128,9 +128,11 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"code": "INVALID_PAGE"})
             await resolved.authorize_project(request, project_id)
             context = await resolved.access_context(request)
-            return list(await resolved.timeline_service.list_previews(
-                context, project_id=project_id, episode_id=episode_id, offset=offset, limit=limit
-            ))
+            return list(
+                await resolved.timeline_service.list_previews(
+                    context, project_id=project_id, episode_id=episode_id, offset=offset, limit=limit
+                )
+            )
         except EditingError as error:
             raise _http_error(error) from error
 
@@ -144,13 +146,16 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
             await resolved.authorize_project(request, project_id)
             context = await resolved.access_context(request)
             sources = await resolved.timeline_service.list_source_versions(context, project_id=project_id)
-            return [TimelineSourceSummary(
-                asset_id=source.asset_id,
-                version_id=source.version_id,
-                duration_ms=source.duration_ms,
-                content_sha256=source.content_sha256,
-                media_kind=source.media_kind.value,
-            ) for source in sources]
+            return [
+                TimelineSourceSummary(
+                    asset_id=source.asset_id,
+                    version_id=source.version_id,
+                    duration_ms=source.duration_ms,
+                    content_sha256=source.content_sha256,
+                    media_kind=source.media_kind.value,
+                )
+                for source in sources
+            ]
         except EditingError as error:
             raise _http_error(error) from error
 
@@ -185,9 +190,13 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
             await resolved.authorize_project(request, project_id)
             context = await resolved.access_context(request)
             timeline = await resolved.timeline_service.replace_clip(
-                context, body.to_command(project_id=project_id, timeline_id=timeline_id), idempotency_key=idempotency_key
+                context,
+                body.to_command(project_id=project_id, timeline_id=timeline_id),
+                idempotency_key=idempotency_key,
             )
-            return await resolved.timeline_service.get_preview(context, project_id=project_id, timeline_id=timeline.timeline_id)
+            return await resolved.timeline_service.get_preview(
+                context, project_id=project_id, timeline_id=timeline.timeline_id
+            )
         except EditingError as error:
             raise _http_error(error) from error
 
@@ -243,9 +252,7 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
         try:
             await resolved.authorize_project(request, project_id)
             context = await resolved.access_context(request)
-            return await resolved.timeline_service.get_timeline(
-                context, project_id=project_id, timeline_id=timeline_id
-            )
+            return await resolved.timeline_service.get_timeline(context, project_id=project_id, timeline_id=timeline_id)
         except EditingError as error:
             raise _http_error(error) from error
 
@@ -303,9 +310,11 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
     ) -> RenderTask:
         try:
             await resolved.authorize_project(request, project_id)
-            await resolved.validate_render_input(request, project_id, body.timeline_id, body.timeline_version_id)
             context = await resolved.access_context(request)
+            if resolved.render_service is None and Permission.FINAL_MANAGE not in context.permissions:
+                raise PermissionDenied()
             service = resolved.require_render_service()
+            await resolved.validate_render_input(request, project_id, body.timeline_id, body.timeline_version_id)
             task = await service.request_render(
                 context,
                 body.to_command(project_id=project_id),
@@ -460,7 +469,7 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
         try:
             await resolved.authorize_project(request, project_id)
             context = await resolved.access_context(request)
-            return await resolved.require_render_service().select_final_version(
+            return await resolved.require_final_selection_service().select_final_version(
                 context,
                 project_id=project_id,
                 final_video_id=final_video_id,
@@ -595,6 +604,8 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
                 task_id=task_id,
             )
             context = await resolved.access_context(request)
+            if resolved.render_service is None and Permission.FINAL_MANAGE not in context.permissions:
+                raise PermissionDenied()
             return await resolved.require_render_service().cancel_render(
                 context,
                 task_id=task_id,
@@ -653,6 +664,8 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
                 task_id=task_id,
             )
             context = await resolved.access_context(request)
+            if resolved.render_service is None and Permission.FINAL_MANAGE not in context.permissions:
+                raise PermissionDenied()
             service = resolved.require_render_service()
             task = await service.retry_render(
                 context,
@@ -686,7 +699,9 @@ def create_unavailable_editing_router(code: str) -> APIRouter:
         return JSONResponse(status_code=503, content={"detail": {"code": code}})
 
     unavailable_router.add_api_route("/projects/{project_id}/timelines/{timeline_id}", unavailable, methods=["GET"])
-    unavailable_router.add_api_route("/projects/{project_id}/timelines/{timeline_id}/snapshot", unavailable, methods=["GET"])
+    unavailable_router.add_api_route(
+        "/projects/{project_id}/timelines/{timeline_id}/snapshot", unavailable, methods=["GET"]
+    )
     unavailable_router.add_api_route(
         "/projects/{project_id}/timelines", unavailable, methods=["GET"], operation_id="unavailable_timelines_get"
     )
@@ -694,7 +709,9 @@ def create_unavailable_editing_router(code: str) -> APIRouter:
         "/projects/{project_id}/timelines", unavailable, methods=["POST"], operation_id="unavailable_timelines_post"
     )
     unavailable_router.add_api_route("/projects/{project_id}/timeline-sources", unavailable, methods=["GET"])
-    unavailable_router.add_api_route("/projects/{project_id}/timelines/{timeline_id}/clips/replace", unavailable, methods=["POST"])
+    unavailable_router.add_api_route(
+        "/projects/{project_id}/timelines/{timeline_id}/clips/replace", unavailable, methods=["POST"]
+    )
     unavailable_router.add_api_route(
         "/projects/{project_id}/timelines/{timeline_id}/clips/{clip_id}", unavailable, methods=["PUT"]
     )
@@ -707,19 +724,19 @@ def create_unavailable_editing_router(code: str) -> APIRouter:
     unavailable_router.add_api_route("/projects/{project_id}/render-tasks", unavailable, methods=["POST"])
     unavailable_router.add_api_route("/projects/{project_id}/render-tasks", unavailable, methods=["GET"])
     unavailable_router.add_api_route("/projects/{project_id}/render-tasks/{task_id}", unavailable, methods=["GET"])
-    unavailable_router.add_api_route("/projects/{project_id}/render-tasks/{task_id}/cancel", unavailable, methods=["POST"])
-    unavailable_router.add_api_route("/projects/{project_id}/render-tasks/{task_id}/retry", unavailable, methods=["POST"])
+    unavailable_router.add_api_route(
+        "/projects/{project_id}/render-tasks/{task_id}/cancel", unavailable, methods=["POST"]
+    )
+    unavailable_router.add_api_route(
+        "/projects/{project_id}/render-tasks/{task_id}/retry", unavailable, methods=["POST"]
+    )
     unavailable_router.add_api_route("/render-tasks/{task_id}/callbacks", unavailable, methods=["POST"])
     unavailable_router.add_api_route("/projects/{project_id}/final-video-versions", unavailable, methods=["GET"])
     unavailable_router.add_api_route(
         "/projects/{project_id}/final-video-versions/{version_id}", unavailable, methods=["GET"]
     )
-    unavailable_router.add_api_route(
-        "/projects/{project_id}/editing-audit-events", unavailable, methods=["GET"]
-    )
-    unavailable_router.add_api_route(
-        "/projects/{project_id}/final-delivery-snapshot", unavailable, methods=["GET"]
-    )
+    unavailable_router.add_api_route("/projects/{project_id}/editing-audit-events", unavailable, methods=["GET"])
+    unavailable_router.add_api_route("/projects/{project_id}/final-delivery-snapshot", unavailable, methods=["GET"])
     unavailable_router.add_api_route(
         "/projects/{project_id}/final-videos/{final_video_id}/selection",
         unavailable,

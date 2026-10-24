@@ -1,6 +1,6 @@
 """Alembic environment configuration.
 
-Supports async engines (aiosqlite / asyncpg) by using run_sync().
+Uses synchronous PostgreSQL DDL and async SQLite connections.
 The database URL is read from the DATABASE_URL environment variable via
 lib.db.engine.get_database_url(), falling back to SQLite in projects/.arcreel.db.
 """
@@ -8,7 +8,8 @@ lib.db.engine.get_database_url(), falling back to SQLite in projects/.arcreel.db
 import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import DateTime, String, pool
+from sqlalchemy import DateTime, String, create_engine, pool
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 import lib.agent_session_store.models  # noqa: F401  ensure tables registered
@@ -51,7 +52,7 @@ def _compare_type(context, inspected_column, metadata_column, inspected_type, me
     """Suppress VARCHAR ↔ DateTime drift on SQLite.
 
     We intentionally keep datetime columns as VARCHAR in SQLite DDL to avoid
-    Alembic batch_alter_table's CAST truncation bug (see b942e8c5d545).
+    Alembic batch_alter_table's CAST truncation behavior.
     SQLAlchemy handles str↔datetime conversion at the Python level.
     """
     if context.dialect.name == "sqlite":
@@ -88,6 +89,21 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
+    url = make_url(get_database_url())
+    if url.get_backend_name() == "postgresql":
+        from psycopg import ClientCursor
+
+        engine = create_engine(
+            url.set(drivername="postgresql+psycopg"),
+            poolclass=pool.NullPool,
+            connect_args={"cursor_factory": ClientCursor},
+        )
+        try:
+            with engine.connect() as connection:
+                do_run_migrations(connection)
+        finally:
+            engine.dispose()
+        return
     asyncio.run(run_async_migrations())
 
 

@@ -5,6 +5,7 @@ import { errMsg, voidPromise } from "@/utils/async";
 import { Link, useLocation, useSearch } from "wouter";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/auth-store";
+import { createIdentityClient, createMemoryTokenStore, resolveLoginContext, type SessionTokens } from "@/xingjing_identity/api";
 import { safeReturnPath } from "@/utils/safe-url";
 import { BRAND } from "@/branding";
 import { FieldLabel } from "@/components/ui/FieldLabel";
@@ -58,36 +59,18 @@ export function LoginPage() {
         throw new Error(data.error?.message ?? t("auth:login_failed"));
       }
 
-      const envelope = await resp.json() as { data: {
-        accessToken: string;
-        refreshToken: string;
-        accessExpiresAt: string;
-      } };
-      login(envelope.data.accessToken, username, envelope.data.refreshToken, envelope.data.accessExpiresAt);
-      const contextResponse = await fetch("/api/v1/session/context", {
-        headers: { Authorization: `Bearer ${envelope.data.accessToken}` },
-      });
-      if (contextResponse.ok) {
-        const contextEnvelope = await contextResponse.json() as { data: {
-          currentWorkspace: { id: string } | null;
-          workspaces: Array<{ id: string }>;
-        } };
-        if (!contextEnvelope.data.currentWorkspace && contextEnvelope.data.workspaces.length !== 1) {
-          sessionStorage.setItem("xingjing_workspace_return", safeReturnPath(new URLSearchParams(search).get("from")) ?? "/app/home");
-          setLocation("/workspace-select");
-          return;
-        }
-        if (!contextEnvelope.data.currentWorkspace && contextEnvelope.data.workspaces.length === 1) {
-          await fetch("/api/v1/session/context/workspace", {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${envelope.data.accessToken}`,
-              "Content-Type": "application/json",
-              "Idempotency-Key": crypto.randomUUID(),
-            },
-            body: JSON.stringify({ workspaceId: contextEnvelope.data.workspaces[0]?.id }),
-          });
-        }
+      const envelope = await resp.json() as { data?: SessionTokens };
+      const tokens = envelope.data;
+      if (!tokens || typeof tokens.accessToken !== "string" || !tokens.accessToken.trim()
+        || typeof tokens.refreshToken !== "string" || !tokens.refreshToken.trim()
+        || typeof tokens.accessExpiresAt !== "string") throw new Error(t("auth:login_failed"));
+      const client = createIdentityClient({ tokenStore: createMemoryTokenStore(tokens) });
+      const context = await resolveLoginContext(client).catch((cause: unknown) => { throw new Error(t("auth:workspace_context_failed"), { cause }); });
+      login(tokens.accessToken, username, tokens.refreshToken, tokens.accessExpiresAt);
+      if (!context.currentWorkspace) {
+        sessionStorage.setItem("xingjing_workspace_return", safeReturnPath(new URLSearchParams(search).get("from")) ?? "/app/home");
+        setLocation("/workspace-select");
+        return;
       }
       // 登录成功后回跳到进入登录页前的原始地址（由 AuthGuard / 401 拦截以 ?from 传入），
       // 经 safeReturnPath 校验为站内安全路径；非法或缺失时进入当前工作区主页。

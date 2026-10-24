@@ -29,15 +29,14 @@ def upgrade() -> None:
     )
     op.execute("""
       UPDATE xingjing_open_platform_commands command
-      SET tenant_id = audit.tenant_id, workspace_id = audit.workspace_id
-      FROM LATERAL (
+      SET (tenant_id, workspace_id) = (
         SELECT tenant_id, workspace_id
         FROM xingjing_open_platform_audit
         WHERE actor_id = command.actor_id
           AND occurred_at <= command.created_at
         ORDER BY occurred_at DESC, audit_id DESC
         LIMIT 1
-      ) audit
+      )
     """)
     op.execute("""
       DO $$ BEGIN

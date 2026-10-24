@@ -43,12 +43,15 @@ def upgrade() -> None:
         sa.UniqueConstraint("buyer_workspace_id", "fork_id", name="uq_xj_marketplace_purchase_fork"),
         sa.CheckConstraint("amount_minor >= 0", name="ck_xj_marketplace_purchase_amount"),
         sa.CheckConstraint("status IN ('settled', 'refunded')", name="ck_xj_marketplace_purchase_status"),
+        if_not_exists=True,
     )
-    op.create_index(
-        "ix_xj_marketplace_purchase_buyer_time",
-        "xingjing_marketplace_purchases",
-        ["buyer_workspace_id", "created_at", "id"],
-    )
+    indexes = {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("xingjing_marketplace_purchases")}
+    if "ix_xj_marketplace_purchase_buyer_time" not in indexes:
+        op.create_index(
+            "ix_xj_marketplace_purchase_buyer_time",
+            "xingjing_marketplace_purchases",
+            ["buyer_workspace_id", "created_at", "id"],
+        )
     op.execute("""
         CREATE OR REPLACE FUNCTION xingjing_marketplace_audit_immutable()
         RETURNS trigger AS $$ BEGIN

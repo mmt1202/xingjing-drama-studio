@@ -18,22 +18,15 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "xingjing_editing_render_tasks",
-        sa.Column("deadline_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    # Existing tasks predate the indexed deadline column. Using updated_at is
-    # deliberately conservative and portable: the sweeper immediately
-    # reconciles them instead of retaining stale billing holds indefinitely.
-    op.execute(
-        "UPDATE xingjing_editing_render_tasks SET deadline_at = updated_at WHERE deadline_at IS NULL"
-    )
+    inspector = sa.inspect(op.get_bind())
+    table = "xingjing_editing_render_tasks"
+    if "deadline_at" not in {column["name"] for column in inspector.get_columns(table)}:
+        op.add_column(table, sa.Column("deadline_at", sa.DateTime(timezone=True), nullable=True))
+    # Tasks without a deadline use updated_at so the sweeper can reconcile billing holds.
+    op.execute("UPDATE xingjing_editing_render_tasks SET deadline_at = updated_at WHERE deadline_at IS NULL")
     op.alter_column("xingjing_editing_render_tasks", "deadline_at", nullable=False)
-    op.create_index(
-        "ix_xj_editing_render_deadline",
-        "xingjing_editing_render_tasks",
-        ["status", "deadline_at", "task_id"],
-    )
+    if "ix_xj_editing_render_deadline" not in {index["name"] for index in inspector.get_indexes(table)}:
+        op.create_index("ix_xj_editing_render_deadline", table, ["status", "deadline_at", "task_id"])
 
 
 def downgrade() -> None:

@@ -19,24 +19,36 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
+    _add_column_if_missing(
         "xingjing_compliance_authorizations",
         sa.Column("evidence_object_key", sa.String(1024), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "xingjing_compliance_reviews",
         sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
     )
     op.alter_column("xingjing_compliance_reviews", "version", server_default=None)
-    CompliancePersistenceBase.metadata.tables["xingjing_compliance_audit_events"].create(
-        op.get_bind(), checkfirst=True
+    CompliancePersistenceBase.metadata.tables["xingjing_compliance_audit_events"].create(op.get_bind(), checkfirst=True)
+    _add_column_if_missing("xingjing_compliance_export_deliveries", sa.Column("status", sa.String(32), nullable=True))
+    _add_column_if_missing("xingjing_compliance_export_deliveries", sa.Column("format", sa.String(32), nullable=True))
+    _add_column_if_missing(
+        "xingjing_compliance_export_deliveries", sa.Column("object_key", sa.String(1024), nullable=True)
     )
-    op.add_column("xingjing_compliance_export_deliveries", sa.Column("status", sa.String(32), nullable=True))
-    op.add_column("xingjing_compliance_export_deliveries", sa.Column("format", sa.String(32), nullable=True))
-    op.add_column("xingjing_compliance_export_deliveries", sa.Column("object_key", sa.String(1024), nullable=True))
-    op.add_column("xingjing_compliance_export_deliveries", sa.Column("content_sha256", sa.String(71), nullable=True))
-    op.add_column("xingjing_compliance_export_deliveries", sa.Column("size_bytes", sa.Integer(), nullable=True))
-    op.add_column("xingjing_compliance_export_deliveries", sa.Column("download_path", sa.String(1024), nullable=True))
+    _add_column_if_missing(
+        "xingjing_compliance_export_deliveries", sa.Column("content_sha256", sa.String(71), nullable=True)
+    )
+    _add_column_if_missing(
+        "xingjing_compliance_export_deliveries", sa.Column("size_bytes", sa.Integer(), nullable=True)
+    )
+    _add_column_if_missing(
+        "xingjing_compliance_export_deliveries", sa.Column("download_path", sa.String(1024), nullable=True)
+    )
+
+
+def _add_column_if_missing(table: str, column: sa.Column) -> None:
+    existing = {item["name"] for item in sa.inspect(op.get_bind()).get_columns(table)}
+    if column.name not in existing:
+        op.add_column(table, column)
 
 
 def downgrade() -> None:
@@ -46,8 +58,6 @@ def downgrade() -> None:
     op.drop_column("xingjing_compliance_export_deliveries", "object_key")
     op.drop_column("xingjing_compliance_export_deliveries", "format")
     op.drop_column("xingjing_compliance_export_deliveries", "status")
-    CompliancePersistenceBase.metadata.tables["xingjing_compliance_audit_events"].drop(
-        op.get_bind(), checkfirst=True
-    )
+    CompliancePersistenceBase.metadata.tables["xingjing_compliance_audit_events"].drop(op.get_bind(), checkfirst=True)
     op.drop_column("xingjing_compliance_reviews", "version")
     op.drop_column("xingjing_compliance_authorizations", "evidence_object_key")

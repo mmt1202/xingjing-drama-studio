@@ -17,10 +17,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "xingjing_team_members",
-        sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
-    )
+    existing = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("xingjing_team_members")}
+    if "version" not in existing:
+        op.add_column(
+            "xingjing_team_members",
+            sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
+        )
     op.execute(
         """
         CREATE FUNCTION xingjing_team_member_version_guard() RETURNS trigger

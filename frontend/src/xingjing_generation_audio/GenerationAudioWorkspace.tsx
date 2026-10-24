@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AuthenticatedVideo } from "@/components/shared/AuthenticatedVideo";
 import { generationAudioApi, XingjingApiError } from "./api";
 import {
   createIdempotencyKey,
@@ -16,6 +17,7 @@ type ApiClient = typeof generationAudioApi;
 export type AudioPageId =
   "CR-007" | "CR-008" | "CR-056" | "CR-057" | "CR-058" | "CR-059" | "CR-105";
 export interface GenerationAudioWorkspaceProps {
+  workspaceId?: string;
   projectId: string;
   projectName?: string;
   api?: ApiClient;
@@ -123,6 +125,7 @@ function timestamp(value?: string) {
 }
 
 export function GenerationAudioWorkspace({
+  workspaceId,
   projectId,
   projectName,
   api = generationAudioApi,
@@ -973,18 +976,16 @@ export function GenerationAudioWorkspace({
                   <div>
                     <p className="mb-2 text-sm text-slate-300">原始视频</p>
                     {version.input_asset_id ? (
-                      <video
+                      <AuthenticatedVideo
                         className="w-full rounded bg-black"
-                        controls
                         muted
-                        preload="metadata"
-                        src={api.generatedAssetUrl(
+                        workspaceId={workspaceId}
+                        projectId={projectId}
+                        source={api.generatedAssetUrl(
                           projectId,
                           version.input_asset_id,
                         )}
-                      >
-                        浏览器不支持视频预览。
-                      </video>
+                      />
                     ) : (
                       <p className="text-sm text-amber-300">
                         原视频资产已不可用，无法预览。
@@ -994,18 +995,16 @@ export function GenerationAudioWorkspace({
                   <div>
                     <p className="mb-2 text-sm text-slate-300">对口型候选</p>
                     {version.output_video_key ? (
-                      <video
+                      <AuthenticatedVideo
                         className="w-full rounded bg-black"
-                        controls
                         muted
-                        preload="metadata"
-                        src={api.audioObjectUrl(
+                        workspaceId={workspaceId}
+                        projectId={projectId}
+                        source={api.audioObjectUrl(
                           projectId,
                           version.output_video_key,
                         )}
-                      >
-                        浏览器不支持视频预览。
-                      </video>
+                      />
                     ) : (
                       <p className="text-sm text-slate-400">
                         候选尚未完成，暂无视频。
