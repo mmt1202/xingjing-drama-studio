@@ -8,6 +8,7 @@ import { HomeApiError, type HomePage, type RecentProject, type WorkspaceTask } f
 import { HomePreferencesEditor, homePreferences } from "./HomePreferences";
 import { homeButton, homeField, useHomeTranslation } from "./i18n";
 import { StoryStarter } from "./StoryStarter";
+import { ProjectCard } from "./ProjectCard";
 import { useCreatorWorkspace } from "./WorkspaceFrame";
 import { readHomeReturn, restoreHomeScroll } from "./return-state";
 
@@ -58,8 +59,7 @@ export function CreatorHomePage() {
 
 function RecentProjects({ defaultDays, limit, target, onTarget, disabled }: { defaultDays: number; limit: number; target: string; onTarget: (value: string) => void; disabled: boolean }) {
   const { api, access, go } = useCreatorWorkspace();
-  const { t, i18n } = useHomeTranslation();
-  const { t: stageText } = useControlTranslation();
+  const { t } = useHomeTranslation();
   const [location, navigate] = useLocation();
   const search = useSearch();
   const params = new URLSearchParams(search);
@@ -94,7 +94,7 @@ function RecentProjects({ defaultDays, limit, target, onTarget, disabled }: { de
       <select aria-label={t("type")} className={homeField} value={params.get("projectType") ?? ""} disabled={disabled} onChange={(event) => filter({ projectType: event.target.value, offset: "0" })}>{[["", "all"], ["drama", "drama"], ["comic", "comic"], ["brand", "brandType"], ["adaptation", "adaptation"]].map(([type, label]) => <option key={type} value={type}>{t(label)}</option>)}</select>
     </form>
     {error ? <HomeError error={error} retry={() => setReload((value) => value + 1)} /> : waiting ? <p role="status" className="py-12 text-center text-sm text-slate-400">{t("loading")}</p> : page && <>
-      <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">{page.items.map((project) => <article key={project.id} className="group min-w-0 rounded-xl border border-white/10 bg-[#11141D] p-5 transition hover:border-orange-300/35"><div className="flex items-center justify-between gap-2 text-[11px] text-slate-500"><span className="flex items-center gap-2"><span className={`h-1.5 w-1.5 rounded-full ${project.setupState === "draft" ? "bg-slate-500" : project.productionStatus === "completed" ? "bg-emerald-400" : "bg-orange-300"}`} />{project.setupState === "draft" ? t("draft") : stageText(`status.${project.productionStatus}`, { defaultValue: project.productionStatus })}</span><span>{t(project.type === "brand" ? "brandType" : project.type, { defaultValue: project.type })}</span></div><h3 className="mt-4 truncate text-lg font-semibold" title={project.name}>{project.name}</h3><p className="mt-2 truncate font-mono text-[10px] text-slate-500" title={project.id}>{project.id} · {t("version", { version: project.version })}</p><div className="mt-6 flex flex-wrap items-center justify-between gap-3"><time dateTime={project.updatedAt} className="text-xs text-slate-500">{new Date(project.updatedAt).toLocaleString(i18n.resolvedLanguage)}</time><button disabled={project.setupState === "draft" && !access.permissions.includes("project.manage")} className="flex items-center gap-2 rounded text-xs text-orange-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:opacity-40" onClick={() => go(`projects/${encodeURIComponent(project.id)}/${project.setupState === "draft" ? "guided-create" : target}`)}>{t(project.setupState === "draft" ? "resume" : "open")}<ArrowRight size={13} /></button></div></article>)}</div>
+      <div className="xj-workspace-project-grid">{page.items.map((project) => <ProjectCard key={project.id} project={project} headingAs="h3" openLabel={t(project.setupState === "draft" ? "resume" : "open")} disabled={project.setupState === "draft" && !access.permissions.includes("project.manage")} onOpen={() => go(`projects/${encodeURIComponent(project.id)}/${project.setupState === "draft" ? "guided-create" : target}`)} />)}</div>
       {!page.items.length && <div className="rounded-xl border border-dashed border-white/15 p-8 text-center"><p className="text-slate-300">{t(!params.get("q")?.trim() && !params.get("state") && !params.get("projectType") && !Number(params.get("offset") ?? 0) && !Number(params.get("days") ?? defaultDays) ? "empty" : "noMatches")}</p><button className={homeButton + " mt-4"} onClick={() => filter({ q: "", state: "", projectType: "", offset: "0", days: "0" })}>{t("clear")}</button></div>}
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500"><span>{t("page", { total: page.total, page: Math.floor(page.offset / page.limit) + 1 })}</span><div className="flex gap-2"><button className={homeButton} disabled={disabled || page.offset === 0} onClick={() => filter({ offset: String(Math.max(0, page.offset - page.limit)) })}>{t("previous")}</button><button className={homeButton} disabled={disabled || page.offset + page.limit >= page.total} onClick={() => filter({ offset: String(page.offset + page.limit) })}>{t("next")}</button></div></div>
     </>}

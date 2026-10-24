@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowUpRight, BriefcaseBusiness, ChartNoAxesCombined, Clapperboard, FolderOpen, GitFork, House, Images, ListTodo, Menu, Plus, Search, Settings2, Users, Wallet, X } from "lucide-react";
+import { ArrowUpRight, BriefcaseBusiness, ChartNoAxesCombined, FolderOpen, GitFork, House, Images, ListTodo, Menu, Plus, Search, Settings2, Users, Wallet, X } from "lucide-react";
 import { useHomeTranslation } from "./i18n";
 import "./creator-shell.css";
 
@@ -17,8 +17,8 @@ const navigation = [
 ];
 
 /** Presentation only: the route controller owns scope, permissions and navigation guards. */
-export function CreatorShell({ active, title, compact = false, workspaceLabel, permissions = [], onNavigate, onWorkspace, children }: {
-  active: string; title?: string; compact?: boolean; workspaceLabel?: string; permissions?: string[];
+export function CreatorShell({ active, title, workspaceLabel, permissions = [], onNavigate, onWorkspace, children }: {
+  active: string; title?: string; workspaceLabel?: string; permissions?: string[];
   onNavigate: (path: string) => void; onWorkspace: () => void; children: ReactNode;
 }) {
   const { t } = useHomeTranslation();
@@ -31,11 +31,11 @@ export function CreatorShell({ active, title, compact = false, workspaceLabel, p
   }, [active, title, t]);
   const can = (permission: string) => permissions.includes(permission);
   const navigate = (path: string) => { onNavigate(path); setMenuOpen(false); };
-  return <div className={`xj-creator-shell ${compact ? "xj-creator-shell--compact" : ""}`}>
+  return <div className="xj-creator-shell">
     <aside id="creator-navigation" className={`xj-creator-sidebar ${menuOpen ? "is-open" : ""}`}>
       <button className="xj-creator-brand" title={t("brand")} aria-label={t("brand")} onClick={() => navigate("home")}>
-        <span className="xj-creator-brand-mark"><Clapperboard size={21} aria-hidden="true" /></span>
-        <span className="xj-creator-brand-copy"><small>{t("studioDesk")}</small><strong>{t("subtitle")}</strong></span>
+        <img className="xj-creator-brand-mark" src="/xingjing-mark.svg" alt="" aria-hidden="true" width="40" height="40" />
+        <span className="xj-creator-brand-copy"><strong>{t("brand")}</strong><small>{t("subtitle")}</small></span>
       </button>
       <p className="xj-creator-nav-label">{t("navigation")}</p>
       <nav aria-label={t("navigation")} className="xj-creator-nav">
@@ -51,7 +51,7 @@ export function CreatorShell({ active, title, compact = false, workspaceLabel, p
     <div className="xj-creator-body">
       <header className="xj-creator-topbar">
         <button className="xj-shell-button xj-creator-menu" aria-label={t(menuOpen ? "closeNavigation" : "openNavigation")} aria-expanded={menuOpen} aria-controls="creator-navigation" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X size={18} /> : <Menu size={18} />}</button>
-        <div className="xj-creator-heading">{compact ? <><strong>{t("brand")}</strong><span>{t("subtitle")}</span></> : <><span className="xj-creator-context">{title ?? t(active)}</span><span className="xj-creator-heading-detail" title={workspaceLabel}>{workspaceLabel ?? t("subtitle")}</span></>}</div>
+        <div className="xj-creator-heading"><span className="xj-creator-context">{title ?? t(active)}</span><span className="xj-creator-heading-detail" title={workspaceLabel}>{workspaceLabel ?? t("subtitle")}</span></div>
         <form className="xj-creator-search" role="search" onSubmit={(event) => { event.preventDefault(); navigate(`home?q=${encodeURIComponent(query.trim())}&days=0&offset=0`); }}>
           <Search size={16} aria-hidden="true" /><input aria-label={t("search")} placeholder={t("search")} value={query} maxLength={255} onChange={(event) => setQuery(event.target.value)} disabled={!can("project.view")} /><button type="submit" className="sr-only" disabled={!can("project.view")}>{t("searchAction")}</button>
         </form>

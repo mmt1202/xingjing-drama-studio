@@ -59,7 +59,7 @@ function WorkspaceFrameContent({ workspaceId, token, active, children }: { works
     {Boolean(error) && <div className="flex gap-3"><button className={homeButton} onClick={() => setReload((value) => value + 1)}>{t("retry")}</button><Link className={homeButton} href="/workspace-select">{t("workspace")}</Link></div>}
   </main>;
   return <Context.Provider value={{ access, api, token, base, go, register }}>
-    <CreatorShell active={active} compact={active === "home"} workspaceLabel={access.workspaceName} permissions={access.permissions} onNavigate={go} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
+    <CreatorShell active={active} workspaceLabel={access.workspaceName} permissions={access.permissions} onNavigate={go} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
       {blocked && <p role="status" className="border-b border-amber-300/20 bg-amber-300/5 px-6 py-3 text-sm text-amber-200">{t("unsaved")}</p>}{children}
     </CreatorShell>
   </Context.Provider>;
