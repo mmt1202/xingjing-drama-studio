@@ -128,6 +128,28 @@ class SqlAlchemyContentAiRequestRepository:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
+    def completed_result(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        project_id: str,
+        action: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> dict[str, object] | None:
+        with self._session_factory() as session:
+            row = session.get(ContentAiRequestRow, (tenant_id, workspace_id, project_id, idempotency_key))
+            if row is None:
+                return None
+            if row.action != action or row.request_fingerprint != request_fingerprint:
+                raise ValueError("IDEMPOTENCY_KEY_REUSED")
+            if row.status != "succeeded":
+                return None
+            if row.result_payload is None:
+                raise ValueError("CONTENT_AI_RESULT_MISSING")
+            return dict(row.result_payload)
+
     def claim(
         self,
         *,
@@ -428,7 +450,8 @@ class SqlAlchemyContentRepository:
                 updated, result = operation(documents)
                 document = self._result_document(updated, result, workspace_id)
                 before = prior_documents.get(document.script_id)
-                self._persist_document(session, document, before)
+                if document != before:
+                    self._persist_document(session, document, before)
                 session.add(
                     IdempotencyRow(
                         workspace_id=workspace_id,
@@ -437,7 +460,8 @@ class SqlAlchemyContentRepository:
                         script_id=document.script_id,
                     )
                 )
-                session.add(self._audit_row(document, before, idempotency_key))
+                if document != before:
+                    session.add(self._audit_row(document, before, idempotency_key))
                 return result
         except IntegrityError as error:
             replayed = self._replay(workspace_id, idempotency_key, fingerprint)
@@ -816,11 +840,11 @@ class SqlAlchemyContentRepository:
             action = "content.script.imported"
         elif before.locked_version_number != document.locked_version_number:
             action = "content.script.frozen"
-        elif before.director_profile != document.director_profile:
-            action = "content.director_profile.updated"
         elif len(before.versions) < len(document.versions):
             summary = document.current_version.change_summary
             action = "content.script.ai_analyzed" if summary == "AI 结构化解析" else "content.script.revised"
+        elif before.director_profile != document.director_profile:
+            action = "content.director_profile.updated"
         else:
             action = context.action
         return ContentAuditRow(

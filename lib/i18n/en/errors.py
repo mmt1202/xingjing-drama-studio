@@ -1,4 +1,9 @@
 MESSAGES = {
+    "content_ai_legacy_result_requires_new_operation": "This earlier result contains analysis only, without a structured screenplay. Start a new adaptation explicitly; the existing result is preserved.",
+    "content_ai_input_too_large": "This text exceeds the single adaptation limit. Select an episode or chapter in the working copy first; the original source is preserved.",
+    "script_ai_structure_invalid": "The AI screenplay lacks valid scenes or paragraphs. It was not saved. Please retry.",
+    "script_prefix_content_unparsed": "Unstructured text remains before the first scene. Adapt it into scenes and paragraphs first.",
+    "script_paragraph_text_required": "Screenplay paragraphs must contain text.",
     "project_not_found": "Project '{name}' does not exist or is not initialized",
     "resource_not_found": "The requested resource does not exist",
     "overview_ai_response_invalid": "The AI response could not be parsed into a project overview. Please retry or switch to a different model/provider",

@@ -1,4 +1,9 @@
 MESSAGES = {
+    "content_ai_legacy_result_requires_new_operation": "Kết quả cũ chỉ có phân tích, chưa có kịch bản cấu trúc. Hãy chủ động tạo thao tác chuyển thể mới; kết quả cũ vẫn được giữ.",
+    "content_ai_input_too_large": "Văn bản vượt giới hạn chuyển thể một lần. Hãy chọn nội dung tập hoặc chương trong bản làm việc; nguyên văn vẫn được giữ.",
+    "script_ai_structure_invalid": "Kịch bản AI thiếu cảnh hoặc đoạn hợp lệ. Kết quả chưa được lưu. Vui lòng thử lại.",
+    "script_prefix_content_unparsed": "Còn văn bản chưa cấu trúc trước cảnh đầu tiên. Hãy chuyển thành cảnh và đoạn trước.",
+    "script_paragraph_text_required": "Đoạn kịch bản phải có nội dung.",
     "project_not_found": "Dự án '{name}' không tồn tại hoặc chưa được khởi tạo",
     "resource_not_found": "Tài nguyên được yêu cầu không tồn tại",
     "overview_ai_response_invalid": "Không thể phân tích phản hồi của AI thành tổng quan dự án, vui lòng thử lại hoặc đổi mô hình/nhà cung cấp",

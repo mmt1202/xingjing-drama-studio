@@ -29,6 +29,7 @@ class _SceneBuilder:
 def parse_script(content: str, *, version_number: int, change_summary: str) -> ScriptVersion:
     scenes: list[_SceneBuilder] = []
     mappings: list[SourceMapping] = []
+    prefix_content = False
     offset = 0
     for raw_line in content.splitlines(keepends=True):
         line = raw_line.rstrip("\r\n")
@@ -52,6 +53,8 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
             )
             continue
         if not scenes:
+            if not re.match(r"^#{1,6}\s+\S", stripped):
+                prefix_content = True
             continue
         speech_match = _SPEECH.match(stripped)
         speaker: str | None = None
@@ -59,8 +62,11 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
         kind: Literal["action", "dialogue", "narration"] = "action"
         if speech_match:
             label, text = speech_match.groups()
-            if label == "旁白":
+            label = label.strip()
+            if label.casefold() in {"旁白", "narration"}:
                 kind = "narration"
+            elif label.casefold() in {"动作", "action"}:
+                kind = "action"
             else:
                 kind = "dialogue"
                 speaker = label
@@ -80,19 +86,24 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
     issues: list[ValidationIssue] = []
     if not scenes:
         issues.append(ValidationIssue("SCENE_HEADING_REQUIRED", "scenes", "至少需要一个场景标题"))
+    if prefix_content:
+        issues.append(
+            ValidationIssue(
+                "SCRIPT_PREFIX_CONTENT_UNPARSED", "sourceContent", "首场景前仍有未结构化正文，请先改编为场景与段落"
+            )
+        )
     for index, scene in enumerate(scenes):
         if not scene.paragraphs:
             issues.append(ValidationIssue("SCENE_CONTENT_REQUIRED", f"scenes.{index}.paragraphs", "场景内容不能为空"))
+        for paragraph in scene.paragraphs:
+            if not paragraph.text.strip():
+                issues.append(ValidationIssue("PARAGRAPH_TEXT_REQUIRED", paragraph.paragraph_id, "段落正文不能为空"))
     character_counts: dict[str, int] = {}
     for scene in scenes:
         for paragraph in scene.paragraphs:
             if paragraph.speaker:
                 character_counts[paragraph.speaker] = character_counts.get(paragraph.speaker, 0) + 1
-    dialogue_count = sum(
-        paragraph.kind == "dialogue"
-        for scene in scenes
-        for paragraph in scene.paragraphs
-    )
+    dialogue_count = sum(paragraph.kind == "dialogue" for scene in scenes for paragraph in scene.paragraphs)
     estimated_duration_ms = sum(
         max(1_000, min(15_000, len(paragraph.text) * (180 if paragraph.kind == "dialogue" else 120)))
         for scene in scenes
@@ -108,8 +119,7 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
         estimated_episode_count=max(1, (estimated_duration_ms + 89_999) // 90_000),
         sensitive_terms=tuple(term for term in _SENSITIVE_TERMS if term in content),
         characters=tuple(
-            CharacterInsight(name=name, appearances=count)
-            for name, count in sorted(character_counts.items())
+            CharacterInsight(name=name, appearances=count) for name, count in sorted(character_counts.items())
         ),
         locations=tuple(dict.fromkeys(scene.heading.location for scene in scenes)),
     )

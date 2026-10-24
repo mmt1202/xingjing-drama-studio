@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, cast
 
@@ -97,6 +98,16 @@ class ScriptVersion:
     change_summary: str
     analysis: ContentAnalysis = field(default_factory=ContentAnalysis)
 
+    @property
+    def source_preamble(self) -> str:
+        headings = []
+        for line in self.source_content.splitlines():
+            if re.match(r"^(?:#{1,6}\s*)?场景[：:]", line.strip()):
+                break
+            if re.match(r"^#{1,6}\s+\S", line.strip()):
+                headings.append(line.strip())
+        return "\n".join(headings)
+
 
 @dataclass(frozen=True, slots=True)
 class DirectorProfile:
@@ -126,6 +137,20 @@ class ScriptDocument:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def mapping_projection(self, version: ScriptVersion) -> dict[str, Any]:
+        """Internal parser offsets refer to version text, never inferred novel anchors."""
+        exact_source = version.source_content == self.source_document.content
+        mappings = [asdict(mapping) for mapping in version.source_mappings]
+        return {
+            "script_mappings": mappings,
+            "script_mapping_coordinate_system": "script_version",
+            "source_mappings": mappings if exact_source else [],
+            "source_mapping_coordinate_system": "original_source" if exact_source else "unmapped",
+            "unmapped_paragraph_ids": []
+            if exact_source
+            else [paragraph.paragraph_id for scene in version.scenes for paragraph in scene.paragraphs],
+        }
+
     def downstream_snapshot(self) -> dict[str, Any]:
         if self.locked_version_number is None:
             raise ValueError("SCRIPT_NOT_FROZEN")
@@ -146,7 +171,8 @@ class ScriptDocument:
             "characters": characters,
             "locations": [scene.heading.location for scene in version.scenes],
             "scenes": [asdict(scene) for scene in version.scenes],
-            "source_mappings": [asdict(mapping) for mapping in version.source_mappings],
+            **self.mapping_projection(version),
+            "source_preamble": version.source_preamble,
             "director_profile": asdict(self.director_profile),
         }
 
@@ -319,7 +345,5 @@ def _analysis_from_dict(data: dict[str, object]) -> ContentAnalysis:
             for item in _list(data.get("story_beats", []))
             for item_data in [_dict(item)]
         ),
-        episode_suggestions=tuple(
-            _string(item) for item in _list(data.get("episode_suggestions", []))
-        ),
+        episode_suggestions=tuple(_string(item) for item in _list(data.get("episode_suggestions", []))),
     )

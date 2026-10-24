@@ -1,4 +1,9 @@
 MESSAGES = {
+    "content_ai_legacy_result_requires_new_operation": "此历史解析结果只有分析指标，没有结构化剧本文本。请明确发起新的改编操作，原有结果不会被覆盖。",
+    "content_ai_input_too_large": "本次处理的文本超过单次改编上限，请先在工作副本中选取本集或章节内容；原始全文会保留。",
+    "script_ai_structure_invalid": "AI 返回的剧本缺少有效场景或段落，未保存该结果，请重试。",
+    "script_prefix_content_unparsed": "首场景前仍有未结构化正文，请先将其改编为场景与段落。",
+    "script_paragraph_text_required": "剧本段落正文不能为空。",
     "project_not_found": "项目 '{name}' 不存在或未初始化",
     "resource_not_found": "请求的资源不存在",
     "overview_ai_response_invalid": "AI 返回内容无法解析为项目概述，请重试或更换模型/供应商",

@@ -54,6 +54,7 @@ class ApplyAnalysisCommand:
     expected_revision: int
     idempotency_key: str
     analysis: ContentAnalysis
+    content: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +103,12 @@ class ContentService:
                 version_number=script.current_version.number + 1,
                 change_summary=command.change_summary,
             )
-            revised = replace(script, revision=script.revision + 1, versions=(*script.versions, version))
+            revised = replace(
+                script,
+                revision=script.revision + 1,
+                versions=(*script.versions, version),
+                director_profile=DirectorProfile(),
+            )
             scripts[script.script_id] = revised
             return scripts, revised
 
@@ -160,14 +166,22 @@ class ContentService:
                 number=current.current_version.number + 1,
                 change_summary=f"restore:{source_version_number}; {reason.strip()}",
             )
-            restored = replace(current, revision=current.revision + 1, versions=(*current.versions, restored_version))
+            restored = replace(
+                current,
+                revision=current.revision + 1,
+                versions=(*current.versions, restored_version),
+                director_profile=DirectorProfile(),
+            )
             scripts[script_id] = restored
             return scripts, restored
 
         return self._transact(workspace_id, idempotency_key, fingerprint, restore)
 
     def apply_analysis(self, command: ApplyAnalysisCommand) -> ScriptDocument:
-        fingerprint = _fingerprint(command)
+        values = asdict(command)
+        if command.content is None:
+            values.pop("content")
+        fingerprint = _fingerprint(values)
 
         def update(scripts: dict[str, ScriptDocument]) -> tuple[dict[str, ScriptDocument], ScriptDocument]:
             script = _owned_script(scripts, command.script_id, command.workspace_id)
@@ -176,15 +190,18 @@ class ContentService:
             if script.locked_version_number is not None:
                 raise ValueError("SCRIPT_FROZEN")
             parsed = parse_script(
-                script.current_version.source_content,
+                command.content if command.content is not None else script.current_version.source_content,
                 version_number=script.current_version.number + 1,
                 change_summary="AI 结构化解析",
             )
+            if parsed.validation_errors:
+                raise ValueError("SCRIPT_AI_STRUCTURE_INVALID")
             analyzed = replace(parsed, analysis=command.analysis)
             revised = replace(
                 script,
                 revision=script.revision + 1,
                 versions=(*script.versions, analyzed),
+                director_profile=DirectorProfile(),
             )
             scripts[script.script_id] = revised
             return scripts, revised
@@ -258,6 +275,8 @@ class ContentService:
             script = _owned_script(scripts, script_id, workspace_id)
             if script.revision != expected_revision:
                 raise ContentConflict("VERSION_CONFLICT")
+            if script.locked_version_number is not None:
+                return scripts, script
             if script.current_version.validation_errors:
                 raise ValueError("SCRIPT_VALIDATION_FAILED")
             frozen = replace(

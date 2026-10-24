@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
 import { createProjectControlApi } from "@/xingjing_creator_projects/control-api";
-import { ProjectFlowShell } from "@/xingjing_creator_projects/ProjectFlowShell";
+import { ProjectFlowShell, useOptionalProjectFlow } from "@/xingjing_creator_projects/ProjectFlowShell";
 import { Redirect, useLocation, useSearch } from "wouter";
 import { CreatorWorkspaceFrame } from "@/xingjing_creator_home/WorkspaceFrame";
 import { CreatorHomePage, WorkspaceTasks } from "@/xingjing_creator_home/CreatorHomePage";
@@ -210,6 +210,7 @@ function ProjectBusinessContent({
 }) {
   const [, navigate] = useLocation();
   const search = useSearch();
+  const projectFlow = useOptionalProjectFlow();
   const surface = resolveProjectSurface(slug, itemId);
   const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const creatorApi = useMemo(
@@ -257,6 +258,15 @@ function ProjectBusinessContent({
     if (nextProjectId === projectId && episode && !query.has("episodeId")) query.set("episodeId", episode);
     navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(nextProjectId)}/${path}${query.size ? `?${query}` : ""}`);
   };
+  const scriptPageProps = {
+    api: creatorApi,
+    projectId,
+    selectedScriptId: complianceQuery.get("scriptId") ?? undefined,
+    onNavigate: (target: string) => {
+      if (projectFlow) projectFlow.go(target);
+      else go(target);
+    },
+  };
 
   if (slug === "collaboration") return <CollaborationBusinessContent workspaceId={workspaceId} projectId={projectId} pageId={itemId ?? "CR-085"} />;
   if (!surface) return <MissingSurface />;
@@ -283,24 +293,24 @@ function ProjectBusinessContent({
     case "episodes":
       return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} initialEpisodeId={complianceQuery.has("episodeId") ? Number(complianceQuery.get("episodeId")) : undefined} mode={surface.mode} onNavigate={go} />;
     case "script-import":
-      return <ScriptImportPage api={creatorApi} projectId={projectId} />;
+      return <ScriptImportPage {...scriptPageProps} />;
     case "ai-director":
-      return <AiDirectorPage api={creatorApi} projectId={projectId} />;
+      return <AiDirectorPage {...scriptPageProps} />;
     case "director-assets":
-      return <DirectorAssetsPage api={creatorApi} projectId={projectId} />;
+      return <DirectorAssetsPage {...scriptPageProps} />;
     case "script-checkup":
-      return <ScriptCheckupPage api={creatorApi} projectId={projectId} />;
+      return <ScriptCheckupPage {...scriptPageProps} />;
     case "script-lab":
-      return <ScriptLabPage api={creatorApi} projectId={projectId} />;
+      return <ScriptLabPage {...scriptPageProps} />;
     case "source":
-      return <OriginalSourcePage api={creatorApi} projectId={projectId} />;
+      return <OriginalSourcePage {...scriptPageProps} />;
     case "source-mapping":
-      return <SourceMappingPage api={creatorApi} projectId={projectId} />;
+      return <SourceMappingPage {...scriptPageProps} />;
     case "rewrite":
-      return <AiRewritePage api={creatorApi} projectId={projectId} />;
+      return <AiRewritePage {...scriptPageProps} />;
     case "script-versions":
       return (
-        <ScriptVersionComparePage api={creatorApi} projectId={projectId} />
+        <ScriptVersionComparePage {...scriptPageProps} />
       );
     case "generation":
       return (

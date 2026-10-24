@@ -358,6 +358,16 @@ class VersionReader:
                 fact = provenance.get(row.number)
                 if fact is not None and fact[2] != row.source_content:
                     fact = None
+                script_mappings = [
+                    {
+                        "target_id": mapping.target_id,
+                        "source_start": mapping.source_start,
+                        "source_end": mapping.source_end,
+                    }
+                    for mapping in mappings
+                    if mapping.version_number == row.number
+                ]
+                original_matches = row.source_content == head.source_content
                 content = {
                     "sourceContent": row.source_content,
                     "analysis": row.analysis,
@@ -383,15 +393,13 @@ class VersionReader:
                         for scene in scenes
                         if scene.version_number == row.number
                     ],
-                    "sourceMappings": [
-                        {
-                            "target_id": mapping.target_id,
-                            "source_start": mapping.source_start,
-                            "source_end": mapping.source_end,
-                        }
-                        for mapping in mappings
-                        if mapping.version_number == row.number
-                    ],
+                    "scriptMappings": script_mappings,
+                    "scriptMappingCoordinateSystem": "script_version",
+                    "sourceMappings": script_mappings if original_matches else [],
+                    "sourceMappingCoordinateSystem": "original_source" if original_matches else "unmapped",
+                    "unmappedParagraphIds": []
+                    if original_matches
+                    else [paragraph.paragraph_id for paragraph in paragraphs if paragraph.version_number == row.number],
                 }
                 ref = {"kind": "script", "objectId": head.script_id, "versionId": str(row.number)}
                 node = self._node(

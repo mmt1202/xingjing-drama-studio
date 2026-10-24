@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
 
+from lib.i18n import get_translator
 from server.xingjing_content import (
     ApplyAnalysisCommand,
     ContentConflict,
@@ -20,6 +21,7 @@ from server.xingjing_content import (
     ReviseScriptCommand,
     SetDirectorProfileCommand,
 )
+from server.xingjing_content.ai import MAX_AI_INPUT_CHARS, AnalyzedScript, ContentAiInputTooLarge
 from server.xingjing_content.ingest import extract_script_text
 from server.xingjing_content.models import ScriptDocument, ScriptVersion
 from server.xingjing_identity_context import TrustedWorkspaceContext
@@ -60,6 +62,8 @@ class ContentContractRoute(APIRoute):
                 raw_code = detail.get("code")
                 code = raw_code if isinstance(raw_code, str) else "REQUEST_REJECTED"
                 return _error_response(request, code, error.status_code)
+            except ContentAiInputTooLarge as error:
+                return _error_response(request, str(error), status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, error.details)
             except ValueError as error:
                 code = str(error) or "INVALID_REQUEST"
                 if code == "CONTENT_AI_REQUEST_IN_PROGRESS":
@@ -68,6 +72,14 @@ class ContentContractRoute(APIRoute):
                     return _error_response(request, code, status.HTTP_502_BAD_GATEWAY)
                 if code in {"SCRIPT_FROZEN", "SCRIPT_NOT_FROZEN"}:
                     return _error_response(request, code, status.HTTP_409_CONFLICT)
+                if code in {
+                    "VERSION_CONFLICT",
+                    "IDEMPOTENCY_KEY_REUSED",
+                    "CONTENT_AI_LEGACY_RESULT_REQUIRES_NEW_OPERATION",
+                }:
+                    return _error_response(request, code, status.HTTP_409_CONFLICT)
+                if code == "SCRIPT_AI_STRUCTURE_INVALID":
+                    return _error_response(request, code, status.HTTP_422_UNPROCESSABLE_CONTENT)
                 return _error_response(request, code, status.HTTP_400_BAD_REQUEST)
 
         return handler
@@ -93,15 +105,16 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
             offset=offset,
             limit=limit,
         )
-        return _success(context, {"scripts": [_script(item) for item in page.items]}, total=page.total)
+        return _success(context, {"scripts": [_script(item, request) for item in page.items]}, total=page.total)
 
     @result.get("/projects/{project_id}/scripts/{script_id}")
+    @result.get("/projects/{project_id}/script-documents/{script_id}")
     async def get_script(request: Request, project_id: str, script_id: str):
         context = await _context(request, project_id, dependencies, "script.view")
         document = _project_script(dependencies.service_for(context), context, project_id, script_id)
         baseline = request.query_params.get("baselineVersion")
         candidate = request.query_params.get("candidateVersion")
-        data: dict[str, object] = {"script": _script(document)}
+        data: dict[str, object] = {"script": _script(document, request)}
         if baseline is not None or candidate is not None:
             data["comparison"] = _compare_versions(
                 document,
@@ -195,7 +208,7 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                     reason=_required_text(payload, "reason"),
                 )
             elif action == "analyze":
-                analysis = await dependencies.ai_service_for(context, project_id).analyze(
+                analyzed = await dependencies.ai_service_for(context, project_id).analyze(
                     _project_script(service, context, project_id, script_id),
                     expected_revision=expected,
                     idempotency_key=key,
@@ -206,7 +219,8 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                         script_id,
                         expected,
                         key,
-                        analysis,
+                        analyzed.analysis if isinstance(analyzed, AnalyzedScript) else analyzed,
+                        analyzed.content if isinstance(analyzed, AnalyzedScript) else None,
                     )
                 )
             elif action == "generateDirector":
@@ -237,7 +251,7 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                 )
             else:
                 raise ContentHttpError("UNSUPPORTED_SCRIPT_ACTION")
-        return _success(context, {"script": _script(document)})
+        return _success(context, {"script": _script(document, request)})
 
     @result.post("/projects/{project_id}/scripts/imports")
     async def import_script_file(
@@ -266,7 +280,7 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                 key,
             )
         )
-        return _success(context, {"script": _script(document)})
+        return _success(context, {"script": _script(document, request)})
 
     return result
 
@@ -375,14 +389,15 @@ def _profile(payload: Mapping[str, object]) -> DirectorProfile:
     )
 
 
-def _script(document: ScriptDocument) -> dict[str, object]:
+def _script(document: ScriptDocument, request: Request) -> dict[str, object]:
     return {
         "id": document.script_id,
         "projectId": document.project_id,
         "title": document.title,
         "revision": document.revision,
         "sourceDocument": asdict(document.source_document),
-        "versions": [_version_payload(item) for item in document.versions],
+        "versions": [_version_payload(item, document, request) for item in document.versions],
+        "aiInputLimitCharacters": MAX_AI_INPUT_CHARS,
         "lockedVersionNumber": document.locked_version_number,
         "directorProfile": {
             "audience": document.director_profile.audience,
@@ -394,8 +409,13 @@ def _script(document: ScriptDocument) -> dict[str, object]:
     }
 
 
-def _version_payload(version: ScriptVersion) -> dict[str, object]:
+def _version_payload(version: ScriptVersion, document: ScriptDocument, request: Request) -> dict[str, object]:
     analysis = version.analysis
+    mappings = document.mapping_projection(version)
+    issue_keys = {
+        "SCRIPT_PREFIX_CONTENT_UNPARSED": "script_prefix_content_unparsed",
+        "PARAGRAPH_TEXT_REQUIRED": "script_paragraph_text_required",
+    }
     return {
         "number": version.number,
         "sourceContent": version.source_content,
@@ -420,7 +440,7 @@ def _version_payload(version: ScriptVersion) -> dict[str, object]:
             }
             for scene in version.scenes
         ],
-        "sourceMappings": [
+        "scriptMappings": [
             {
                 "targetId": mapping.target_id,
                 "sourceStart": mapping.source_start,
@@ -428,11 +448,25 @@ def _version_payload(version: ScriptVersion) -> dict[str, object]:
             }
             for mapping in version.source_mappings
         ],
+        "sourceMappings": [
+            {
+                "targetId": mapping["target_id"],
+                "sourceStart": mapping["source_start"],
+                "sourceEnd": mapping["source_end"],
+            }
+            for mapping in mappings["source_mappings"]
+        ],
+        "sourceMappingCoordinateSystem": mappings["source_mapping_coordinate_system"],
+        "scriptMappingCoordinateSystem": "script_version",
+        "unmappedParagraphIds": mappings["unmapped_paragraph_ids"],
+        "sourcePreamble": version.source_preamble,
         "validationErrors": [
             {
                 "code": issue.code,
                 "field": issue.path,
-                "message": issue.message,
+                "message": get_translator(request)(issue_keys[issue.code])
+                if issue.code in issue_keys
+                else issue.message,
                 "severity": issue.severity,
             }
             for issue in version.validation_errors
@@ -464,8 +498,15 @@ def _compare_versions(document: ScriptDocument, baseline_number: int, candidate_
     candidate = _version(document, candidate_number)
     changed = [
         name
-        for name in ("sourceContent", "scenes", "sourceMappings", "validationErrors", "changeSummary", "analysis")
-        if _version_value(baseline, name) != _version_value(candidate, name)
+        for name in (
+            "sourceContent",
+            "scenes",
+            "sourceMappings",
+            "validationErrors",
+            "changeSummary",
+            "analysis",
+        )
+        if _version_value(baseline, name, document) != _version_value(candidate, name, document)
     ]
     return {"baselineVersion": baseline_number, "candidateVersion": candidate_number, "changedFields": changed}
 
@@ -477,11 +518,11 @@ def _version(document: ScriptDocument, number: int) -> ScriptVersion:
     return result
 
 
-def _version_value(version: ScriptVersion, name: str) -> object:
+def _version_value(version: ScriptVersion, name: str, document: ScriptDocument) -> object:
     values = {
         "sourceContent": version.source_content,
         "scenes": version.scenes,
-        "sourceMappings": version.source_mappings,
+        "sourceMappings": document.mapping_projection(version)["source_mappings"],
         "validationErrors": version.validation_errors,
         "changeSummary": version.change_summary,
         "analysis": version.analysis,
@@ -504,7 +545,7 @@ def _error_response(
         {
             "error": {
                 "code": code,
-                "message": _error_message(code),
+                "message": _error_message(code, request),
                 "retryable": status_code >= 500 or code == "CONTENT_AI_REQUEST_IN_PROGRESS",
                 "details": dict(details or {}),
             },
@@ -515,7 +556,16 @@ def _error_response(
     )
 
 
-def _error_message(code: str) -> str:
+def _error_message(code: str, request: Request) -> str:
+    translated = {
+        "CONTENT_AI_INPUT_TOO_LARGE": "content_ai_input_too_large",
+        "CONTENT_AI_LEGACY_RESULT_REQUIRES_NEW_OPERATION": "content_ai_legacy_result_requires_new_operation",
+        "SCRIPT_AI_STRUCTURE_INVALID": "script_ai_structure_invalid",
+        "SCRIPT_PREFIX_CONTENT_UNPARSED": "script_prefix_content_unparsed",
+        "PARAGRAPH_TEXT_REQUIRED": "script_paragraph_text_required",
+    }
+    if code in translated:
+        return get_translator(request)(translated[code])
     messages = {
         "CONTENT_AI_MODEL_FAILED": "AI 模型调用失败，请检查模型配置后重试。",
         "CONTENT_AI_REQUEST_IN_PROGRESS": "相同操作正在处理中，请稍后刷新。",

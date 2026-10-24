@@ -54,7 +54,7 @@ export function createCreatorProjectsApi({ fetcher: providedFetcher, workspaceId
       return result.value;
     } catch (error) {
       // 可重试的网关/服务故障并不能证明服务端没有接受写入；复用原键才能安全恢复。
-      if (error instanceof CreatorApiError && !error.retryable && error.status !== 401 && error.status < 500) retryKeys.delete(operation);
+      if (error instanceof CreatorApiError && !error.retryable && error.status !== 401 && error.status < 500 && error.code !== "CONTENT_AI_REQUEST_IN_PROGRESS") retryKeys.delete(operation);
       throw error;
     }
   };
@@ -98,11 +98,14 @@ export function createCreatorProjectsApi({ fetcher: providedFetcher, workspaceId
         limit,
       }));
     },
+    getScript: (id, scriptId, signal) => request<{ script: ScriptDocument }>(
+      `/projects/${encodeURIComponent(id)}/script-documents/${encodeURIComponent(scriptId)}`, { signal },
+    ).then((r) => r.value.script),
     importScriptFile: async (id, title, file) => {
       const form = new FormData();
       form.set("title", title);
       form.set("file", file);
-      const operation = `script-import:${id}:${file.name}:${file.size}:${file.lastModified}`;
+      const operation = JSON.stringify(["script-import", id, title, file.name, file.size, file.lastModified]);
       const key = retryKeys.get(operation) ?? createId();
       retryKeys.set(operation, key);
       try {

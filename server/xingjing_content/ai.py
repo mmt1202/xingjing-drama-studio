@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
@@ -19,6 +20,24 @@ from .models import (
     ScriptDocument,
     StoryBeat,
 )
+from .parser import parse_script
+
+MAX_AI_INPUT_CHARS = 20_000
+MAX_AI_INSTRUCTION_CHARS = 2_000
+
+
+class ContentAiInputTooLarge(ValueError):
+    def __init__(
+        self, actual: int, maximum: int = MAX_AI_INPUT_CHARS, *, scope: str = "current_script_version"
+    ) -> None:
+        super().__init__("CONTENT_AI_INPUT_TOO_LARGE")
+        self.details = {"actualCharacters": actual, "maxCharacters": maximum, "inputScope": scope}
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyzedScript:
+    content: str
+    analysis: ContentAnalysis
 
 
 class _Character(BaseModel):
@@ -44,12 +63,27 @@ class _StoryBeat(BaseModel):
 
 class _StructuredAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    screenplay: str = Field(
+        min_length=1,
+        max_length=100_000,
+        description="完整标准剧本文本。每个场景以 场景：地点｜时间｜内/外 开头，段落使用 动作：、旁白：或人物名：；不得省略正文。",
+    )
     characters: list[_Character] = Field(default_factory=list, max_length=300)
     locations: list[str] = Field(default_factory=list, max_length=300)
     props: list[str] = Field(default_factory=list, max_length=300)
     relationships: list[_Relationship] = Field(default_factory=list, max_length=1000)
     story_beats: list[_StoryBeat] = Field(default_factory=list, max_length=300)
     episode_suggestions: list[str] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def valid_screenplay(self):
+        parsed = parse_script(self.screenplay, version_number=1, change_summary="validation")
+        if parsed.validation_errors:
+            raise ValueError("SCRIPT_AI_STRUCTURE_INVALID")
+        scene_ids = {scene.scene_id for scene in parsed.scenes}
+        if any(identity not in scene_ids for beat in self.story_beats for identity in beat.scene_ids):
+            raise ValueError("SCRIPT_AI_SCENE_REFERENCE_INVALID")
+        return self
 
 
 class _DirectorResult(BaseModel):
@@ -81,7 +115,7 @@ class ContentAiService:
 
     async def analyze(
         self, document: ScriptDocument, *, expected_revision: int, idempotency_key: str
-    ) -> ContentAnalysis:
+    ) -> AnalyzedScript | ContentAnalysis:
         payload = await self._generate(
             document,
             action="analyze",
@@ -89,14 +123,19 @@ class ContentAiService:
             idempotency_key=idempotency_key,
             schema=_StructuredAnalysis,
             system_prompt=(
-                "你是影视剧本结构分析师。只依据输入剧本提取人物、场景、道具、人物关系、"
-                "情节点和分集建议。不得虚构不存在的情节，输出必须严格符合 JSON Schema。"
+                "你是影视编剧与结构分析师。把输入的小说或工作副本文本改编为完整、可执行的标准剧本，"
+                "放入screenplay字段；每场以‘场景：地点｜时间｜内/外’开头，正文分为‘动作：’、‘旁白：’或‘人物名：’。"
+                "章节标题可保留为Markdown标题；场景外不得遗留普通叙事。不得截断正文，不得虚构原文没有的情节或人物事实。"
+                "同时提取人物、场景、道具、人物关系、情节点与分集建议；scene_ids必须使用输出场景顺序编号S001、S002等。"
+                "新增或改写内容不得编造原小说坐标。输出必须严格符合 JSON Schema。"
             ),
             instruction="分析以下剧本并返回结构化内容：",
         )
+        if "screenplay" not in payload:
+            raise ValueError("CONTENT_AI_LEGACY_RESULT_REQUIRES_NEW_OPERATION")
         result = _StructuredAnalysis.model_validate(payload)
-        base = document.current_version.analysis
-        return ContentAnalysis(
+        base = parse_script(result.screenplay, version_number=1, change_summary="analysis").analysis
+        analysis = ContentAnalysis(
             word_count=base.word_count,
             character_count=base.character_count,
             scene_count=base.scene_count,
@@ -106,8 +145,10 @@ class ContentAiService:
             sensitive_terms=base.sensitive_terms,
             characters=tuple(
                 CharacterInsight(item.name, item.appearances, item.description) for item in result.characters
-            ),
-            locations=tuple(dict.fromkeys(item.strip() for item in result.locations if item.strip())),
+            )
+            if result.characters
+            else base.characters,
+            locations=tuple(dict.fromkeys(item.strip() for item in result.locations if item.strip())) or base.locations,
             props=tuple(dict.fromkeys(item.strip() for item in result.props if item.strip())),
             relationships=tuple(
                 RelationshipInsight(item.source, item.target, item.relation) for item in result.relationships
@@ -117,6 +158,7 @@ class ContentAiService:
             ),
             episode_suggestions=tuple(result.episode_suggestions),
         )
+        return AnalyzedScript(result.screenplay, analysis)
 
     async def direct(
         self, document: ScriptDocument, *, expected_revision: int, idempotency_key: str
@@ -165,6 +207,7 @@ class ContentAiService:
                 "输出完整改写后剧本和简明变更摘要，严格符合 JSON Schema。"
             ),
             instruction=f"改写要求：{instruction.strip()}\n完整剧本：",
+            instruction_characters=len(instruction),
         )
         result = _RewriteResult.model_validate(payload)
         return result.content, result.change_summary
@@ -179,6 +222,7 @@ class ContentAiService:
         schema: type[BaseModel],
         system_prompt: str,
         instruction: str,
+        instruction_characters: int | None = None,
     ) -> dict[str, object]:
         source = document.current_version.source_content
         fingerprint = sha256(
@@ -194,6 +238,24 @@ class ContentAiService:
                 separators=(",", ":"),
             ).encode()
         ).hexdigest()
+        cached = self._requests.completed_result(
+            tenant_id=self._tenant_id,
+            workspace_id=document.workspace_id,
+            project_id=document.project_id,
+            action=action,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+        )
+        if cached is not None:
+            return {key: value for key, value in cached.items() if not key.startswith("_")}
+        if action in {"analyze", "rewrite"} and document.locked_version_number is not None:
+            raise ValueError("SCRIPT_FROZEN")
+        if document.revision != expected_revision:
+            raise ValueError("VERSION_CONFLICT")
+        if len(source) > MAX_AI_INPUT_CHARS:
+            raise ContentAiInputTooLarge(len(source))
+        if instruction_characters is not None and instruction_characters > MAX_AI_INSTRUCTION_CHARS:
+            raise ContentAiInputTooLarge(instruction_characters, MAX_AI_INSTRUCTION_CHARS, scope="rewrite_instruction")
         now = datetime.now(UTC)
         claim = self._requests.claim(
             tenant_id=self._tenant_id,
@@ -210,17 +272,6 @@ class ContentAiService:
             return {key: value for key, value in claim.result_payload.items() if not key.startswith("_")}
         if not claim.claimed:
             raise ValueError("CONTENT_AI_REQUEST_IN_PROGRESS")
-        if document.revision != expected_revision:
-            self._requests.fail(
-                tenant_id=self._tenant_id,
-                workspace_id=document.workspace_id,
-                project_id=document.project_id,
-                idempotency_key=idempotency_key,
-                request_fingerprint=fingerprint,
-                reason="VERSION_CONFLICT",
-                now=datetime.now(UTC),
-            )
-            raise ValueError("VERSION_CONFLICT")
         try:
             generator = await TextGenerator.create(TextTaskType.SCRIPT, self._project_name)
             generated = await generator.generate(
@@ -237,12 +288,14 @@ class ContentAiService:
             try:
                 result = schema.model_validate_json(strip_json_code_fences(generated.text))
             except ValidationError:
+                if len(generated.text) > 50_000:
+                    raise ValueError("CONTENT_AI_RESPONSE_TOO_LARGE_TO_REPAIR")
                 repaired = True
                 repair_instruction = json.dumps(
                     {
                         "instruction": "只修复下面响应的 JSON 结构，使其严格符合 schema；不得扩写业务内容。",
                         "schema": schema.model_json_schema(),
-                        "invalidResponse": generated.text[:50000],
+                        "invalidResponse": generated.text,
                     },
                     ensure_ascii=False,
                 )

@@ -24,6 +24,11 @@ export function useProjectFlow() {
   if (!context) throw new Error("Project flow context is required");
   return context;
 }
+export function useOptionalProjectFlow() {
+  return useContext(FlowContext);
+}
+
+const scriptRoutes = new Set(["script-import", "script-lab", "source", "rewrite", "versions", "source-mapping", "script-checkup", "ai-director", "director-assets"]);
 
 function activeStage(slug: string) {
   if (slug === "version-history") return "versions";
@@ -110,6 +115,8 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     if (!canLeave()) return;
     const [path, supplied = ""] = target.split("?");
     const query = new URLSearchParams(supplied);
+    const scriptId = params.get("scriptId");
+    if (scriptId && scriptRoutes.has(path) && scriptRoutes.has(slug) && !query.has("scriptId")) query.set("scriptId", scriptId);
     let restoringVersionReturn = false;
     if (path === "version-history" && slug !== "version-history" && number === undefined && !supplied && workspaceAccess) {
       const previous = readVersionReturn(workspaceAccess.actorId, workspaceId, projectId);

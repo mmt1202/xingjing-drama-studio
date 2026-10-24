@@ -147,7 +147,7 @@ def create_production_content_runtime(
             )
             if project is None:
                 raise ContentRuntimeUnavailable("PROJECT_NOT_FOUND")
-            project_name = project.name
+            project_name = project.id
         return ContentAiService(
             SqlAlchemyContentAiRequestRepository(factory),
             tenant_id=context.tenant_id,

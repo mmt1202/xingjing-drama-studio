@@ -13,9 +13,10 @@ export interface ProjectDetail extends ProjectSummary { budgetMinor?: number; bu
 export interface ScriptScene { sceneId: string; heading: { location?: string; timeOfDay?: string | null; setting?: string | null }; paragraphs: Array<{ paragraphId: string; kind: string; text: string; sourceText: string; speaker: string | null }> }
 export interface CharacterInsight { name: string; appearances: number; description: string }
 export interface ContentAnalysis { wordCount: number; characterCount: number; sceneCount: number; dialogueCount: number; estimatedDurationMs: number; estimatedEpisodeCount: number; sensitiveTerms: string[]; characters: CharacterInsight[]; locations: string[]; props: string[]; relationships: Array<{ source: string; target: string; relation: string }>; storyBeats: Array<{ label: string; summary: string; sceneIds: string[] }>; episodeSuggestions: string[] }
-export interface ScriptVersion { number: number; sourceContent: string; scenes: ScriptScene[]; sourceMappings: unknown[]; validationErrors: Array<{ code?: string; field?: string; message?: string }>; changeSummary: string; analysis: ContentAnalysis }
+export interface ScriptTextMapping { targetId: string; sourceStart: number; sourceEnd: number }
+export interface ScriptVersion { number: number; sourceContent: string; sourcePreamble?: string; scenes: ScriptScene[]; sourceMappings: ScriptTextMapping[]; scriptMappings?: ScriptTextMapping[]; scriptMappingCoordinateSystem?: "script_version"; sourceMappingCoordinateSystem?: "original_source" | "unmapped"; unmappedParagraphIds?: string[]; validationErrors: Array<{ code?: string; field?: string; path?: string; severity?: "error" | "warning"; message?: string }>; changeSummary: string; analysis: ContentAnalysis }
 export interface DirectorProfile { audience: string | null; pacing: string | null; visualStyle: string | null; cameraLanguage: string | null; productionConstraints: string[] }
-export interface ScriptDocument { id: string; projectId: string; title: string; revision: number; sourceDocument: { filename: string; mediaType: string; content: string }; versions: ScriptVersion[]; lockedVersionNumber: number | null; directorProfile: DirectorProfile }
+export interface ScriptDocument { id: string; projectId: string; title: string; revision: number; sourceDocument: { filename: string; mediaType: string; content: string }; versions: ScriptVersion[]; aiInputLimitCharacters?: number; lockedVersionNumber: number | null; directorProfile: DirectorProfile }
 export interface ScriptComparison { baselineVersion: number; candidateVersion: number; changedFields: string[] }
 export interface PageResult<T> { items: T[]; nextToken: string | null; total?: number; offset?: number; limit?: number }
 
@@ -30,6 +31,7 @@ export interface CreatorProjectsPort {
   getProjectSetupOptions?(): Promise<ProjectSetupOptions>;
   projectAction(projectId: string, action: ProjectAction, payload?: unknown, version?: number): Promise<ProjectDetail>;
   listScripts(projectId: string, params?: { offset?: number; limit?: number; query?: string; locked?: boolean }): Promise<PageResult<ScriptDocument>>;
+  getScript?(projectId: string, scriptId: string, signal?: AbortSignal): Promise<ScriptDocument>;
   importScriptFile(projectId: string, title: string, file: File): Promise<ScriptDocument>;
   scriptAction(projectId: string, action: ScriptAction, payload?: unknown, revision?: number, targetId?: string): Promise<ScriptActionResult>;
 }

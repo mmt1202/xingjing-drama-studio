@@ -326,7 +326,7 @@ class StoryboardRuntime:
             raise ContractViolation("SMART_STORYBOARD_REQUEST_IN_PROGRESS")
         else:
             try:
-                generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project.name)
+                generator = await TextGenerator.create(TextTaskType.SCRIPT, project_name=project.id)
                 generated = await generator.generate(
                     TextGenerationRequest(
                         system_prompt=(
@@ -342,7 +342,7 @@ class StoryboardRuntime:
                         response_schema=_SmartStoryboard,
                         max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
                     ),
-                    project_name=project.name,
+                    project_name=project.id,
                 )
                 output = _SmartStoryboard.model_validate_json(strip_json_code_fences(generated.text))
                 generated_provider = generated.provider
