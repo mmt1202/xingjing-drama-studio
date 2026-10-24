@@ -10,7 +10,7 @@ from .models import AssetKind, QualityIssue, QualitySeverity, Shot
 
 @dataclass(frozen=True, slots=True)
 class QualityPolicy:
-    """由系统配置提供的 M05 质量阈值与合规词表，不在领域代码中硬编码。"""
+    """确定性编辑规则；数值规则只提示，不代表模型能力或媒体质量评分。"""
 
     minimum_duration_ms: int
     maximum_duration_ms: int
@@ -19,17 +19,65 @@ class QualityPolicy:
     require_scene_reference: bool
     require_character_for_dialogue: bool
     compliance_terms: frozenset[str]
+    policy_id: str = "custom-editorial"
+    policy_version: int = 1
 
     def __post_init__(self) -> None:
-        if (
+        if any(
+            type(value) is not int
+            for value in (
+                self.minimum_duration_ms,
+                self.maximum_duration_ms,
+                self.max_adjacent_duration_delta_ms,
+                self.max_dialogue_characters_per_second,
+                self.policy_version,
+            )
+        ) or (
             self.minimum_duration_ms < 1
             or self.maximum_duration_ms < self.minimum_duration_ms
             or self.max_adjacent_duration_delta_ms < 0
             or self.max_dialogue_characters_per_second < 1
+            or self.policy_version < 1
+        ):
+            raise ContractViolation("INVALID_QUALITY_POLICY")
+        if (
+            type(self.require_scene_reference) is not bool
+            or type(self.require_character_for_dialogue) is not bool
+            or type(self.policy_id) is not str
+            or not self.policy_id.strip()
+            or type(self.compliance_terms) is not frozenset
+            or any(type(term) is not str for term in self.compliance_terms)
         ):
             raise ContractViolation("INVALID_QUALITY_POLICY")
         if any(not term.strip() for term in self.compliance_terms):
             raise ContractViolation("INVALID_QUALITY_POLICY")
+
+    def rules(self) -> dict[str, object]:
+        return {
+            "minimum_duration_ms": self.minimum_duration_ms,
+            "maximum_duration_ms": self.maximum_duration_ms,
+            "max_adjacent_duration_delta_ms": self.max_adjacent_duration_delta_ms,
+            "max_dialogue_characters_per_second": self.max_dialogue_characters_per_second,
+            "require_scene_reference": self.require_scene_reference,
+            "require_character_for_dialogue": self.require_character_for_dialogue,
+            "compliance_terms": sorted(self.compliance_terms),
+        }
+
+    def descriptor(self) -> dict[str, object]:
+        payload = {
+            "schema": "xingjing.storyboard-quality/v1",
+            "policyId": self.policy_id,
+            "version": self.policy_version,
+            "rules": self.rules(),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {
+            **payload,
+            "configured": True,
+            "digest": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+            "numericRulesBlocking": False,
+            "keywordScreeningEnabled": bool(self.compliance_terms),
+        }
 
 
 class QualityEvaluator:

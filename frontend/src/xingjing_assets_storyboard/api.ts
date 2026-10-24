@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type {
   ActionInput,
   AssetAction,
@@ -45,6 +46,7 @@ interface ResponseMeta {
   readonly requestId?: string;
   readonly page?: { readonly nextToken?: string | null };
   readonly collectionVersion?: number;
+  readonly qualityPolicy?: import("./contracts").QualityPolicyDescriptor;
 }
 
 interface Envelope<T> {
@@ -211,7 +213,7 @@ function marketAsset(item: MarketItemPayload, referenceCount = 0): AssetItem {
 export function createAssetsStoryboardApi(
   options: AssetsStoryboardApiOptions = {},
 ): AssetsStoryboardPort {
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = createAuthenticatedFetcher({ fetcher: options.fetcher });
   const createId = options.createId ?? defaultId;
   const baseUrl = options.baseUrl ?? "/api/v1";
   const replayKeys = new Map<string, string>();
@@ -301,6 +303,7 @@ export function createAssetsStoryboardApi(
       items: response.data,
       nextToken: response.meta?.page?.nextToken ?? null,
       collectionVersion: response.meta?.collectionVersion,
+      qualityPolicy: response.meta?.qualityPolicy,
       requestId: response.meta?.requestId,
     };
   }

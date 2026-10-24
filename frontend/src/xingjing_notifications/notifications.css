@@ -1,0 +1,66 @@
+.xj-notification-center { position: relative; display: inline-flex; color: #e8eaf2; font-size: 13px; }
+.xj-notification-center button { cursor: pointer; }
+.xj-notification-center button:disabled { cursor: not-allowed; opacity: .42; }
+.xj-notification-center :where(button, input):focus-visible { outline: 2px solid #b39aff; outline-offset: 3px; }
+.xj-notification-bell { position: relative; display: grid; place-content: center; width: 44px; height: 44px; border: 1px solid rgb(255 255 255 / 12%); border-radius: 12px; background: rgb(255 255 255 / 5%); color: #d5d9e7; }
+.xj-notification-bell:hover, .xj-notification-bell[aria-expanded=true] { border-color: #9f83e8; color: #dacbff; }
+.xj-notification-badge { position: absolute; right: -5px; top: -6px; min-width: 18px; padding: 1px 4px; border: 2px solid #0b0e16; border-radius: 10px; background: #a78bfa; color: #110d20; font-size: 10px; font-weight: 750; line-height: 15px; }
+.xj-notification-warning { position: absolute; bottom: -3px; right: -3px; width: 14px; border-radius: 50%; background: #e9bb6e; color: #18130c; font-size: 10px; font-weight: 750; text-align: center; }
+.xj-notification-panel { position: absolute; z-index: 120; right: 0; top: calc(100% + 12px); width: min(440px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - 96px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #343448; border-radius: 16px; background: #11141e; box-shadow: 0 24px 80px rgb(0 0 0 / 48%); }
+.xj-notification-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid #2a2c3a; }
+.xj-notification-heading h2 { margin: 0; color: #f0edf8; font-size: 17px; font-weight: 650; letter-spacing: .01em; }
+.xj-notification-heading p { margin: 6px 0 0; color: #aea7bf; font-size: 11px; }
+.xj-notification-toolbar, .xj-notification-pagination > div { display: flex; gap: 5px; }
+.xj-notification-toolbar button, .xj-notification-pagination button { display: grid; place-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #b6b7c7; }
+.xj-notification-toolbar button:hover, .xj-notification-pagination button:hover { background: #252634; color: #ece7f8; }
+.xj-notification-filters { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; }
+.xj-notification-filters [role=group] { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: #080b12; }
+.xj-notification-filters [aria-pressed] { min-height: 30px; padding: 4px 12px; border: 0; border-radius: 6px; background: transparent; color: #a6a9ba; }
+.xj-notification-filters [aria-pressed=true] { background: #2c253e; color: #d9c7ff; }
+.xj-notification-scroll { flex: 1; min-height: 80px; overflow-y: auto; overscroll-behavior: contain; }
+.xj-notification-list { list-style: none; margin: 0; padding: 0 8px; }
+.xj-notification-list li { margin-bottom: 4px; padding: 14px 12px; border-radius: 9px; border-left: 2px solid transparent; }
+.xj-notification-list li + li { border-top: 1px solid rgb(255 255 255 / 5%); }
+.xj-notification-list li.is-unread { border-left-color: #9d7de4; background: #1d1b2b; }
+.xj-notification-item-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; color: #9c9caf; font-size: 10px; }
+.xj-notification-list h3 { display: flex; align-items: baseline; gap: 8px; margin: 9px 0 6px; color: #edeaf4; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.xj-notification-read-dot { flex-shrink: 0; width: 5px; height: 5px; border-radius: 50%; background: #a78bfa; }
+.is-read .xj-notification-read-dot { background: #555465; }
+.xj-notification-body { margin: 0; color: #b8b9c9; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.xj-notification-item-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.xj-notification-item-actions button, .xj-notification-text-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 30px; padding: 3px 2px; border: 0; border-radius: 4px; background: transparent; color: #c4acf5; font-size: 11px; }
+.xj-notification-item-actions button:hover, .xj-notification-text-button:hover { color: #ede4ff; }
+.xj-notification-item-actions > span { color: #8c8c9f; font-size: 10px; }
+.xj-notification-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 210px; margin: 0; padding: 28px; color: #a9a6b9; text-align: center; }
+.xj-notification-empty strong { color: #d9d3e7; font-weight: 500; }
+.xj-notification-empty p { max-width: 270px; margin: 0; font-size: 12px; line-height: 1.7; }
+.xj-notification-pagination, .xj-notification-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 18px; border-top: 1px solid #292b38; color: #9294a8; font-size: 10px; }
+.xj-notification-notice { margin: 0; padding: 10px 18px; border-bottom: 1px solid #3a324c; background: #251e34; color: #d8c8f4; font-size: 12px; line-height: 1.6; }
+.xj-notification-error { padding: 10px 18px; background: #302326; color: #f0c4c7; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.xj-notification-error p { margin: 0; }
+.xj-notification-error small { display: block; margin-top: 4px; color: #cba5ad; }
+.xj-notification-muted { margin: 10px 18px; color: #a3a1b5; font-size: 11px; line-height: 1.7; }
+.xj-notification-preferences { padding: 12px 18px 20px; overflow-y: auto; overscroll-behavior: contain; }
+.xj-notification-preferences .xj-notification-muted { margin: 10px 0 18px; }
+.xj-notification-channel { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-bottom: 1px solid #292b38; }
+.xj-notification-channel > div { display: grid; gap: 5px; }
+.xj-notification-channel strong { font-size: 12px; font-weight: 500; }
+.xj-notification-channel small { color: #9a96aa; font-size: 10px; }
+.xj-notification-channel button, .xj-notification-form-actions button, .xj-notification-primary { min-height: 34px; padding: 6px 12px; border: 1px solid #494054; border-radius: 8px; background: #221e2c; color: #d7c6f5; font-size: 12px; }
+.xj-notification-preference-form { display: grid; gap: 12px; padding-top: 16px; }
+.xj-notification-preference-form h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.xj-notification-preference-form label { display: grid; gap: 8px; color: #c7c3d2; font-size: 12px; }
+.xj-notification-preference-form input:not([type=checkbox]) { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid #454054; border-radius: 7px; background: #0b0e16; color: #eee8f9; }
+.xj-notification-preference-form label.xj-notification-checkbox { display: flex; align-items: center; gap: 8px; }
+.xj-notification-checkbox input { accent-color: #a98bdd; }
+.xj-notification-preference-form > small { color: #9793a9; font-size: 10px; line-height: 1.7; }
+.xj-notification-form-actions { display: flex; gap: 8px; }
+.xj-notification-form-actions .xj-notification-primary, .xj-notification-primary { border-color: #786091; background: #3b2c51; color: #eee4ff; }
+.xj-notification-task { padding: 4px 18px 20px; }
+.xj-notification-task h3 { margin: 16px 0; font-size: 14px; }
+.xj-notification-task dl { display: grid; gap: 12px; margin: 0 0 20px; }
+.xj-notification-task dl > div { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 12px; }
+.xj-notification-task dt { color: #9b97ac; font-size: 11px; }
+.xj-notification-task dd { margin: 0; color: #d5d0e3; overflow-wrap: anywhere; font-size: 11px; }
+.xj-notification-primary { display: inline-flex; align-items: center; gap: 5px; }
+@media (max-width: 560px) { .xj-notification-panel { position: fixed; right: 12px; top: 78px; max-height: calc(100dvh - 94px); } .xj-notification-heading { padding-inline: 16px; } }

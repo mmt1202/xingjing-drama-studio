@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { Banknote, BriefcaseBusiness, CircleAlert, Gavel, PackageCheck, RefreshCw } from "lucide-react";
 
 import { CommercialApiError, createCommercialClient, type CommercialOrder, type PublishOrderInput, type VersionedCommercialOrder } from "@/xingjing_commercial_client";
+import { useAuthStore } from "@/stores/auth-store";
+import { getTokenForSession } from "@/utils/auth";
 
 type CommercialPageId = "AD-005" | "AD-006" | "AD-007" | "AD-008" | "CR-012" | "CR-013" | "CR-014" | "CR-015" | "CR-016";
 type CommandKind = "quote" | "acceptQuote" | "contract" | "delivery" | "accept" | "return" | "dispute" | "resolve" | "freeze" | "resume" | "pay";
@@ -24,8 +26,13 @@ function errorText(reason: unknown): string {
 }
 
 export function CommercialWorkspace({ pageId, workspaceId, accessToken }: { pageId: CommercialPageId; workspaceId: string; accessToken?: string }) {
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  return <CommercialWorkspaceContent key={`${sessionEpoch}:${workspaceId}`} pageId={pageId} workspaceId={workspaceId} accessToken={accessToken} sessionEpoch={sessionEpoch} />;
+}
+function CommercialWorkspaceContent({ pageId, workspaceId, accessToken, sessionEpoch }: { pageId: CommercialPageId; workspaceId: string; accessToken?: string; sessionEpoch: string }) {
   const admin = pageId.startsWith("AD-");
-  const api = useMemo(() => accessToken ? createCommercialClient({ accessToken, workspaceId, surface: admin ? "admin" : "creator" }) : null, [accessToken, workspaceId, admin]);
+  const [initialToken] = useState(accessToken);
+  const api = useMemo(() => { const token = getTokenForSession(sessionEpoch) ?? initialToken; return token ? createCommercialClient({ accessToken: token, workspaceId, surface: admin ? "admin" : "creator" }) : null; }, [sessionEpoch, initialToken, workspaceId, admin]);
   const [orders, setOrders] = useState<readonly CommercialOrder[]>([]);
   const [selected, setSelected] = useState<VersionedCommercialOrder | null>(null);
   const [loading, setLoading] = useState(true);

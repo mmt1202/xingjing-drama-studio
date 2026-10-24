@@ -644,6 +644,7 @@ class StoryboardService:
             idempotency_key=idempotency_key,
             fingerprint=fingerprint,
             transform=lambda storyboard: self._quality_evaluator().evaluate(storyboard.shots),
+            audit_details={"quality_policy": self.quality_policy_descriptor()},
         )
 
     def replace_shot_media(
@@ -792,6 +793,8 @@ class StoryboardService:
             self._assert_mutable(current)
             if current.version != expected_version:
                 raise VersionConflict("VERSION_CONFLICT", details={"current_version": current.version})
+            if not current.shots:
+                raise QualityGateFailed("EMPTY_STORYBOARD")
             checked_shots = self._quality_evaluator().evaluate(current.shots)
             self._validate_assets(context, checked_shots)
             blockers = [
@@ -832,7 +835,7 @@ class StoryboardService:
                 storyboard_id,
                 "succeeded",
                 _summary(current),
-                _summary(frozen),
+                _summary(frozen) | {"quality_policy": self.quality_policy_descriptor()},
             )
             outcome = self._repository.commit(
                 context.scope,
@@ -1154,7 +1157,14 @@ class StoryboardService:
             raise ContractViolation("IDEMPOTENCY_KEY_REQUIRED")
 
     def _record_failure(self, context: AccessContext, action: str, object_id: str, error: StoryboardError) -> None:
-        self._repository.append_audit(self._audit(context, action, object_id, "failed", {}, {}, error_code=error.code))
+        details: dict[str, object] = (
+            {"quality_policy": self.quality_policy_descriptor()}
+            if action in {"storyboard.quality_checked", "storyboard.frozen"}
+            else {}
+        )
+        self._repository.append_audit(
+            self._audit(context, action, object_id, "failed", {}, details, error_code=error.code)
+        )
 
     def _audit(
         self,
@@ -1193,19 +1203,19 @@ class StoryboardService:
             raise ContractViolation("QUALITY_POLICY_REQUIRED")
         return QualityEvaluator(self._quality_policy)
 
+    def quality_policy_descriptor(self) -> dict[str, object]:
+        if self._quality_policy is None:
+            return {"configured": False, "reasonCode": "QUALITY_POLICY_REQUIRED"}
+        return self._quality_policy.descriptor()
+
     def _quality_policy_payload(self) -> dict[str, object]:
         policy = self._quality_policy
         if policy is None:
             return {"configured": False}
-        return {
-            "minimum_duration_ms": policy.minimum_duration_ms,
-            "maximum_duration_ms": policy.maximum_duration_ms,
-            "max_adjacent_duration_delta_ms": policy.max_adjacent_duration_delta_ms,
-            "max_dialogue_characters_per_second": policy.max_dialogue_characters_per_second,
-            "require_scene_reference": policy.require_scene_reference,
-            "require_character_for_dialogue": policy.require_character_for_dialogue,
-            "compliance_terms": sorted(policy.compliance_terms),
-        }
+        # Policies created without a release identity retain their existing receipt contract.
+        if policy.policy_id == "custom-editorial":
+            return policy.rules()
+        return {**policy.rules(), "policy_id": policy.policy_id, "policy_version": policy.policy_version}
 
 
 def _version(

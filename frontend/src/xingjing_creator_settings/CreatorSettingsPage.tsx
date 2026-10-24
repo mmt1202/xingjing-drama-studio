@@ -5,6 +5,7 @@ import type {
   PreferenceRecord,
   VersionHistoryRecord,
 } from "./api";
+import { WorkspaceSettingsPage } from "./WorkspaceSettingsPage";
 
 const pageDefinitions = {
   "CR-022": {
@@ -62,6 +63,18 @@ function message(error: unknown): string {
 }
 
 export function CreatorSettingsPage({
+  pageId,
+  api,
+  projectId,
+}: {
+  pageId: CreatorSettingsPageId;
+  api: PreferenceApi;
+  projectId?: string;
+}) {
+  return pageId === "CR-096" ? <WorkspaceSettingsPage api={api} /> : <LegacyCreatorSettingsPage pageId={pageId} api={api} projectId={projectId} />;
+}
+
+function LegacyCreatorSettingsPage({
   pageId,
   api,
   projectId,

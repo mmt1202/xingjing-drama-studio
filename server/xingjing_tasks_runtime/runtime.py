@@ -16,17 +16,21 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text, true
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import aliased
 
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
 from server.xingjing_platform_persistence.persistence import (
+    AuditRow,
     NotificationDeliveryRow,
     NotificationPreferenceRow,
     NotificationRow,
+    ProjectRow,
     Scope,
     TaskDeadLetterRow,
     TaskEventRow,
@@ -219,36 +223,139 @@ class PlatformTasksRuntime:
             )
 
         @router.get("/notifications", operation_id="list_user_notifications")
-        async def list_notifications(request: Request, unreadOnly: bool = False, limit: int = 100):
-            context = await self._context(request, "workspace.view")
+        async def list_notifications(
+            request: Request,
+            unreadOnly: bool = False,
+            limit: int = 100,
+            offset: int = Query(default=0, ge=0, le=100_000),
+        ):
+            context = await self._notification_context(request)
+            limit = min(max(limit, 1), 200)
             async with self._session() as session:
                 clauses = [*self._scope(NotificationRow, context), NotificationRow.recipient_id == context.actor_id]
-                if unreadOnly:
-                    clauses.append(NotificationRow.read_at.is_(None))
-                rows = list(
-                    (
-                        await session.scalars(
-                            select(NotificationRow)
-                            .where(*clauses)
-                            .order_by(NotificationRow.created_at.desc())
-                            .limit(min(max(limit, 1), 200))
-                        )
-                    ).all()
+                filtered = [*clauses, NotificationRow.read_at.is_(None)] if unreadOnly else clauses
+                counts = (
+                    select(
+                        func.count(NotificationRow.id)
+                        .filter(NotificationRow.read_at.is_(None) if unreadOnly else true())
+                        .label("total"),
+                        func.count(NotificationRow.id).filter(NotificationRow.read_at.is_(None)).label("unread"),
+                    )
+                    .where(*clauses)
+                    .cte("notification_counts")
                 )
-                unread = await session.scalar(
-                    select(func.count())
-                    .select_from(NotificationRow)
-                    .where(
+                page = aliased(
+                    NotificationRow,
+                    select(NotificationRow)
+                    .where(*filtered)
+                    .order_by(NotificationRow.created_at.desc(), NotificationRow.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                    .subquery(),
+                )
+                # Counts and page share one PostgreSQL statement snapshot, including empty pages.
+                rows = (
+                    await session.execute(
+                        select(page, counts.c.total, counts.c.unread)
+                        .select_from(counts)
+                        .outerjoin(page, true())
+                        .order_by(page.created_at.desc(), page.id.desc())
+                    )
+                ).all()
+            return _notification_ok(
+                {
+                    "items": [_notification(row[0]) for row in rows if row[0] is not None],
+                    "unreadCount": rows[0][2],
+                    "total": rows[0][1],
+                    "offset": offset,
+                    "limit": limit,
+                },
+                context,
+            )
+
+        @router.get("/notifications/{notification_id}/target", operation_id="get_user_notification_target")
+        async def notification_target(request: Request, notification_id: str):
+            context = await self._notification_context(request)
+            async with self._session() as session:
+                notification = await session.scalar(
+                    select(NotificationRow).where(
                         *self._scope(NotificationRow, context),
                         NotificationRow.recipient_id == context.actor_id,
-                        NotificationRow.read_at.is_(None),
+                        NotificationRow.id == notification_id,
                     )
                 )
-            return _ok({"items": [_notification(row) for row in rows], "unreadCount": unread or 0}, context.request_id)
+                if notification is None:
+                    return _error(context.request_id, "NOTIFICATION_NOT_FOUND", 404)
+                if notification.resource_type == "task" and "generation.view" in context.permissions:
+                    task = await session.scalar(
+                        select(TaskRow).where(*self._scope(TaskRow, context), TaskRow.id == notification.resource_id)
+                    )
+                    if task is None:
+                        return _error(context.request_id, "NOTIFICATION_TARGET_NOT_FOUND", 404)
+                    if task.project_id:
+                        await self._notification_project_access(session, context, task.project_id, "generation.view")
+                    elif task.created_by != context.actor_id and context.role.casefold() not in {
+                        "owner",
+                        "admin",
+                        "platform_admin",
+                    }:
+                        return _error(context.request_id, "NOTIFICATION_TARGET_NOT_FOUND", 404)
+                    project = (
+                        await session.scalar(
+                            select(ProjectRow).where(
+                                *self._scope(ProjectRow, context),
+                                ProjectRow.id == task.project_id,
+                                ProjectRow.deleted_at.is_(None),
+                            )
+                        )
+                        if task.project_id and "project.view" in context.permissions
+                        else None
+                    )
+                    return _notification_ok(
+                        {
+                            "kind": "platform-task",
+                            "projectId": project.id if project else None,
+                            "task": {
+                                key: value
+                                for key, value in _task(task, include_payload=False).items()
+                                if key
+                                in {
+                                    "id",
+                                    "taskType",
+                                    "status",
+                                    "progress",
+                                    "attemptCount",
+                                    "maxAttempts",
+                                    "version",
+                                    "createdAt",
+                                    "updatedAt",
+                                }
+                            },
+                            "errorCode": task.last_error_code,
+                        },
+                        context,
+                    )
+                if notification.resource_type == "project" and "project.view" in context.permissions:
+                    project = await session.scalar(
+                        select(ProjectRow).where(
+                            *self._scope(ProjectRow, context),
+                            ProjectRow.id == notification.resource_id,
+                            ProjectRow.deleted_at.is_(None),
+                        )
+                    )
+                    if project is None:
+                        return _error(context.request_id, "NOTIFICATION_TARGET_NOT_FOUND", 404)
+                    await self._notification_project_access(session, context, project.id, "project.view")
+                    return _notification_ok({"kind": "project", "projectId": project.id}, context)
+                return _error(
+                    context.request_id,
+                    "NOTIFICATION_TARGET_UNAVAILABLE",
+                    403 if notification.resource_type in {"task", "project"} else 422,
+                )
 
         @router.post("/notifications/actions", operation_id="act_on_user_notifications")
         async def notification_action(request: Request):
-            context = await self._context(request, "workspace.view")
+            context = await self._notification_context(request)
             body = await _json(request)
             if isinstance(body, JSONResponse):
                 return body
@@ -260,6 +367,15 @@ class PlatformTasksRuntime:
                     NotificationRow.read_at.is_(None),
                 ]
                 if action == "read" and notification_id:
+                    existing = await session.scalar(
+                        select(NotificationRow.id).where(
+                            *self._scope(NotificationRow, context),
+                            NotificationRow.recipient_id == context.actor_id,
+                            NotificationRow.id == notification_id,
+                        )
+                    )
+                    if existing is None:
+                        return _error(context.request_id, "NOTIFICATION_NOT_FOUND", 404)
                     clauses.append(NotificationRow.id == notification_id)
                 elif action != "read_all":
                     return _error(context.request_id, "INVALID_NOTIFICATION_ACTION", 400)
@@ -267,11 +383,23 @@ class PlatformTasksRuntime:
                 now = _now()
                 for row in rows:
                     row.read_at = now
-            return _ok({"updated": len(rows)}, context.request_id)
+                if rows:
+                    session.add(
+                        AuditRow(
+                            tenant_id=context.tenant_id,
+                            workspace_id=context.workspace_id,
+                            actor_id=context.actor_id,
+                            action=f"notification.{action}",
+                            resource_type="notification",
+                            resource_id=notification_id if action == "read" else context.actor_id,
+                            details={"requestId": context.request_id, "updated": len(rows), "readAt": _iso(now)},
+                        )
+                    )
+            return _notification_ok({"updated": len(rows)}, context)
 
         @router.get("/notification-preferences", operation_id="get_notification_preferences")
         async def get_preferences(request: Request):
-            context = await self._context(request, "workspace.view")
+            context = await self._notification_context(request)
             async with self._session() as session:
                 rows = list(
                     (
@@ -285,22 +413,35 @@ class PlatformTasksRuntime:
                         )
                     ).all()
                 )
-            return _ok(
-                [{"channel": row.channel, "enabled": row.enabled, "destination": row.destination} for row in rows],
-                context.request_id,
-            )
+            return _notification_ok([_preference(row) for row in rows], context)
 
         @router.put("/notification-preferences/{channel}", operation_id="set_notification_preference")
         async def set_preference(request: Request, channel: str):
-            context = await self._context(request, "workspace.view")
+            context = await self._notification_context(request)
             if channel not in {"email", "sms", "push"}:
                 return _error(context.request_id, "UNSUPPORTED_NOTIFICATION_CHANNEL", 400)
             body = await _json(request)
             if isinstance(body, JSONResponse):
                 return body
             enabled, destination = body.get("enabled"), _optional_text(body.get("destination"))
-            if not isinstance(enabled, bool) or enabled and not destination:
+            if (
+                not isinstance(enabled, bool)
+                or enabled
+                and not destination
+                or destination
+                and (
+                    len(destination) > 320
+                    or any(ord(character) < 32 or ord(character) == 127 for character in destination)
+                )
+                or set(body) - {"enabled", "destination", "expectedVersion"}
+            ):
                 return _error(context.request_id, "INVALID_NOTIFICATION_PREFERENCE", 400)
+            if (
+                "expectedVersion" not in body
+                or body["expectedVersion"] is not None
+                and not isinstance(body["expectedVersion"], str)
+            ):
+                return _error(context.request_id, "NOTIFICATION_PREFERENCE_VERSION_REQUIRED", 400)
             async with self._session() as session, session.begin():
                 row = await session.scalar(
                     select(NotificationPreferenceRow)
@@ -311,19 +452,47 @@ class PlatformTasksRuntime:
                     )
                     .with_for_update()
                 )
+                if row is not None and row.enabled == enabled and row.destination == destination:
+                    return _notification_ok(_preference(row), context)
+                before = _preference(row) if row is not None else None
+                if body["expectedVersion"] != (before["version"] if before else None):
+                    return _error(context.request_id, "NOTIFICATION_PREFERENCE_CONFLICT", 409)
                 if row is None:
                     row = NotificationPreferenceRow(
+                        id=str(uuid4()),
                         tenant_id=context.tenant_id,
                         workspace_id=context.workspace_id,
                         recipient_id=context.actor_id,
                         channel=channel,
                         enabled=enabled,
                         destination=destination,
+                        updated_at=_now(),
                     )
                     session.add(row)
                 else:
                     row.enabled, row.destination, row.updated_at = enabled, destination, _now()
-            return _ok({"channel": channel, "enabled": enabled, "destination": destination}, context.request_id)
+                session.add(
+                    AuditRow(
+                        tenant_id=context.tenant_id,
+                        workspace_id=context.workspace_id,
+                        actor_id=context.actor_id,
+                        action="notification.preference_updated",
+                        resource_type="notification_preference",
+                        resource_id=row.id,
+                        details={
+                            "requestId": context.request_id,
+                            "channel": channel,
+                            "before": _preference_audit(before),
+                            "after": _preference_audit(_preference(row)),
+                        },
+                    )
+                )
+                try:
+                    await session.flush()
+                except IntegrityError:
+                    await session.rollback()
+                    return _error(context.request_id, "NOTIFICATION_PREFERENCE_CONFLICT", 409)
+            return _notification_ok(_preference(row), context)
 
         @router.post("/internal/platform/tasks/claim", operation_id="claim_platform_tasks")
         async def claim_tasks(request: Request):
@@ -616,6 +785,82 @@ class PlatformTasksRuntime:
 
         return router
 
+    async def _notification_project_access(self, session: AsyncSession, context: Any, project_id: str, permission: str):
+        if not {"project.view", permission}.issubset(context.permissions):
+            raise HTTPException(403, detail={"code": "NOTIFICATION_TARGET_UNAVAILABLE"})
+        project = await session.scalar(
+            select(ProjectRow.id).where(
+                *self._scope(ProjectRow, context), ProjectRow.id == project_id, ProjectRow.deleted_at.is_(None)
+            )
+        )
+        if project is None:
+            raise HTTPException(404, detail={"code": "NOTIFICATION_TARGET_NOT_FOUND"})
+        if context.role.casefold() in {"owner", "admin", "platform_admin"}:
+            return
+        configured = os.environ.get("XINGJING_TEAM_DATABASE_URL", "").strip()
+        try:
+            target, current = make_url(configured), session.get_bind().engine.url
+
+            def identity(url):
+                return (url.get_backend_name(), (url.host or "").casefold(), url.port, url.database, dict(url.query))
+
+            if identity(target) != identity(current):
+                raise ValueError("different team source")
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT permissions, data_scope FROM xingjing_project_members "
+                            "WHERE tenant_id=:tenant AND workspace_id=:workspace AND project_id=:project "
+                            "AND member_id=:actor AND active IS TRUE"
+                        ),
+                        {
+                            "tenant": context.tenant_id,
+                            "workspace": context.workspace_id,
+                            "project": project_id,
+                            "actor": context.actor_id,
+                        },
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        except (ValueError, SQLAlchemyError) as error:
+            raise HTTPException(503, detail={"code": "NOTIFICATION_TARGET_AUTHORIZATION_UNAVAILABLE"}) from error
+        values = []
+        if row is not None:
+            for field in ("permissions", "data_scope"):
+                value = row[field]
+                try:
+                    value = json.loads(value) if isinstance(value, str) else value
+                except ValueError:
+                    value = None
+                values.append(value if isinstance(value, list) and all(isinstance(item, str) for item in value) else [])
+        if (
+            len(values) != 2
+            or not values[1]
+            or any(item != f"project:{project_id}" for item in values[1])
+            or not {"project.view", permission}.issubset(set(values[0]) & context.permissions)
+        ):
+            raise HTTPException(403, detail={"code": "NOTIFICATION_TARGET_UNAVAILABLE"})
+
+    async def _notification_context(self, request: Request):
+        if request.headers.get("X-Project-Id", "").strip():
+            raise HTTPException(400, detail={"code": "NOTIFICATION_PROJECT_CONTEXT_UNSUPPORTED"})
+        context = await self._context(request, "workspace.view")
+        if context.role == "API_KEY":
+            raise HTTPException(403, detail={"code": "API_KEY_NOT_ALLOWED"})
+        expected_workspace = request.headers.get("X-Workspace-Id", "").strip()
+        expected_actor = request.headers.get("X-Expected-Actor-Id", "").strip()
+        if (
+            expected_workspace
+            and expected_workspace != context.workspace_id
+            or expected_actor
+            and expected_actor != context.actor_id
+        ):
+            raise HTTPException(409, detail={"code": "WORKSPACE_CONTEXT_MISMATCH"})
+        return context
+
     async def _context(self, request: Request, permission: str):
         if self._unavailable_code:
             raise HTTPException(503, detail={"code": self._unavailable_code})
@@ -798,6 +1043,36 @@ def _notification(row: NotificationRow) -> dict[str, object]:
         "metadata": row.metadata_json,
         "readAt": _iso(row.read_at) if row.read_at else None,
         "createdAt": _iso(row.created_at),
+    }
+
+
+def _preference(row: NotificationPreferenceRow) -> dict[str, object]:
+    value = {
+        "channel": row.channel,
+        "enabled": row.enabled,
+        "destination": row.destination,
+        "updatedAt": _iso(row.updated_at),
+    }
+    return {**value, "version": _fingerprint(value)}
+
+
+def _preference_audit(value: dict[str, object] | None) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return {
+        "enabled": value["enabled"],
+        "version": value["version"],
+        "destinationDigest": _fingerprint(value["destination"]) if value["destination"] else None,
+    }
+
+
+def _notification_ok(data: object, context: Any):
+    return {
+        "data": data,
+        "meta": {
+            "requestId": context.request_id,
+            "scope": {"workspaceId": context.workspace_id, "actorId": context.actor_id},
+        },
     }
 
 

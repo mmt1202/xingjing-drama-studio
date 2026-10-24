@@ -1,3 +1,5 @@
+import { getTokenForSession } from "@/utils/auth";
+import { useAuthStore } from "@/stores/auth-store";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
 import { ArrowLeft, Check, Clock3, Film, Link2, LockKeyhole, MessageSquare, Package, Plus, RefreshCw, Reply } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -33,9 +35,10 @@ function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void 
 }
 
 export function InternalReviewPage({ workspaceId, projectId, accessToken }: { workspaceId?: string; projectId?: string; accessToken?: string }) {
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const { t } = useInternalReviewTranslation();
   if (!workspaceId || !projectId) return <main className="bg-[#0B0D14] p-8 text-slate-200"><h1>{t("title")}</h1><p role="alert" className="mt-4">{t("missingContext")}</p></main>;
-  return <InternalWorkspace key={`${workspaceId}:${projectId}:${accessToken ?? ""}`} workspaceId={workspaceId} projectId={projectId} accessToken={accessToken} />;
+  return <InternalWorkspace key={`${workspaceId}:${projectId}:${sessionEpoch}`} workspaceId={workspaceId} projectId={projectId} accessToken={accessToken} />;
 }
 
 function InternalWorkspace({ workspaceId, projectId, accessToken }: { workspaceId: string; projectId: string; accessToken?: string }) {
@@ -43,7 +46,9 @@ function InternalWorkspace({ workspaceId, projectId, accessToken }: { workspaceI
   const [location, navigate] = useLocation();
   const search = useSearch();
   const params = new URLSearchParams(search);
-  const api = useMemo(() => createInternalReviewApi(workspaceId, projectId, accessToken), [workspaceId, projectId, accessToken]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const [initialToken] = useState(accessToken);
+  const api = useMemo(() => createInternalReviewApi(workspaceId, projectId, getTokenForSession(sessionEpoch) ?? initialToken), [workspaceId, projectId, sessionEpoch, initialToken]);
   const offsetValue = Number(params.get("reviewOffset") ?? 0);
   const offset = Number.isSafeInteger(offsetValue) && offsetValue >= 0 ? offsetValue : 0;
   const q = params.get("reviewQ") ?? "";

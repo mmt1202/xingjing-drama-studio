@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type { AdminActionResult, AdminApi, AdminContext, AdminDomain, AdminRecord, PageResult } from "./types";
 
 export class AdminApiError extends Error {
@@ -23,7 +24,7 @@ const paths: Record<AdminDomain, string> = {
 interface ClientOptions { sessionToken: string; workspaceId: string; projectId?: string; fetcher?: typeof fetch }
 
 export function createAdminApiClient(options: ClientOptions): AdminApi {
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = createAuthenticatedFetcher({ workspaceId: options.workspaceId, fetcher: options.fetcher });
   const headers = (): Record<string, string> => ({
     Accept: "application/json",
     "Content-Type": "application/json",

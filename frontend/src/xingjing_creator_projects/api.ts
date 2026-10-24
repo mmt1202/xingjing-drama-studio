@@ -1,5 +1,6 @@
 import type { CreatorProjectsPort, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, SessionContext } from "./types";
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 
 interface Envelope<T> { data: T; meta?: { requestId?: string; total?: number; page?: { nextToken?: string | null } } }
 interface ErrorEnvelope { error?: { code?: string; message?: string; retryable?: boolean; details?: Record<string, unknown> }; meta?: { requestId?: string } }
@@ -25,7 +26,8 @@ interface ApiOptions {
   getAccessToken?: () => string | null | Promise<string | null>;
 }
 
-export function createCreatorProjectsApi({ fetcher = fetch, createId = () => crypto.randomUUID(), baseUrl = "/api/v1", getAccessToken }: ApiOptions = {}): CreatorProjectsPort {
+export function createCreatorProjectsApi({ fetcher: providedFetcher, workspaceId, createId = () => crypto.randomUUID(), baseUrl = "/api/v1", getAccessToken }: ApiOptions = {}): CreatorProjectsPort {
+  const fetcher = createAuthenticatedFetcher({ workspaceId, fetcher: providedFetcher });
   const retryKeys = new Map<string, string>();
 
   async function request<T>(path: string, init: RequestInit = {}, revision?: number): Promise<{ value: T; nextToken: string | null; total?: number }> {
@@ -52,7 +54,7 @@ export function createCreatorProjectsApi({ fetcher = fetch, createId = () => cry
       return result.value;
     } catch (error) {
       // 可重试的网关/服务故障并不能证明服务端没有接受写入；复用原键才能安全恢复。
-      if (error instanceof CreatorApiError && !error.retryable) retryKeys.delete(operation);
+      if (error instanceof CreatorApiError && !error.retryable && error.status !== 401 && error.status < 500) retryKeys.delete(operation);
       throw error;
     }
   };
@@ -111,7 +113,7 @@ export function createCreatorProjectsApi({ fetcher = fetch, createId = () => cry
         retryKeys.delete(operation);
         return result.value.script;
       } catch (error) {
-        if (error instanceof CreatorApiError && !error.retryable) retryKeys.delete(operation);
+        if (error instanceof CreatorApiError && !error.retryable && error.status !== 401 && error.status < 500) retryKeys.delete(operation);
         throw error;
       }
     },

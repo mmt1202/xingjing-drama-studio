@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { GitFork, LoaderCircle, RefreshCw, Search, ShieldCheck, Store, Workflow } from "lucide-react";
 import { createMarketplaceApi, marketplaceError, type ForkRecord, type MarketItem, type TemplateRecord, type TemplateReview } from "./api";
+import { useAuthStore } from "@/stores/auth-store";
+import { getTokenForSession } from "@/utils/auth";
 
 export type MarketplacePageId = "AD-015" | "AD-020" | "AD-049" | "CR-108" | "CR-109" | "CR-110" | "CR-024" | "CR-040" | "CR-041" | "CR-043" | "CR-111" | "CR-112";
 
 const titles: Record<MarketplacePageId, string> = { "AD-015": "导出模板管理", "AD-020": "消息模板", "AD-049": "模板审核", "CR-108": "提交模板审核", "CR-109": "创建模板", "CR-110": "模板详情", "CR-024": "创作者社区", "CR-040": "Fork 授权", "CR-041": "Fork 血缘", "CR-043": "Fork 收益分成", "CR-111": "模板市场", "CR-112": "模板 Fork" };
 
 export function MarketplacePage({ pageId, accessToken }: { pageId: MarketplacePageId; accessToken?: string }) {
-  const api = useMemo(() => createMarketplaceApi({ accessToken }), [accessToken]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  return <MarketplaceWorkspace key={sessionEpoch} pageId={pageId} accessToken={accessToken} sessionEpoch={sessionEpoch} />;
+}
+function MarketplaceWorkspace({ pageId, accessToken, sessionEpoch }: { pageId: MarketplacePageId; accessToken?: string; sessionEpoch: string }) {
+  const [initialToken] = useState(accessToken);
+  const api = useMemo(() => createMarketplaceApi({ accessToken: getTokenForSession(sessionEpoch) ?? initialToken }), [sessionEpoch, initialToken]);
   const admin = pageId.startsWith("AD-"); const market = ["CR-024", "CR-040", "CR-041", "CR-043", "CR-111", "CR-112"].includes(pageId);
   return <Shell title={titles[pageId]}>{admin ? <AdminSurface api={api} pageId={pageId} /> : market ? <MarketSurface api={api} pageId={pageId} /> : <TemplateSurface api={api} pageId={pageId} />}</Shell>;
 }

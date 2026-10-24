@@ -1,10 +1,12 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type { CoverAction, CoverApi } from "./contracts";
 
 export class CoverApiError extends Error {
   constructor(readonly status: number, readonly code: string, readonly requestId?: string) { super(code); }
 }
 export function createCoverApi(workspaceId: string, projectId: string, token: string | null): CoverApi {
+  const fetcher = createAuthenticatedFetcher({ workspaceId });
   const prefix = `/api/v1/projects/${encodeURIComponent(projectId)}/cover-plans`;
   const retries = new Map<string, string>();
   function headers(init?: HeadersInit) {
@@ -17,7 +19,7 @@ export function createCoverApi(workspaceId: string, projectId: string, token: st
     return result;
   }
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${prefix}${path}`, { ...init, credentials: "include", headers: headers(init.headers) });
+    const response = await fetcher(`${prefix}${path}`, { ...init, credentials: "include", headers: headers(init.headers) });
     const body = await response.json().catch(() => null) as { data?: T; error?: { code?: string }; detail?: { code?: string }; meta?: { requestId?: string } } | null;
     if (!response.ok || !body || body.data === undefined) throw new CoverApiError(response.status, body?.error?.code ?? body?.detail?.code ?? "COVER_UNAVAILABLE", body?.meta?.requestId);
     return body.data;
@@ -43,7 +45,7 @@ export function createCoverApi(workspaceId: string, projectId: string, token: st
     create: (input) => write("", input),
     action: (plan, action, payload = {}) => write(`/${encodeURIComponent(plan.id)}/actions`, { action, version: plan.version, payload }),
     async media(planId, assetId, signal) {
-      const response = await fetch(`${prefix}/${encodeURIComponent(planId)}/candidates/${encodeURIComponent(assetId)}/content`, { credentials: "include", signal, headers: headers() });
+      const response = await fetcher(`${prefix}/${encodeURIComponent(planId)}/candidates/${encodeURIComponent(assetId)}/content`, { credentials: "include", signal, headers: headers() });
       if (!response.ok) throw new CoverApiError(response.status, "COVER_MEDIA_UNAVAILABLE");
       if (!(response.headers.get("Content-Type") ?? "").startsWith("image/")) throw new CoverApiError(502, "COVER_MEDIA_UNAVAILABLE");
       return response.blob();

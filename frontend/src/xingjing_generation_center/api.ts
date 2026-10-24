@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type { GeneratedCandidateSelection, GenerationCandidatePage, GenerationCostEvidence, GenerationModelAvailability, GenerationModelUsageReport, GenerationSubmission, GenerationTask, GenerationTaskDetail, GenerationTaskFilters, GenerationTaskPage } from "./contracts";
 
 export class GenerationCenterApiError extends Error {
@@ -25,7 +26,8 @@ function key(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function createGenerationCenterApi({ fetcher = fetch, getAccessToken }: GenerationCenterApiOptions = {}): GenerationCenterApi {
+export function createGenerationCenterApi({ fetcher: providedFetcher, getAccessToken }: GenerationCenterApiOptions = {}): GenerationCenterApi {
+  const fetcher = createAuthenticatedFetcher({ fetcher: providedFetcher });
   async function request<T>(path: string, init: RequestInit = {}): Promise<{ value: T; requestId: string | null; total: number | undefined }> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");

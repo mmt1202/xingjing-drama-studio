@@ -494,6 +494,8 @@ class VersionReader:
                     reason = (
                         "QUALITY_POLICY_REQUIRED"
                         if kind == "storyboard" and not self.quality_policy_available and not locked
+                        else "EMPTY_STORYBOARD"
+                        if kind == "storyboard" and not board.shots and not locked
                         else None
                     )
                     if shot is not None and shot.shot_id not in current_shots:
@@ -516,7 +518,7 @@ class VersionReader:
                         parent=parent,
                         mutable=not locked,
                         restorable=shot is None or shot.shot_id in current_shots,
-                        lock_available=self.quality_policy_available,
+                        lock_available=self.quality_policy_available and bool(board.shots),
                         reason=reason,
                     )
                     previous[source_id] = version.number

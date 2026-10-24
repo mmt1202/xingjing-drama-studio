@@ -16,6 +16,7 @@ import { CoverWorkspace } from "@/xingjing_cover/CoverWorkspace";
 import { CoverReleaseLinks } from "@/xingjing_cover/CoverReleaseLinks";
 
 import { useAuthStore } from "@/stores/auth-store";
+import { getTokenForSession } from "@/utils/auth";
 import {
   AiRewritePage,
   AiDirectorPage,
@@ -88,10 +89,10 @@ export function WorkspaceProjectsRoute({
   workspaceId: string;
 }) {
   const [, navigate] = useLocation();
-  const token = useAuthStore((state) => state.token);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const api = useMemo(
-    () => createCreatorProjectsApi({ workspaceId, getAccessToken: () => token }),
-    [workspaceId, token],
+    () => createCreatorProjectsApi({ workspaceId, getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [workspaceId, sessionEpoch],
   );
   return (
     <CreatorWorkspaceFrame workspaceId={workspaceId} active="projects">
@@ -118,10 +119,10 @@ export function WorkspaceAssetsRoute({
   assetId?: string;
 }) {
   const [, navigate] = useLocation();
-  const token = useAuthStore((state) => state.token);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const api = useMemo(
-    () => createAssetsStoryboardApi({ getAccessToken: () => token }),
-    [token],
+    () => createAssetsStoryboardApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [sessionEpoch],
   );
   const pageId =
     surface === "assets"
@@ -175,25 +176,25 @@ export function WorkspaceAssetsRoute({
 }
 
 export function WorkspaceLandingRoute({ workspaceId, surface }: { workspaceId: string; surface: string }) {
-  const token = useAuthStore((state) => state.token);
-  const preferenceApi = useMemo(() => createPreferenceApi({ workspaceId, accessToken: token }), [workspaceId, token]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const preferenceApi = useMemo(() => createPreferenceApi({ workspaceId, accessToken: getTokenForSession(sessionEpoch) }), [workspaceId, sessionEpoch]);
   const commercePage = { templates: "CR-112", billing: "CR-009", commercial: "CR-013", team: "CR-107" }[surface];
   if (!["home", "tasks", "templates", "billing", "commercial", "team", "settings", "analytics"].includes(surface)) return <MissingSurface />;
   return <CreatorWorkspaceFrame workspaceId={workspaceId} active={surface}>
-    {surface === "home" ? <CreatorHomePage /> : surface === "billing" ? <PaymentsWorkspace key={`${workspaceId}:${token}`} workspaceId={workspaceId} /> : surface === "analytics" ? <CreatorAnalyticsPage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
+    {surface === "home" ? <CreatorHomePage /> : surface === "billing" ? <PaymentsWorkspace key={`${workspaceId}:${sessionEpoch}`} workspaceId={workspaceId} /> : surface === "analytics" ? <CreatorAnalyticsPage /> : surface === "tasks" ? <WorkspaceTasks /> : surface === "settings" ? <CreatorSettingsPage pageId="CR-096" api={preferenceApi} /> : commercePage ? <CollaborationBusinessContent workspaceId={workspaceId} pageId={commercePage} /> : null}
   </CreatorWorkspaceFrame>;
 }
 
 export function ProjectBusinessRoute({
   workspaceId, projectId, surface, itemId,
 }: { workspaceId: string; projectId: string; surface: string; itemId?: string }) {
-  const token = useAuthStore((state) => state.token);
-  const controlApi = useMemo(() => createProjectControlApi(() => token), [token]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const controlApi = useMemo(() => createProjectControlApi(() => getTokenForSession(sessionEpoch)), [sessionEpoch]);
   if (surface === "home") return <Redirect to={`/app/workspaces/${encodeURIComponent(workspaceId)}/home`} />;
   const page = <ProjectBusinessContent workspaceId={workspaceId} projectId={projectId} surface={surface} itemId={itemId} />;
   if (["create", "guided-create"].includes(surface)) return <CreatorWorkspaceFrame workspaceId={workspaceId} active="projects">{page}</CreatorWorkspaceFrame>;
   if (["projects", "home"].includes(surface)) return page;
-  return <ProjectFlowShell key={`${workspaceId}:${projectId}:${token}`} api={controlApi} workspaceId={workspaceId} projectId={projectId} slug={surface} itemId={itemId}>{page}</ProjectFlowShell>;
+  return <ProjectFlowShell key={`${workspaceId}:${projectId}:${sessionEpoch}`} api={controlApi} workspaceId={workspaceId} projectId={projectId} slug={surface} itemId={itemId}>{page}</ProjectFlowShell>;
 }
 
 function ProjectBusinessContent({
@@ -210,40 +211,40 @@ function ProjectBusinessContent({
   const [, navigate] = useLocation();
   const search = useSearch();
   const surface = resolveProjectSurface(slug, itemId);
-  const token = useAuthStore((state) => state.token);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const creatorApi = useMemo(
     () =>
-      createCreatorProjectsApi({ workspaceId, getAccessToken: () => token }),
-    [workspaceId, token],
+      createCreatorProjectsApi({ workspaceId, getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [workspaceId, sessionEpoch],
   );
   const generationApi = useMemo(
-    () => createGenerationAudioApi({ getAccessToken: () => token }),
-    [token],
+    () => createGenerationAudioApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [sessionEpoch],
   );
-  const episodesApi = useMemo(() => createEpisodesApi(() => token), [token]);
+  const episodesApi = useMemo(() => createEpisodesApi(() => getTokenForSession(sessionEpoch)), [sessionEpoch]);
   const generationCenterApi = useMemo(
-    () => createGenerationCenterApi({ getAccessToken: () => token }),
-    [token],
+    () => createGenerationCenterApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [sessionEpoch],
   );
   const complianceApi = useMemo(
-    () => createComplianceExportApi({ getAccessToken: () => token }),
-    [token],
+    () => createComplianceExportApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [sessionEpoch],
   );
   const editingApi = useMemo(
-    () => createEditingApi({ getAccessToken: () => token }),
-    [token],
+    () => createEditingApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [sessionEpoch],
   );
   const assetsStoryboardApi = useMemo(
-    () => createAssetsStoryboardApi({ getAccessToken: () => token }),
-    [token],
+    () => createAssetsStoryboardApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }),
+    [sessionEpoch],
   );
   const preferenceApi = useMemo(
     () =>
       createPreferenceApi({
         workspaceId,
-        accessToken: token,
+        accessToken: getTokenForSession(sessionEpoch),
       }),
-    [workspaceId, token],
+    [workspaceId, sessionEpoch],
   );
   const complianceQuery = useMemo(
     () => new URLSearchParams(search),
@@ -345,9 +346,9 @@ function ProjectBusinessContent({
         </>
       );
     case "cover":
-      return <CoverWorkspace key={`${workspaceId}:${projectId}:${token}`} workspaceId={workspaceId} projectId={projectId} mode={surface.mode} />;
+      return <CoverWorkspace key={`${workspaceId}:${projectId}:${sessionEpoch}`} workspaceId={workspaceId} projectId={projectId} mode={surface.mode} />;
     case "version-history":
-      return <VersionWorkspace key={`${workspaceId}:${projectId}:${token}`} workspaceId={workspaceId} projectId={projectId} />;
+      return <VersionWorkspace key={`${workspaceId}:${projectId}:${sessionEpoch}`} workspaceId={workspaceId} projectId={projectId} />;
     case "creator-settings":
       return (
         <>
@@ -420,18 +421,18 @@ export function AdminBusinessRoute({
   workspaceId: string;
   surface: string;
 }) {
-  const token = useAuthStore((state) => state.token) ?? "";
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const [location, navigate] = useLocation();
   const search = useSearch();
   const { t } = usePaymentTranslation();
   const route = resolveAdminRoute(surface);
-  const modelApi = useMemo(() => createModelOperationsApi(workspaceId, token), [workspaceId, token]);
+  const modelApi = useMemo(() => createModelOperationsApi(workspaceId, getTokenForSession(sessionEpoch) ?? ""), [workspaceId, sessionEpoch]);
   const api = useMemo(
-    () => createAdminApiClient({ sessionToken: token, workspaceId }),
-    [token, workspaceId],
+    () => createAdminApiClient({ sessionToken: getTokenForSession(sessionEpoch) ?? "", workspaceId }),
+    [sessionEpoch, workspaceId],
   );
   if (route?.id === "AD-034" && new URLSearchParams(search).get("legacy") === "compensation") return <section className="xj-payments-page"><div className="xj-payments-notice"><p>{t("legacyCompensationHelp")}</p><button type="button" className={paymentButton} onClick={() => navigate(location)}>{t("backToRefunds")}</button></div><AdminPlatform routeId="AD-034" api={api} /></section>;
-  return route?.id === "AD-026" || route?.id === "AD-034" ? <PaymentsWorkspace key={`${workspaceId}:${token}:${route.id}`} workspaceId={workspaceId} initialTab={route.id === "AD-034" ? "refunds" : "orders"} mode="admin" /> : route?.id === "AD-023" ? <ModelOperationsPage key={`${workspaceId}:${token}`} workspaceId={workspaceId} api={modelApi} /> : route?.id === "AD-002" ? (
+  return route?.id === "AD-026" || route?.id === "AD-034" ? <PaymentsWorkspace key={`${workspaceId}:${sessionEpoch}:${route.id}`} workspaceId={workspaceId} initialTab={route.id === "AD-034" ? "refunds" : "orders"} mode="admin" /> : route?.id === "AD-023" ? <ModelOperationsPage key={`${workspaceId}:${sessionEpoch}`} workspaceId={workspaceId} api={modelApi} /> : route?.id === "AD-002" ? (
     <OpenPlatform api={api} />
   ) : route ? (
     <AdminPlatform routeId={route.id} api={api} />
@@ -460,14 +461,15 @@ function CollaborationBusinessContent({
   pageId: string;
 }) {
   const token = useAuthStore((state) => state.token) ?? undefined;
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const marketplacePages: MarketplacePageId[] = [
     "AD-015", "AD-020", "AD-049", "CR-108", "CR-109", "CR-110",
     "CR-024", "CR-040", "CR-041", "CR-043", "CR-111", "CR-112",
   ];
   const route = collaborationCommerceRouteMap.get(pageId);
   const api = useMemo(
-    () => createCollaborationCommerceApi({ accessToken: token }),
-    [token],
+    () => createCollaborationCommerceApi({ accessToken: getTokenForSession(sessionEpoch) ?? undefined }),
+    [sessionEpoch],
   );
   if (marketplacePages.includes(pageId as MarketplacePageId)) {
     return <MarketplacePage pageId={pageId as MarketplacePageId} accessToken={token} />;
@@ -516,7 +518,7 @@ function CollaborationBusinessContent({
       />
     );
   }
-  if (pageId === "CR-009" && workspaceId) return <PaymentsWorkspace key={`${workspaceId}:${token}`} workspaceId={workspaceId} />;
+  if (pageId === "CR-009" && workspaceId) return <PaymentsWorkspace key={`${workspaceId}:${sessionEpoch}`} workspaceId={workspaceId} />;
   if (pageId === "CR-085") {
     return <InternalReviewPage workspaceId={workspaceId} projectId={projectId} accessToken={token} />;
   }

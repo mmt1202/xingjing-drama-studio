@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import i18n from "@/i18n";
 
 export interface ReviewShot {
@@ -109,6 +110,7 @@ export interface InternalReviewApi {
 }
 
 export function createInternalReviewApi(workspaceId: string, projectId: string, token?: string): InternalReviewApi {
+  const fetcher = createAuthenticatedFetcher({ workspaceId });
   const prefix = `/api/v1/projects/${encodeURIComponent(projectId)}/internal-reviews`;
   const retries = new Map<string, string>();
 
@@ -120,7 +122,7 @@ export function createInternalReviewApi(workspaceId: string, projectId: string, 
     headers.set("X-Workspace-Id", workspaceId);
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (init.body) headers.set("Content-Type", "application/json");
-    const response = await fetch(path, { ...init, headers });
+    const response = await fetcher(path, { ...init, headers });
     const value = await response.json().catch(() => null) as { data?: T; error?: { code?: string }; detail?: { code?: string }; meta?: { requestId?: string } } | null;
     if (!response.ok || !value || value.data === undefined) {
       throw new InternalReviewError(response.status, value?.error?.code ?? value?.detail?.code ?? "REVIEW_RUNTIME_UNAVAILABLE", value?.meta?.requestId);

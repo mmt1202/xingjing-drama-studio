@@ -1,3 +1,5 @@
+import { getTokenForSession } from "@/utils/auth";
+import { useAuthStore } from "@/stores/auth-store";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowUpRight, Download, RefreshCw, Settings2 } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -25,12 +27,13 @@ function DashboardSkeleton() {
 }
 
 export function CreatorAnalyticsPage() {
-  const { access, token, go } = useCreatorWorkspace();
+  const { access, go } = useCreatorWorkspace();
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const { t, i18n } = useAnalyticsTranslation();
   const [location, navigate] = useLocation();
   const search = useSearch();
-  const api = useMemo(() => createAnalyticsApi(access.workspaceId, access.actorId, token), [access.workspaceId, access.actorId, token]);
-  const preferenceApi = useMemo(() => createPreferenceApi({ workspaceId: access.workspaceId, accessToken: token }), [access.workspaceId, token]);
+  const api = useMemo(() => createAnalyticsApi(access.workspaceId, access.actorId, getTokenForSession(sessionEpoch)), [access.workspaceId, access.actorId, sessionEpoch]);
+  const preferenceApi = useMemo(() => createPreferenceApi({ workspaceId: access.workspaceId, accessToken: getTokenForSession(sessionEpoch) }), [access.workspaceId, sessionEpoch]);
   const [record, setRecord] = useState<PreferenceRecord | null>();
   const [preferenceFailed, setPreferenceFailed] = useState(false);
   const [preferenceReload, setPreferenceReload] = useState(0);

@@ -71,7 +71,7 @@ import type {
   TestConnectionResponse,
   UpdateAgentCredentialRequest,
 } from "@/types/agent-credential";
-import { getToken, clearToken, refreshAccessToken } from "@/utils/auth";
+import { getToken, clearToken, authenticatedFetch } from "@/utils/auth";
 import { isDemoProject } from "@/onboarding/demo-project";
 import i18n from "./i18n";
 
@@ -435,10 +435,7 @@ class API {
       },
     };
 
-    let response = await fetch(url, withAuth(endpoint, { ...defaultOptions, ...options }));
-    if (response.status === 401 && await refreshAccessToken()) {
-      response = await fetch(url, withAuth(endpoint, { ...defaultOptions, ...options }));
-    }
+    const response = await authenticatedFetch(url, withAuth(endpoint, { ...defaultOptions, ...options }));
 
     if (!response.ok) {
       handleUnauthorized(response);
@@ -496,7 +493,7 @@ class API {
   }
 
   static async downloadDiagnostics(): Promise<{ blob: Blob; filename: string }> {
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}/system/logs/download`,
       withAuth("/system/logs/download", { method: "GET" }),
     );
@@ -633,7 +630,7 @@ class API {
     formData.append("file", file);
     formData.append("conflict_policy", conflictPolicy);
 
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}/projects/import`,
       withAuth("/projects/import", {
         method: "POST",
@@ -1043,7 +1040,7 @@ class API {
     const qs = qsParts.join("&");
     const url = `/projects/${encodeURIComponent(projectName)}/upload/${uploadType}${qs ? "?" + qs : ""}`;
 
-    const response = await fetch(`${API_BASE}${url}`, withAuth(url, {
+    const response = await authenticatedFetch(`${API_BASE}${url}`, withAuth(url, {
       method: "POST",
       body: formData,
     }));
@@ -1087,7 +1084,7 @@ class API {
   private static async postFileUpload<T>(url: string, file: File): Promise<T> {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch(`${API_BASE}${url}`, withAuth(url, { method: "POST", body: formData }));
+    const response = await authenticatedFetch(`${API_BASE}${url}`, withAuth(url, { method: "POST", body: formData }));
     await throwIfNotOk(response, "上传失败");
     return (await response.json()) as T;
   }
@@ -1212,7 +1209,7 @@ class API {
     filename: string
   ): Promise<string> {
     const url = `/projects/${encodeURIComponent(projectName)}/source/${encodeURIComponent(filename)}`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url)
     );
@@ -1229,7 +1226,7 @@ class API {
     content: string
   ): Promise<SuccessResponse> {
     const url = `/projects/${encodeURIComponent(projectName)}/source/${encodeURIComponent(filename)}`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url, {
         method: "PUT",
@@ -1249,7 +1246,7 @@ class API {
     filename: string
   ): Promise<SuccessResponse> {
     const url = `/projects/${encodeURIComponent(projectName)}/source/${encodeURIComponent(filename)}`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url, {
         method: "DELETE",
@@ -1283,7 +1280,7 @@ class API {
     stepNum: number
   ): Promise<string> {
     const url = `/projects/${encodeURIComponent(projectName)}/drafts/${episode}/step${stepNum}`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url)
     );
@@ -1301,7 +1298,7 @@ class API {
     content: string
   ): Promise<SuccessResponse> {
     const url = `/projects/${encodeURIComponent(projectName)}/drafts/${episode}/step${stepNum}`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url, {
         method: "PUT",
@@ -1832,7 +1829,7 @@ class API {
     formData.append("file", file);
 
     const url = `/projects/${encodeURIComponent(projectName)}/style-image`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url, {
         method: "POST",
@@ -2144,7 +2141,7 @@ class API {
     const formData = new FormData();
     formData.append("file", file);
     const url = `/providers/gemini-vertex/credentials/upload?name=${encodeURIComponent(name)}`;
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${API_BASE}${url}`,
       withAuth(url, { method: "POST", body: formData }),
     );
@@ -2433,7 +2430,7 @@ class API {
     if (payload.image) form.append("image", payload.image);
     const endpoint = "/assets";
     const url = `${API_BASE}${endpoint}`;
-    const response = await fetch(url, withAuth(endpoint, { method: "POST", body: form }));
+    const response = await authenticatedFetch(url, withAuth(endpoint, { method: "POST", body: form }));
     if (!response.ok) {
       handleUnauthorized(response);
       const error = (await response.json().catch(() => ({ detail: response.statusText }))) as {
@@ -2456,7 +2453,7 @@ class API {
     form.append("image", image);
     const endpoint = `/assets/${encodeURIComponent(id)}/image`;
     const url = `${API_BASE}${endpoint}`;
-    const response = await fetch(url, withAuth(endpoint, { method: "POST", body: form }));
+    const response = await authenticatedFetch(url, withAuth(endpoint, { method: "POST", body: form }));
     if (!response.ok) {
       handleUnauthorized(response);
       const error = (await response.json().catch(() => ({ detail: response.statusText }))) as {

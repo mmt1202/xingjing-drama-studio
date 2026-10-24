@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 
 export type ReviewPermission = "review.view" | "review.comment" | "review.approve" | "review.download";
 
@@ -102,6 +103,7 @@ function uniqueKey(): string {
 }
 
 export function createReviewApi({ accessToken, baseUrl = "/api/v1", fetcher = fetch }: { accessToken?: string; baseUrl?: string; fetcher?: typeof fetch } = {}): ReviewApi {
+  const authenticated = createAuthenticatedFetcher({ fetcher });
   const retries = new Map<string, string>();
   async function request<T>(path: string, init: RequestInit = {}, options: { publicRequest?: boolean; sessionId?: string; accessSecret?: string } = {}): Promise<T> {
     const headers = new Headers(init.headers);
@@ -115,7 +117,7 @@ export function createReviewApi({ accessToken, baseUrl = "/api/v1", fetcher = fe
 
     let response: Response;
     try {
-      response = await fetcher(`${baseUrl}${path}`, { ...init, headers, cache: "no-store", credentials: options.publicRequest ? "omit" : "same-origin", referrerPolicy: "no-referrer" });
+      response = await (options.publicRequest ? fetcher : authenticated)(`${baseUrl}${path}`, { ...init, headers, cache: "no-store", credentials: options.publicRequest ? "omit" : "same-origin", referrerPolicy: "no-referrer" });
     } catch (error) {
       if (init.signal?.aborted) throw error;
       throw new ReviewApiError(0, "NETWORK_UNAVAILABLE");

@@ -6,18 +6,23 @@ import { createReviewApi, type CreateReviewLinkInput, type ReviewComment, type R
 import { buttonClass, ErrorPanel, inputClass, LoadingMark, orderedComments, primaryClass, ReviewShell, ReviewStatus, ReviewTime, toTimecode } from "./components";
 import { IssuedLink, LinkForm } from "./StaffReviewForms";
 import { useReviewTranslation } from "./i18n";
+import { useAuthStore } from "@/stores/auth-store";
+import { getTokenForSession } from "@/utils/auth";
 
 type StaffPageId = "CR-011" | "CR-085" | "TM-002" | "TM-003";
 type StaffProps = { pageId: StaffPageId; workspaceId?: string; projectId?: string; accessToken?: string };
 
 export function StaffReviewPage(props: StaffProps) {
-  return <StaffReviewWorkspace key={`${props.workspaceId}/${props.projectId}/${props.pageId}`} {...props} />;
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  return <StaffReviewWorkspace key={`${props.workspaceId}/${props.projectId}/${props.pageId}/${sessionEpoch}`} {...props} />;
 }
 
 function StaffReviewWorkspace({ pageId, workspaceId, projectId, accessToken }: StaffProps) {
   const { t } = useReviewTranslation();
   const initialFinalVersionId = new URLSearchParams(useSearch()).get("projectVersion") ?? undefined;
-  const api = useMemo(() => createReviewApi({ accessToken }), [accessToken]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const [initialToken] = useState(accessToken);
+  const api = useMemo(() => createReviewApi({ accessToken: getTokenForSession(sessionEpoch) ?? initialToken }), [sessionEpoch, initialToken]);
   const isProject = pageId === "CR-011" || pageId === "CR-085";
   const [links, setLinks] = useState<ReviewLink[]>([]);
   const [canManage, setCanManage] = useState(false);

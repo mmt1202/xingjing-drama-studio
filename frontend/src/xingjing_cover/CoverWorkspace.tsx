@@ -1,3 +1,4 @@
+import { getTokenForSession } from "@/utils/auth";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Check, CheckCheck, ChevronRight, ImagePlus, Images, Layers, Pencil, Plus, RefreshCw, Sparkles, Star } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -20,8 +21,8 @@ function CoverError({ error, retry, retryLabel }: { error: unknown; retry?: () =
 export function CoverWorkspace({ workspaceId, projectId, mode }: { workspaceId: string; projectId: string; mode: "generate" | "ab" }) {
   const { t, i18n } = useCoverTranslation();
   const { go } = useProjectFlow();
-  const token = useAuthStore((state) => state.token);
-  const api = useMemo(() => createCoverApi(workspaceId, projectId, token), [workspaceId, projectId, token]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const api = useMemo(() => createCoverApi(workspaceId, projectId, getTokenForSession(sessionEpoch)), [workspaceId, projectId, sessionEpoch]);
   const [location, navigate] = useLocation();
   const search = useSearch();
   const params = new URLSearchParams(search);

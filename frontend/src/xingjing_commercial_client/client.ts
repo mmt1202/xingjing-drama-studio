@@ -1,4 +1,5 @@
 import { parseCommercialMilestonePage, parseCommercialOrderPage, parseVersionedCommercialOrder } from "./codec";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import {
   CommercialApiError,
   type CommercialApiErrorKind,
@@ -143,7 +144,7 @@ export function createCommercialClient(options: CommercialClientOptions): Commer
   const baseUrl = (options.baseUrl ?? "/api/v1").replace(/\/+$/, "");
   const accessToken = requiredOption(options.accessToken, "accessToken");
   const workspaceId = requiredOption(options.workspaceId, "workspaceId");
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = createAuthenticatedFetcher({ workspaceId: options.workspaceId, fetcher: options.fetcher });
   const orderRoot = `${baseUrl}/${options.surface === "admin" ? "admin/" : ""}commercial-orders`;
 
   function commonHeaders(): Headers {

@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type {
   ApiEnvelope,
   ApiErrorEnvelope,
@@ -43,11 +44,12 @@ function scopeQuery(scope: ComplianceScope) {
 }
 
 export function createComplianceExportApi({
-  fetcher = fetch,
+  fetcher: providedFetcher,
   baseUrl = "/api/v1",
   getAccessToken,
   createIdempotencyKey = () => crypto.randomUUID(),
 }: ComplianceApiOptions = {}): ComplianceExportPort {
+  const fetcher = createAuthenticatedFetcher({ fetcher: providedFetcher });
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let response: Response;
     try {

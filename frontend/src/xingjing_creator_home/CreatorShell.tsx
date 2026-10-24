@@ -17,8 +17,9 @@ const navigation = [
 ];
 
 /** Presentation only: the route controller owns scope, permissions and navigation guards. */
-export function CreatorShell({ active, title, workspaceLabel, permissions = [], onNavigate, onWorkspace, children }: {
+export function CreatorShell({ active, title, workspaceLabel, permissions = [], notifications, onNavigate, onWorkspace, children }: {
   active: string; title?: string; workspaceLabel?: string; permissions?: string[];
+  notifications?: ReactNode;
   onNavigate: (path: string) => void; onWorkspace: () => void; children: ReactNode;
 }) {
   const { t } = useHomeTranslation();
@@ -55,7 +56,7 @@ export function CreatorShell({ active, title, workspaceLabel, permissions = [], 
         <form className="xj-creator-search" role="search" onSubmit={(event) => { event.preventDefault(); navigate(`home?q=${encodeURIComponent(query.trim())}&days=0&offset=0`); }}>
           <Search size={16} aria-hidden="true" /><input aria-label={t("search")} placeholder={t("search")} value={query} maxLength={255} onChange={(event) => setQuery(event.target.value)} disabled={!can("project.view")} /><button type="submit" className="sr-only" disabled={!can("project.view")}>{t("searchAction")}</button>
         </form>
-        <div className="xj-creator-top-actions"><button className="xj-shell-button xj-creator-task-action" disabled={!can("generation.view")} onClick={() => navigate("tasks")}>{t("tasks")}</button><button className="xj-shell-button xj-shell-button--primary" disabled={!can("project.manage")} onClick={() => navigate("projects/_new/guided-create")}><Plus size={15} aria-hidden="true" />{t("create")}</button></div>
+        <div className="xj-creator-top-actions">{notifications}<button className="xj-shell-button xj-creator-task-action" disabled={!can("generation.view")} onClick={() => navigate("tasks")}>{t("tasks")}</button><button className="xj-shell-button xj-shell-button--primary" disabled={!can("project.manage")} onClick={() => navigate("projects/_new/guided-create")}><Plus size={15} aria-hidden="true" />{t("create")}</button></div>
       </header>
       <div className="xj-creator-content">{children}</div>
     </div>

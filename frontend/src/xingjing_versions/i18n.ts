@@ -89,3 +89,9 @@ for (const [language, errors] of Object.entries({
   en: { SCRIPT_VALIDATION_FAILED: "The script has not passed structural validation. Complete its scenes, paragraphs or source mapping in the script workspace before freezing.", QUALITY_POLICY_REQUIRED: "The storyboard quality policy is not configured. Complete production configuration before freezing." },
   vi: { SCRIPT_VALIDATION_FAILED: "Kịch bản chưa đạt kiểm tra cấu trúc. Hoàn thiện cảnh, đoạn văn hoặc ánh xạ nguồn ở trang kịch bản trước khi khóa.", QUALITY_POLICY_REQUIRED: "Chưa cấu hình chính sách chất lượng bảng phân cảnh. Hoàn thiện cấu hình sản xuất trước khi khóa." },
 })) i18n.addResourceBundle(language, "versionWorkspace", { error: errors }, true, false);
+
+for (const [language, errors] of Object.entries({
+  zh: { EMPTY_STORYBOARD: "故事板没有镜头，不能冻结。请先导入或保存分镜计划。", QUALITY_GATE_FAILED: "故事板存在阻断问题，请前往分镜质量检测补齐场景及对白角色引用或处理关键词命中后重试。" },
+  en: { EMPTY_STORYBOARD: "An empty storyboard cannot be frozen. Import or save a shot plan first.", QUALITY_GATE_FAILED: "The storyboard has blocking issues. Resolve missing scene or dialogue character references and keyword matches in quality checks, then retry." },
+  vi: { EMPTY_STORYBOARD: "Không thể khóa bảng phân cảnh trống. Hãy nhập hoặc lưu kế hoạch cảnh quay trước.", QUALITY_GATE_FAILED: "Bảng phân cảnh còn lỗi chặn. Bổ sung tham chiếu bối cảnh, nhân vật có lời thoại hoặc xử lý từ khóa khớp ở trang kiểm tra rồi thử lại." },
+})) i18n.addResourceBundle(language, "versionWorkspace", { error: errors }, true, false);

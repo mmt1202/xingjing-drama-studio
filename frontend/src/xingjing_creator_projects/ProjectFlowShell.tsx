@@ -2,11 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ArrowLeft, ChevronRight, Film, LockKeyhole, RefreshCw } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
 import { CreatorShell } from "@/xingjing_creator_home/CreatorShell";
+import { NotificationCenter } from "@/xingjing_notifications/NotificationCenter";
 import { createHomeApi, type HomeApi, type WorkspaceAccess } from "@/xingjing_creator_home/api";
 import { readHomeReturn } from "@/xingjing_creator_home/return-state";
 import { readAnalyticsReturn } from "@/xingjing_analytics/return-state";
 import { readVersionReturn } from "@/xingjing_versions/return-state";
 import { useAuthStore } from "@/stores/auth-store";
+import { getTokenForSession } from "@/utils/auth";
 import { CreatorApiError } from "./api";
 import type { ProjectControl, ProjectControlApi } from "./control-api";
 import { useControlTranslation } from "./control-i18n";
@@ -48,7 +50,8 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const [location, navigate] = useLocation();
   const search = useSearch();
   const token = useAuthStore((state) => state.token);
-  const workspaceApi = useMemo(() => createHomeApi(workspaceId, token), [workspaceId, token]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const workspaceApi = useMemo(() => createHomeApi(workspaceId, getTokenForSession(sessionEpoch)), [workspaceId, sessionEpoch]);
   const [workspaceContext, setWorkspaceContext] = useState<{ api: HomeApi; access?: WorkspaceAccess; failed?: boolean }>();
   const [workspaceReload, setWorkspaceReload] = useState(0);
   const [data, setData] = useState<ProjectControl>();
@@ -151,7 +154,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
             : !validData.episodes.some((item) => item.finalVersionId) ? "finals" : null;
   const pageGate = isCover ? coverReason ? { id: "export", reason: coverReason, recovery: coverReason === "setup" ? "guided-create" : coverReason === "finals" ? "postproduction" : null } : undefined
     : stages.find((s) => s.id === active && s.reason);
-  return <CreatorShell active="projects" title={t(`stage.${active}`)} workspaceLabel={workspaceAccess?.workspaceName ?? workspaceId} permissions={workspaceAccess?.permissions ?? []} onNavigate={goWorkspace} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
+  return <CreatorShell active="projects" title={t(`stage.${active}`)} workspaceLabel={workspaceAccess?.workspaceName ?? workspaceId} permissions={workspaceAccess?.permissions ?? []} notifications={workspaceAccess ? <NotificationCenter workspaceId={workspaceId} actorId={workspaceAccess.actorId} token={token} permissions={workspaceAccess.permissions} onNavigate={goWorkspace} registerNavigationGuard={registerGuard} /> : undefined} onNavigate={goWorkspace} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
     <div className="xj-project-layout">
       <section className="xj-project-card" aria-label={t("projectIdentity")}>
         {validData ? <>

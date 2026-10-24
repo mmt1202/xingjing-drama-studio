@@ -1,3 +1,5 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
+
 export interface PreferenceRecord {
   resource: string;
   value: Record<string, unknown>;
@@ -25,7 +27,7 @@ export class PreferenceApiError extends Error {
 }
 
 export interface PreferenceApi {
-  get(resource: string): Promise<PreferenceRecord | null>;
+  get(resource: string, signal?: AbortSignal): Promise<PreferenceRecord | null>;
   put(
     resource: string,
     value: Record<string, unknown>,
@@ -40,7 +42,7 @@ export function createPreferenceApi(options: {
   accessToken?: string | null;
   fetcher?: typeof fetch;
 }): PreferenceApi {
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = createAuthenticatedFetcher({ workspaceId: options.workspaceId, fetcher: options.fetcher });
   const headers = (): Record<string, string> => ({
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -54,24 +56,28 @@ export function createPreferenceApi(options: {
       error?: { code?: string };
       detail?: { code?: string };
       requestId?: string;
+      meta?: { requestId?: string };
     };
     if (!response.ok) {
       throw new PreferenceApiError(
         response.status,
         body.error?.code ?? body.detail?.code ?? "PREFERENCE_REQUEST_FAILED",
-        body.requestId,
+        body.meta?.requestId ?? body.requestId,
       );
     }
     return body as T;
   };
   return {
-    async get(resource) {
+    async get(resource, signal) {
       const result = await parse<{ items: PreferenceRecord[] }>(
         await fetcher(
           `/api/v1/account/preferences?resource=${encodeURIComponent(resource)}`,
-          { credentials: "include", headers: headers() },
+          { credentials: "include", headers: headers(), signal },
         ),
       );
+      if (!Array.isArray(result.items) || result.items.some((item) => !isPreferenceRecord(item) || item.resource !== resource)) {
+        throw new PreferenceApiError(502, "PREFERENCE_RESPONSE_INVALID");
+      }
       return result.items[0] ?? null;
     },
     async versions(projectId) {
@@ -84,7 +90,7 @@ export function createPreferenceApi(options: {
       return result.items;
     },
     async put(resource, value, version, idempotencyKey) {
-      return parse<PreferenceRecord>(
+      const saved = await parse<PreferenceRecord>(
         await fetcher("/api/v1/account/preferences", {
           method: "PUT",
           credentials: "include",
@@ -92,6 +98,16 @@ export function createPreferenceApi(options: {
           body: JSON.stringify({ resource, value, version }),
         }),
       );
+      if (!isPreferenceRecord(saved) || saved.resource !== resource) throw new PreferenceApiError(502, "PREFERENCE_RESPONSE_INVALID");
+      return saved;
     },
   };
+}
+
+export function isPreferenceRecord(value: unknown): value is PreferenceRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<PreferenceRecord>;
+  return typeof record.resource === "string" && typeof record.value === "object" && record.value !== null
+    && !Array.isArray(record.value) && Number.isSafeInteger(record.version) && (record.version ?? -1) >= 0
+    && typeof record.updatedAt === "string";
 }

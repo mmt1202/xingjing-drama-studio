@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type { BillingWorkspace, PaymentCatalog, PaymentDetail, PaymentResult, PaymentsApi } from "./contracts";
 
 export class PaymentApiError extends Error {
@@ -6,6 +7,7 @@ export class PaymentApiError extends Error {
 }
 function query(input: object) { return new URLSearchParams(Object.entries(input).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)])).toString(); }
 export function createPaymentsApi(workspaceId: string, token: string | null): PaymentsApi {
+  const fetcher = createAuthenticatedFetcher({ workspaceId });
   const base = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`;
   const retryKeys = new Map<string, string>();
   let actorId = "";
@@ -14,7 +16,7 @@ export function createPaymentsApi(workspaceId: string, token: string | null): Pa
     headers.set("Accept", "application/json"); headers.set("Accept-Language", i18n.resolvedLanguage ?? "zh");
     headers.set("X-Workspace-Id", workspaceId); headers.set("X-Request-Id", crypto.randomUUID());
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await fetch(`${base}${path}`, { ...init, headers, credentials: "same-origin" });
+    const response = await fetcher(`${base}${path}`, { ...init, headers, credentials: "same-origin" });
     const body = await response.json().catch(() => null) as { data?: T; error?: { code?: string }; detail?: { code?: string }; meta?: { requestId?: string } } | null;
     if (!response.ok || !body || body.data === undefined) throw new PaymentApiError(response.status, body?.error?.code ?? body?.detail?.code ?? "PAYMENT_UNAVAILABLE", body?.meta?.requestId);
     return body.data;

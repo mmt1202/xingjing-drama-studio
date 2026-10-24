@@ -1,4 +1,5 @@
 import type { SessionContext } from "@/xingjing_identity/api";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 
 export interface WorkspaceAccess { workspaceId: string; actorId: string; permissions: string[]; workspaceName: string; userName: string }
 export interface RecentProject { id: string; name: string; type: string; targetPlatform: string; setupState: "draft" | "ready"; productionStatus: string; version: number; updatedAt: string }
@@ -8,8 +9,9 @@ export class HomeApiError extends Error {
   constructor(public status: number, public code: string, public requestId?: string) { super(code); }
 }
 export function createHomeApi(workspaceId: string, token: string | null) {
+  const fetcher = createAuthenticatedFetcher({ workspaceId });
   async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
-    const response = await fetch(`/api/v1${path}`, { credentials: "include", signal, headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+    const response = await fetcher(`/api/v1${path}`, { credentials: "include", signal, headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
     const body = await response.json() as { data: T; error?: { code: string }; meta?: { requestId: string } };
     if (!response.ok) throw new HomeApiError(response.status, body.error?.code ?? "REQUEST_FAILED", body.meta?.requestId);
     return body.data;

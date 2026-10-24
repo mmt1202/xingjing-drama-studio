@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 export interface ModelDefinition {
   registryKey: string; providerId: string; providerModelName: string; displayName: string; modelVersion: string; region: string;
   mediaTypes: string[]; capabilities: string[]; parameterSchema: Record<string, { type: string; enum?: Array<string | number | boolean> }>;
@@ -23,9 +24,10 @@ export class ModelApiError extends Error {
   constructor(public status: number, public code: string, public requestId?: string) { super(code); }
 }
 export function createModelOperationsApi(workspaceId: string, token: string) {
+  const fetcher = createAuthenticatedFetcher({ workspaceId });
   const base = "/api/v1/admin/model-control";
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(path, { ...init, credentials: "include", headers: { "Content-Type": "application/json", "X-Workspace-Id": workspaceId, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers } });
+    const response = await fetcher(path, { ...init, credentials: "include", headers: { "Content-Type": "application/json", "X-Workspace-Id": workspaceId, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers } });
     const body = await response.json().catch(() => ({})) as { data: T; error?: { code?: string }; detail?: { code?: string }; meta?: { requestId?: string } };
     if (!response.ok) throw new ModelApiError(response.status, body.error?.code ?? body.detail?.code ?? "MODEL_REQUEST_FAILED", body.meta?.requestId);
     return body.data;

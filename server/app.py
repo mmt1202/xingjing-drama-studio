@@ -127,6 +127,7 @@ from server.xingjing_projects_runtime import create_production_projects_runtime
 from server.xingjing_review_http import create_review_router, create_unavailable_review_router
 from server.xingjing_review_runtime import ReviewRuntimeConfigurationError, create_production_review_runtime
 from server.xingjing_security import PlatformSecurityMiddleware
+from server.xingjing_storyboard.policy_config import QualityPolicyConfigurationError, load_quality_policy
 from server.xingjing_storyboard_http import (
     create_storyboard_http_dependencies,
     create_storyboard_router,
@@ -640,7 +641,12 @@ _model_control_runtime = create_model_control_runtime()
 # Provider adapter has been wired; it never falls back to the legacy queue.
 _generation_runtime = create_production_generation_runtime()
 _cover_runtime = create_production_cover_runtime(generation_runtime=_generation_runtime)
-_versions_runtime = create_production_version_runtime()
+try:
+    _storyboard_quality_policy = load_quality_policy()
+except QualityPolicyConfigurationError as error:
+    _storyboard_quality_policy = None
+    logger.warning("Storyboard quality checks unavailable: %s", error)
+_versions_runtime = create_production_version_runtime(quality_policy=_storyboard_quality_policy)
 
 # M07 uses only its PostgreSQL adapter and trusted Java session context.
 # Missing database, Provider or object storage remains an explicit failure at
@@ -751,7 +757,7 @@ except (AssetRuntimeConfigurationError, ValueError) as error:
 
 # 缺失 M05 部署前置时不影响主应用启动；相关接口保持稳定 503，且绝不退回内存实现。
 try:
-    _storyboard_runtime = create_production_storyboard_runtime()
+    _storyboard_runtime = create_production_storyboard_runtime(quality_policy=_storyboard_quality_policy)
 except (StoryboardRuntimeConfigurationError, ValueError) as error:
     _storyboard_runtime = None
     _storyboard_router = create_unavailable_storyboard_router()

@@ -9,12 +9,15 @@ import {
   type PromptTemplateInput,
   type PromptTemplateItem,
   type QualityIssue,
+  type QualityPolicyDescriptor,
   type SessionContext,
   type ShotItem,
   type ShotVersion,
   type TaskReceipt,
   type WorkspaceProjectScope,
 } from "./contracts";
+import { QualityPolicyNotice } from "./QualityPolicyNotice";
+import { qualityErrorMessage, useStoryboardQualityTranslation } from "./quality-i18n";
 import {
   BatchResultPanel,
   ConfirmDialog,
@@ -96,6 +99,8 @@ function apiError(error: unknown): AssetsStoryboardApiError | undefined {
   return error instanceof AssetsStoryboardApiError ? error : undefined;
 }
 function message(error: unknown): string {
+  const qualityMessage = qualityErrorMessage(apiError(error)?.code);
+  if (qualityMessage) return qualityMessage;
   return error instanceof Error ? error.message : "服务暂时不可用，请重试";
 }
 function forbidden(error: unknown): boolean {
@@ -408,41 +413,45 @@ function QualityView({
   canManage,
   busy,
   issues,
+  policy,
   onRun,
 }: {
   readonly shots: readonly ShotItem[];
   readonly canManage: boolean;
   readonly busy: boolean;
   readonly issues: readonly QualityIssue[];
+  readonly policy?: QualityPolicyDescriptor;
   readonly onRun: () => void;
 }) {
+  const { t } = useStoryboardQualityTranslation();
   const allIssues = issues.length
     ? issues
     : shots.flatMap((shot) => shot.qualityIssues);
   return (
     <section>
+      <QualityPolicyNotice policy={policy} />
       <div
         className={`${panel} flex flex-wrap items-center justify-between gap-3 p-5`}
       >
         <div>
-          <h2 className="font-semibold">质量门禁</h2>
+          <h2 className="font-semibold">{t("gateTitle")}</h2>
           <p className="mt-1 text-sm text-[#B8BECC]">
-            阻断项未清零前，服务端不会确认故事板。
+            {t("gateHelp")}
           </p>
         </div>
         <button
           type="button"
           className={primaryButton}
-          disabled={!canManage || busy}
+          disabled={!canManage || busy || policy?.configured === false}
           onClick={onRun}
         >
-          {busy ? "检测中…" : "运行质量检测"}
+          {busy ? t("running") : t("run")}
         </button>
       </div>
       {allIssues.length === 0 ? (
         <StatePanel
-          title="尚无质量检测结果"
-          detail="运行检测后会按稳定镜头 ID 返回连续性、资产、节奏与合规问题。"
+          title={t("noIssuesTitle")}
+          detail={t("noIssuesHelp")}
         />
       ) : (
         <ul className="mt-4 space-y-3">
@@ -1540,6 +1549,7 @@ export function StoryboardWorkspace({
   const [task, setTask] = useState<TaskReceipt>();
   const [taskShotId, setTaskShotId] = useState<string>();
   const [issues, setIssues] = useState<readonly QualityIssue[]>([]);
+  const [qualityPolicy, setQualityPolicy] = useState<QualityPolicyDescriptor>();
   const [resultMessage, setResultMessage] = useState("");
   const load = useCallback(
     async (append = false) => {
@@ -1562,6 +1572,7 @@ export function StoryboardWorkspace({
         const [page, assetPage] = await Promise.all([
           api.listShots(scope, {
             pageToken: append ? (nextToken ?? undefined) : undefined,
+            includeQualityPolicy: true,
           }),
           append
             ? Promise.resolve(undefined)
@@ -1573,6 +1584,7 @@ export function StoryboardWorkspace({
         );
         setNextToken(page.nextToken);
         setCollectionVersion(page.collectionVersion);
+        setQualityPolicy(page.qualityPolicy);
         if (assetPage) setAssets(assetPage.items);
       } catch (cause) {
         if (forbidden(cause)) {
@@ -1661,6 +1673,7 @@ export function StoryboardWorkspace({
         setTaskShotId(target?.id);
       }
       if (result.issues) setIssues(result.issues);
+      if (result.qualityPolicy) setQualityPolicy(result.qualityPolicy);
       if (result.message) setResultMessage(result.message);
       await load();
       return result;
@@ -1857,12 +1870,16 @@ export function StoryboardWorkspace({
           }
         />
       ) : null}
+      {activeView === "quality" && items.length === 0 ? (
+        <QualityPolicyNotice policy={qualityPolicy} />
+      ) : null}
       {activeView === "quality" && items.length ? (
         <QualityView
           shots={items}
           canManage={canManage}
           busy={busy}
           issues={issues}
+          policy={qualityPolicy}
           onRun={() =>
             void run(
               "runQualityCheck",

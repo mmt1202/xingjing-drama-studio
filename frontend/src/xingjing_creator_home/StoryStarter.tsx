@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { getTokenForSession } from "@/utils/auth";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useAuthStore } from "@/stores/auth-store";
 import { ArrowUpRight, FileUp } from "lucide-react";
 import { createCreatorProjectsApi, CreatorApiError } from "@/xingjing_creator_projects/api";
 import { initialSetup } from "@/xingjing_creator_projects/setup-state";
@@ -7,9 +9,10 @@ import { homeButton, homeField, useHomeTranslation } from "./i18n";
 import { useCreatorWorkspace, useWorkspaceNavigationGuard } from "./WorkspaceFrame";
 
 export function StoryStarter({ defaultMode }: { defaultMode: HomePreferences["defaultMode"] }) {
-  const { access, token, go } = useCreatorWorkspace();
+  const { access, go } = useCreatorWorkspace();
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const { t } = useHomeTranslation();
-  const api = useRef(createCreatorProjectsApi({ getAccessToken: () => token })).current;
+  const api = useMemo(() => createCreatorProjectsApi({ workspaceId: access.workspaceId, getAccessToken: () => getTokenForSession(sessionEpoch) }), [access.workspaceId, sessionEpoch]);
   const [name, setName] = useState("");
   const [story, setStory] = useState("");
   const [selectedMode, setMode] = useState<HomePreferences["defaultMode"]>();

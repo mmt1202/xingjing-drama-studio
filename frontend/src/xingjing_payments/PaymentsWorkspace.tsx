@@ -1,3 +1,4 @@
+import { getTokenForSession } from "@/utils/auth";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { RefreshCw, Wallet, CreditCard, ReceiptText } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -37,14 +38,14 @@ const ledgerActions = ["grant", "freeze", "settle", "release", "refund", "compen
 const offsetValue = (value: string | null) => /^\d+$/.test(value ?? "") && Number.isSafeInteger(Number(value)) ? Number(value) : 0;
 
 export function PaymentsWorkspace({ workspaceId, initialTab = "ledger", mode = "creator" }: { workspaceId: string; initialTab?: PaymentTab; mode?: "creator" | "admin" }) {
-  const token = useAuthStore((state) => state.token);
-  return <PaymentsContent key={JSON.stringify([workspaceId, token, mode, initialTab])} workspaceId={workspaceId} token={token} initialTab={initialTab} mode={mode} />;
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  return <PaymentsContent key={JSON.stringify([workspaceId, sessionEpoch, mode, initialTab])} workspaceId={workspaceId} sessionEpoch={sessionEpoch} initialTab={initialTab} mode={mode} />;
 }
 
-function PaymentsContent({ workspaceId, token, initialTab, mode }: { workspaceId: string; token: string | null; initialTab: PaymentTab; mode: "creator" | "admin" }) {
+function PaymentsContent({ workspaceId, sessionEpoch, initialTab, mode }: { workspaceId: string; sessionEpoch: string; initialTab: PaymentTab; mode: "creator" | "admin" }) {
   const { t, i18n } = usePaymentTranslation();
   const locale = i18n.resolvedLanguage ?? "zh";
-  const api = useMemo(() => createPaymentsApi(workspaceId, token), [workspaceId, token]);
+  const api = useMemo(() => createPaymentsApi(workspaceId, getTokenForSession(sessionEpoch)), [workspaceId, sessionEpoch]);
   const [location, navigate] = useLocation();
   const search = useSearch();
   const params = new URLSearchParams(search);

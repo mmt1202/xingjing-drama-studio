@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import { CreatorApiError } from "./api";
 
 export interface EpisodeProduction { scriptVersionId: string; assetSnapshotId: string; finalVideoVersionId: string }
@@ -56,10 +57,11 @@ export function plannedEpisode(item: EpisodeDraft): Episode {
   return { ...item, locked: false, status: "draft", scriptStatus: "none", shots: 0, storyboards: { total: 0, completed: 0 }, videos: { total: 0, completed: 0 }, issues: [] };
 }
 export function createEpisodesApi(getAccessToken: () => string | null) {
+  const fetcher = createAuthenticatedFetcher();
   const keys = new Map<string, string>();
   async function request<T>(projectId: string, suffix = "", init: RequestInit = {}, resource = "episodes") {
     const token = getAccessToken();
-    const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectId)}/${resource}${suffix}`, {
+    const response = await fetcher(`/api/v1/projects/${encodeURIComponent(projectId)}/${resource}${suffix}`, {
       ...init, credentials: "same-origin",
       headers: { "Content-Type": "application/json", "Accept-Language": i18n.resolvedLanguage ?? "zh", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
     });

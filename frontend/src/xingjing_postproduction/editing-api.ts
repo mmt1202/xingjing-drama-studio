@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 export interface EditingPreview {
   readonly timeline_id: string;
   readonly project_id: string;
@@ -219,10 +220,11 @@ function errorPayload(payload: unknown) {
 }
 
 export function createEditingApi({
-  fetcher = fetch,
+  fetcher: providedFetcher,
   getAccessToken,
   createIdempotencyKey = () => crypto.randomUUID(),
 }: EditingApiOptions = {}) {
+  const fetcher = createAuthenticatedFetcher({ fetcher: providedFetcher });
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");

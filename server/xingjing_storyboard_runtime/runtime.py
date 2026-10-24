@@ -36,6 +36,7 @@ from server.xingjing_storyboard.ports import (
     AuditEvent,
     StoryboardRepository,
 )
+from server.xingjing_storyboard.quality import QualityPolicy
 from server.xingjing_storyboard.service import AccessContext, ShotDraft, StoryboardService
 from server.xingjing_storyboard_persistence import (
     SqlAlchemyPromptTemplateRepository,
@@ -134,8 +135,9 @@ class StoryboardRuntime:
         upload_store: ProductionStoryboardUploadStore,
         session_factory: SessionFactory,
         close: Callable[[], None] | None = None,
+        quality_policy: QualityPolicy | None = None,
     ) -> None:
-        self.service = StoryboardService(repository, asset_validator)
+        self.service = StoryboardService(repository, asset_validator, quality_policy=quality_policy)
         self.repository = repository
         self._context_resolver = context_resolver
         self.upload_store = upload_store
@@ -591,6 +593,7 @@ def create_production_storyboard_runtime(
     database_url: str | None = None,
     context_resolver: TrustedContextResolver | None = None,
     storage_root: str | None = None,
+    quality_policy: QualityPolicy | None = None,
 ) -> StoryboardRuntime:
     """创建生产组合，不创建 schema，也不回退到内存或文件仓储。"""
     url = (database_url or os.environ.get("XINGJING_STORYBOARD_DATABASE_URL", "")).strip()
@@ -620,4 +623,5 @@ def create_production_storyboard_runtime(
         upload_store=ProductionStoryboardUploadStore(uploads, storage),
         session_factory=factory,
         close=engine.dispose,
+        quality_policy=quality_policy,
     )

@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import { CreatorApiError } from "./api";
 import type { ProjectDetail, ProjectSetup } from "./types";
 
@@ -19,11 +20,12 @@ export interface ProjectControl {
 }
 export interface ControlFilters { days?: number; q?: string; episodeState?: string; offset?: number }
 export function createProjectControlApi(getToken: () => string | null) {
+  const fetcher = createAuthenticatedFetcher();
   return {
     async get(projectId: string, filters: ControlFilters = {}, signal?: AbortSignal): Promise<ProjectControl> {
       const query = new URLSearchParams(Object.entries(filters).map(([k, v]) => [k, String(v)]));
       const token = getToken();
-      const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectId)}/control?${query}`, {
+      const response = await fetcher(`/api/v1/projects/${encodeURIComponent(projectId)}/control?${query}`, {
         credentials: "same-origin", signal,
         headers: { Accept: "application/json", "Accept-Language": i18n.resolvedLanguage ?? "zh", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });

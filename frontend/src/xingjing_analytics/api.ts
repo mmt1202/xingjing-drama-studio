@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 
 export type AnalyticsRange = "week" | "month" | "quarter" | "all";
 export type AnalyticsGroup = "project" | "episode" | "model" | "member";
@@ -36,6 +37,7 @@ export class AnalyticsApiError extends Error {
 interface ErrorEnvelope { error?: { code?: string }; detail?: { code?: string }; meta?: { requestId?: string } }
 
 export function createAnalyticsApi(workspaceId: string, actorId: string, token: string | null) {
+  const fetcher = createAuthenticatedFetcher({ workspaceId, actorId });
   const base = "/api/v1/analytics/dashboards/creator";
   const receipts = new Map<string, string>();
   function headers() {
@@ -43,7 +45,7 @@ export function createAnalyticsApi(workspaceId: string, actorId: string, token: 
   }
   async function send(path: string, init: RequestInit): Promise<Response> {
     let response: Response;
-    try { response = await fetch(path, { ...init, credentials: "same-origin", cache: "no-store" }); }
+    try { response = await fetcher(path, { ...init, credentials: "same-origin", cache: "no-store" }); }
     catch (problem) { if (init.signal?.aborted) throw problem; throw new AnalyticsApiError(0, "NETWORK_UNAVAILABLE"); }
     if (!response.ok) {
       const problem = await response.json().catch(() => null) as ErrorEnvelope | null;

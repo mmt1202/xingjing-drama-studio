@@ -33,6 +33,54 @@ Java 子进程使用 JDBC `DATABASE_URL`；Python 的 `DATABASE_URL` 使用 `pos
 
 SDK 智能体子进程使用单独组装的环境：应用的数据库、认证及内部服务配置被清空，明确注入的模型环境保持可用；技能子进程不会重新加载仓库 `.env` 或 `.env.local`。
 
+## 分镜确定性编辑检查
+
+正常应用装配默认加载 `deterministic-editorial` v1，并将同一个不可变策略注入分镜工作台和统一版本操作。无需配置模型、生成媒体或额外环境开关即可使用这组结构与编辑检查。
+
+| 规则 | 默认值 | 行为 |
+|---|---|---|
+| 镜头时长建议区间 | 1000–30000 ms | 超出时 WARN，不阻止冻结 |
+| 相邻镜头时长差建议上限 | 10000 ms | 超出时 WARN，不阻止冻结 |
+| 对白文本密度建议上限 | 12 字符/秒 | 超出时 WARN，不阻止冻结 |
+| 场景引用 | 必需 | 缺少时 ERROR，阻止冻结 |
+| 有对白镜头的角色引用 | 必需 | 缺少时 ERROR，阻止冻结 |
+| 额外关键词 | 空集合 | 未执行额外关键词筛查，不等于内容合规通过 |
+
+空故事板不能冻结，但无需先生成图片或视频。冻结会重新计算当前版本的问题，并通过既有项目权限、资产真实归属、版本 CAS 和幂等校验；WARN 可以保留，ERROR 必须先处理。策略 ID、版本、摘要和规则保存在质检及冻结审计中。
+
+这些数值是编辑建议，不是视频模型的能力限制，也不是 AI 质量评分。对白文本密度是按字符和镜头时长计算的粗略提示，没有测量真实语速，可能受语言影响。模型执行仍按实际选定模型的能力约束校验；冻结不能代替正式发布前的内容、版权与授权审核。
+
+默认策略摘要为 `sha256:95bfbea49570fc74c7ba4db9543943ccef1e3e16a68b47b92a6ae1c671049497`。具有分镜读取权限的客户端可通过 `GET /api/v1/projects/{projectId}/shots?includeQualityPolicy=true` 的 `meta.qualityPolicy` 查看服务端实际策略；原列表请求不增加该字段。质检动作响应也返回策略描述。
+
+需要部署覆盖时，由可信运维人员在服务可读的持久目录保存 UTF-8 JSON，例如 `.xingjing-data/config/storyboard-quality.json`，完整结构如下。该目录及本地配置不提交 Git；下面是配置示例，不是自动创建的文件。
+
+```json
+{
+  "schema": "xingjing.storyboard-quality/v1",
+  "policyId": "deterministic-editorial",
+  "version": 2,
+  "rules": {
+    "minimum_duration_ms": 1000,
+    "maximum_duration_ms": 30000,
+    "max_adjacent_duration_delta_ms": 10000,
+    "max_dialogue_characters_per_second": 12,
+    "require_scene_reference": true,
+    "require_character_for_dialogue": true,
+    "compliance_terms": []
+  }
+}
+```
+
+在 `.env.local` 或显式服务进程环境中设置持久文件的绝对路径，例如：
+
+```dotenv
+XINGJING_STORYBOARD_QUALITY_POLICY_PATH=D:/aivideo/xingjing-platform/.xingjing-data/config/storyboard-quality.json
+```
+
+策略只在应用启动时加载，修改后须受控重新加载服务；不会热读取某个用户提交的配置路径。变更规则应递增 `version`，通过返回的版本与摘要确认实际生效。显式覆盖不能缺字段或添加其他字段：版本必须为正整数，时长最小值至少为 1、最大值不小于最小值、相邻差值不小于 0、字符/秒至少为 1；两个必需引用开关必须保持 `true`。关键词必须是字符串数组，最多 1024 项，每项非空白且不超过 256 字符。关键词按大小写不敏感的文字子串匹配，命中会阻止冻结，但这仍不替代独立内容审核。
+
+文件上限为 128 KiB。显式空路径、文件不可读、无效 JSON、错误字段或类型均使质量策略不可用，记录 `STORYBOARD_QUALITY_POLICY_INVALID`，不会悄悄采用默认策略。此时分镜读取、保存和历史操作保留，质检／冻结不能绕过缺失策略继续成功；修正配置并重新加载服务后再读取策略确认。不要把配置放在 `.tmp` 验收目录，也不要把用户可写的上传目录用作可信策略来源。
+
 ## 状态、日志与停止
 
 ```powershell

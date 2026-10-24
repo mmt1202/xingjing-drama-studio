@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import i18n from "@/i18n";
 
 import type {
@@ -162,7 +163,12 @@ function normalizeActionResult(data: unknown, meta: ApiMeta): CommerceActionResu
 }
 
 export function createCollaborationCommerceApi(options: ClientOptions = {}): CollaborationCommerceApi {
-  const fetcher = options.fetcher ?? fetch;
+  const rawFetcher = options.fetcher ?? fetch;
+  const authenticated = createAuthenticatedFetcher({ fetcher: rawFetcher });
+  const fetcher: typeof fetch = (input, init) => {
+    const path = input instanceof URL ? input.pathname : typeof input === "string" ? input : input.url;
+    return path.includes("/review-links/") ? rawFetcher(input, init) : authenticated(input, init);
+  };
   const baseUrl = options.baseUrl ?? "/api/v1";
   const createId = options.createId ?? fallbackId;
   const reviewAccessSecrets = new Map<string, string>();

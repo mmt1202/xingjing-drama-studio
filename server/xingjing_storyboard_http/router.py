@@ -257,6 +257,11 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 "requestId": context.request_id,
                 "page": {"nextToken": next_token},
                 "collectionVersion": collection_version,
+                **(
+                    {"qualityPolicy": dependencies.service.quality_policy_descriptor()}
+                    if request.query_params.get("includeQualityPolicy") == "true"
+                    else {}
+                ),
             },
         }
 
@@ -645,6 +650,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 context,
                 {
                     "shots": [project_shot(persisted, shot) for shot in persisted.shots],
+                    "qualityPolicy": dependencies.service.quality_policy_descriptor(),
                     "issues": [
                         issue for shot in persisted.shots for issue in project_shot(persisted, shot)["qualityIssues"]
                     ],
@@ -1195,6 +1201,8 @@ def _integer(value: str | None, *, default: int, code: str) -> int:
 
 
 def _storyboard_error_response(request: Request, error: StoryboardError) -> JSONResponse:
+    if error.code in {"QUALITY_POLICY_REQUIRED", "STORYBOARD_QUALITY_POLICY_INVALID"}:
+        return _error_response(request, error.code, 503, {})
     if isinstance(error, PermissionDenied):
         return _error_response(request, error.code, 403, {})
     if isinstance(error, StoryboardNotFound):

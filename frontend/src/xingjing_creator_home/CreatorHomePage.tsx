@@ -1,3 +1,5 @@
+import { getTokenForSession } from "@/utils/auth";
+import { useAuthStore } from "@/stores/auth-store";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, BookOpen, Clapperboard, Film, GitFork, MessageSquare, RefreshCw, Settings2, Sparkles } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -28,8 +30,9 @@ function searchText(form: HTMLFormElement) {
 }
 export function CreatorHomePage() {
   const { t } = useHomeTranslation();
-  const { access, token } = useCreatorWorkspace();
-  const preferencesApi = useMemo(() => createPreferenceApi({ workspaceId: access.workspaceId, accessToken: token }), [access.workspaceId, token]);
+  const { access } = useCreatorWorkspace();
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const preferencesApi = useMemo(() => createPreferenceApi({ workspaceId: access.workspaceId, accessToken: getTokenForSession(sessionEpoch) }), [access.workspaceId, sessionEpoch]);
   const [record, setRecord] = useState<PreferenceRecord | null>();
   const [preferenceError, setPreferenceError] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -126,8 +129,9 @@ export function WorkspaceTasks({ compact = false }: { compact?: boolean }) {
 }
 
 function Inspiration() {
-  const { token, go } = useCreatorWorkspace(); const { t } = useHomeTranslation();
-  const api = useMemo(() => createMarketplaceApi({ accessToken: token ?? undefined }), [token]);
+  const { go } = useCreatorWorkspace(); const { t } = useHomeTranslation();
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const api = useMemo(() => createMarketplaceApi({ accessToken: getTokenForSession(sessionEpoch) ?? undefined }), [sessionEpoch]);
   const [items, setItems] = useState<MarketItem[]>(); const [error, setError] = useState<unknown>(); const [reload, setReload] = useState(0);
   useEffect(() => { let active = true; void api.market().then((page) => { if (active) { setItems(page.items.slice(0, 4)); setError(undefined); } }).catch((problem: unknown) => { if (active) { setError(problem); setItems(undefined); } }); return () => { active = false; }; }, [api, reload]);
   return <section className="rounded-2xl border border-white/10 bg-[#11141D] p-5"><div className="flex items-center justify-between"><h2 className="flex items-center gap-2 text-lg font-semibold"><Sparkles size={18} className="text-violet-300" />{t("inspiration")}</h2><GitFork size={17} className="text-slate-600" /></div><p className="mt-3 text-xs leading-6 text-slate-500">{t("inspirationHint")}</p>{error ? <div className="mt-4"><HomeError error={error} retry={() => setReload((value) => value + 1)} /></div> : !items ? <p role="status" className="py-7 text-sm text-slate-400">{t("loading")}</p> : items.length ? <ul className="mt-4 grid gap-3 sm:grid-cols-2">{items.map((item) => <li key={item.id} className="rounded-xl border border-violet-300/15 bg-violet-300/[0.025] p-4"><p className="text-[10px] text-violet-200">{item.template_kind ?? item.source_kind}</p><h3 className="mt-3 truncate text-sm font-medium" title={item.title}>{item.title}</h3><p className="mt-2 truncate text-xs text-slate-500">{item.tags.join(" / ")}</p></li>)}</ul> : <p className="py-7 text-sm text-slate-500">{t("emptyMarket")}</p>}<button className={homeButton + " mt-4 w-full text-violet-200"} onClick={() => go("templates")}>{t("explore")}<ArrowRight size={15} /></button></section>;

@@ -129,6 +129,7 @@ class VersionActions:
                 "IDEMPOTENCY_CONFLICT",
                 "STORYBOARD_FROZEN",
                 "QUALITY_GATE_FAILED",
+                "EMPTY_STORYBOARD",
             }:
                 status = 409
             elif error.code == "PERMISSION_DENIED":

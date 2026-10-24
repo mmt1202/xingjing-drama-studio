@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type { ComplianceRecord, ExportTask, Page, ProjectScope, SessionContext, TaskReceipt, Timeline } from "./types";
 
 interface ErrorPayload { code?: string; message?: string; request_id?: string }
@@ -20,7 +21,7 @@ const defaultKey = () => crypto.randomUUID();
 const projectPath = (scope: ProjectScope) => `/api/v1/projects/${encodeURIComponent(scope.projectId)}`;
 
 export function createPostproductionApi(options: PostproductionApiOptions = {}) {
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = createAuthenticatedFetcher({ fetcher: options.fetcher });
   const createKey = options.createIdempotencyKey ?? defaultKey;
 
   async function request<T>(scope: Pick<ProjectScope, "workspaceId">, path: string, init: RequestInit = {}): Promise<T> {

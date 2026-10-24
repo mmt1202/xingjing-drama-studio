@@ -1,3 +1,4 @@
+import { createAuthenticatedFetcher } from "@/utils/auth";
 export interface TemplateVersion { id: string; number: number; price_minor: number; content: Record<string, unknown>; rights: Rights; revenue_rule: RevenueRule }
 export interface TemplateReview { id: string; status: string; statement: string; submitted_at: string; decision_reason: string | null }
 export interface TemplateRecord { id: string; title: string; kind: string; tags: string[]; revision: number; review_state: string; publication_state: string; latest_version_id: string; versions: TemplateVersion[]; reviews: TemplateReview[]; updated_at: string }
@@ -10,7 +11,8 @@ export interface Page<T> { items: T[]; next_cursor: string | null; total: number
 
 class MarketplaceApiError extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
 
-export function createMarketplaceApi({ accessToken, baseUrl = "/api/v1", fetcher = fetch }: { accessToken?: string; baseUrl?: string; fetcher?: typeof fetch } = {}) {
+export function createMarketplaceApi({ accessToken, baseUrl = "/api/v1", fetcher: providedFetcher }: { accessToken?: string; baseUrl?: string; fetcher?: typeof fetch } = {}) {
+  const fetcher = createAuthenticatedFetcher({ fetcher: providedFetcher });
   const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers); headers.set("Accept", "application/json"); headers.set("X-Request-Id", crypto.randomUUID());
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`); if (init.body) headers.set("Content-Type", "application/json");

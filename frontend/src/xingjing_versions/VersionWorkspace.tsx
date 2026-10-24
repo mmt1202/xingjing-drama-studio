@@ -1,3 +1,4 @@
+import { getTokenForSession } from "@/utils/auth";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Camera, ChevronRight, FileClock, GitCompareArrows, LockKeyhole, RefreshCw, RotateCcw } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -38,8 +39,8 @@ function downloadReport(report: unknown, id: string) {
 export function VersionWorkspace({ workspaceId, projectId }: { workspaceId: string; projectId: string }) {
   const { t, i18n } = useVersionTranslation();
   const { go } = useProjectFlow();
-  const token = useAuthStore((state) => state.token);
-  const api = useMemo(() => createVersionApi(workspaceId, projectId, token), [workspaceId, projectId, token]);
+  const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
+  const api = useMemo(() => createVersionApi(workspaceId, projectId, getTokenForSession(sessionEpoch)), [workspaceId, projectId, sessionEpoch]);
   const [location, navigate] = useLocation();
   const search = useSearch();
   const params = new URLSearchParams(search);

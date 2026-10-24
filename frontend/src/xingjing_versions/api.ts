@@ -1,4 +1,5 @@
 import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 import type { VersionApi, VersionCommandResult, VersionPage, VersionRef, VersionReport } from "./contracts";
 
 export class VersionApiError extends Error {
@@ -6,6 +7,7 @@ export class VersionApiError extends Error {
 }
 function query(values: object) { return new URLSearchParams(Object.entries(values).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)])).toString(); }
 export function createVersionApi(workspaceId: string, projectId: string, token: string | null): VersionApi {
+  const fetcher = createAuthenticatedFetcher({ workspaceId });
   const prefix = `/api/v1/projects/${encodeURIComponent(projectId)}/version-history`;
   const retries = new Map<string, string>();
   let actorId = "";
@@ -14,7 +16,7 @@ export function createVersionApi(workspaceId: string, projectId: string, token: 
     headers.set("Accept", "application/json"); headers.set("Accept-Language", i18n.resolvedLanguage ?? "zh");
     headers.set("X-Workspace-Id", workspaceId); headers.set("X-Project-Id", projectId); headers.set("X-Request-Id", crypto.randomUUID());
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await fetch(`${prefix}${path}`, { ...init, headers, credentials: "same-origin" });
+    const response = await fetcher(`${prefix}${path}`, { ...init, headers, credentials: "same-origin" });
     const body = await response.json().catch(() => null) as { data?: T; error?: { code?: string }; detail?: { code?: string }; meta?: { requestId?: string } } | null;
     if (!response.ok || !body || body.data === undefined) throw new VersionApiError(response.status, body?.error?.code ?? body?.detail?.code ?? "VERSION_HISTORY_UNAVAILABLE", body?.meta?.requestId);
     return body.data;

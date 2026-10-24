@@ -32,6 +32,24 @@ export interface PageResult<T> {
   readonly nextToken: string | null;
   readonly collectionVersion?: number;
   readonly requestId?: string;
+  readonly qualityPolicy?: QualityPolicyDescriptor;
+}
+
+export interface QualityPolicyDescriptor {
+  readonly configured: boolean;
+  readonly policyId?: string;
+  readonly version?: number;
+  readonly digest?: string;
+  readonly keywordScreeningEnabled?: boolean;
+  readonly rules?: {
+    readonly minimum_duration_ms: number;
+    readonly maximum_duration_ms: number;
+    readonly max_adjacent_duration_delta_ms: number;
+    readonly max_dialogue_characters_per_second: number;
+    readonly require_scene_reference: boolean;
+    readonly require_character_for_dialogue: boolean;
+    readonly compliance_terms: readonly string[];
+  };
 }
 
 export type AssetType = "character" | "scene" | "prop" | "costume" | "voice";
@@ -247,6 +265,7 @@ export interface ShotActionResult {
   readonly task?: TaskReceipt;
   readonly batch?: BatchReceipt;
   readonly issues?: readonly QualityIssue[];
+  readonly qualityPolicy?: QualityPolicyDescriptor;
   readonly message?: string;
   readonly requestId?: string;
 }
@@ -303,6 +322,7 @@ export interface AssetListQuery extends PageQuery {
 }
 
 export interface ShotListQuery extends PageQuery {
+  readonly includeQualityPolicy?: boolean;
   readonly status?: WorkStatus;
   readonly hasIssues?: boolean;
 }
