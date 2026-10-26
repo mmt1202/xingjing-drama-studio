@@ -35,6 +35,8 @@ from server.xingjing_content.models import (
     SourceMapping,
     StoryBeat,
     ValidationIssue,
+    director_confirmation_from_dict,
+    director_version_from_dict,
 )
 
 T = TypeVar("T")
@@ -115,6 +117,47 @@ class ContentAiRequestRow(ContentPersistenceBase):
     evidence: Mapped[dict[str, object] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DirectorVersionRow(ContentPersistenceBase):
+    __tablename__ = "xingjing_content_director_versions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("workspace_id", "script_id"),
+            ("xingjing_content_scripts.workspace_id", "xingjing_content_scripts.script_id"),
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("number >= 1", name="ck_xj_director_version_number"),
+        Index("ix_xj_director_version_id", "workspace_id", "script_id", "candidate_id", unique=True),
+    )
+    workspace_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    script_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+
+
+class DirectorConfirmationRow(ContentPersistenceBase):
+    __tablename__ = "xingjing_content_director_confirmations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("workspace_id", "script_id", "candidate_number"),
+            (
+                "xingjing_content_director_versions.workspace_id",
+                "xingjing_content_director_versions.script_id",
+                "xingjing_content_director_versions.number",
+            ),
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("sequence >= 1", name="ck_xj_director_confirmation_sequence"),
+        Index("ix_xj_director_confirmation_id", "workspace_id", "script_id", "confirmation_id", unique=True),
+    )
+    workspace_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    script_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    confirmation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,8 +249,8 @@ class SqlAlchemyContentAiRequestRepository:
             raise ValueError("IDEMPOTENCY_KEY_REUSED")
         if row.status == "succeeded":
             return ContentAiClaim(False, row.status, row.result_payload)
-        updated_at = row.updated_at if row.updated_at.tzinfo else row.updated_at.replace(tzinfo=UTC)
-        if row.status == "running" and updated_at + stale_after > now:
+        # Elapsed time cannot prove that the provider stopped processing the original call.
+        if row.status == "running":
             return ContentAiClaim(False, row.status, None)
         row.status = "running"
         row.attempts += 1
@@ -573,6 +616,7 @@ class SqlAlchemyContentRepository:
                 raise ValueError("VERSION_CONFLICT")
             session.add(self._script_row(document))
             self._append_versions(session, document, document.versions)
+            self._append_director_history(session, document, None)
             return
 
         stored = self._load_document(session, stored_row)
@@ -588,6 +632,7 @@ class SqlAlchemyContentRepository:
             raise ValueError("IMMUTABLE_HISTORY_CONFLICT")
         if appended:
             self._append_versions(session, document, appended)
+        self._append_director_history(session, document, stored)
         result = session.execute(
             update(ScriptRow)
             .where(
@@ -603,6 +648,47 @@ class SqlAlchemyContentRepository:
         )
         if cast(CursorResult[object], result).rowcount != 1:
             raise ValueError("VERSION_CONFLICT")
+
+    @staticmethod
+    def _append_director_history(session: Session, document: ScriptDocument, before: ScriptDocument | None) -> None:
+        previous_versions = before.director_versions if before else ()
+        previous_confirmations = before.director_confirmations if before else ()
+        if (
+            document.director_versions[: len(previous_versions)] != previous_versions
+            or document.director_confirmations[: len(previous_confirmations)] != previous_confirmations
+        ):
+            raise ValueError("IMMUTABLE_HISTORY_CONFLICT")
+        for candidate in document.director_versions[len(previous_versions) :]:
+            if candidate.number != len(previous_versions) + 1:
+                raise ValueError("IMMUTABLE_HISTORY_CONFLICT")
+            session.add(
+                DirectorVersionRow(
+                    workspace_id=document.workspace_id,
+                    script_id=document.script_id,
+                    number=candidate.number,
+                    candidate_id=candidate.id,
+                    payload=cast(dict[str, object], asdict(candidate)),
+                )
+            )
+            previous_versions = (*previous_versions, candidate)
+        for sequence, confirmation in enumerate(
+            document.director_confirmations[len(previous_confirmations) :], len(previous_confirmations) + 1
+        ):
+            candidate = next(
+                (item for item in document.director_versions if item.id == confirmation.candidate_id), None
+            )
+            if candidate is None or candidate.number != confirmation.candidate_number:
+                raise ValueError("IMMUTABLE_HISTORY_CONFLICT")
+            session.add(
+                DirectorConfirmationRow(
+                    workspace_id=document.workspace_id,
+                    script_id=document.script_id,
+                    sequence=sequence,
+                    candidate_number=confirmation.candidate_number,
+                    confirmation_id=confirmation.id,
+                    payload=cast(dict[str, object], asdict(confirmation)),
+                )
+            )
 
     @staticmethod
     def _immutable_document_fields(document: ScriptDocument) -> tuple[object, ...]:
@@ -700,6 +786,28 @@ class SqlAlchemyContentRepository:
             versions=versions,
             locked_version_number=row.locked_version_number,
             director_profile=self._profile(row.director_profile),
+            director_versions=tuple(
+                director_version_from_dict(item.payload)
+                for item in session.scalars(
+                    select(DirectorVersionRow)
+                    .where(
+                        DirectorVersionRow.workspace_id == row.workspace_id,
+                        DirectorVersionRow.script_id == row.script_id,
+                    )
+                    .order_by(DirectorVersionRow.number)
+                )
+            ),
+            director_confirmations=tuple(
+                director_confirmation_from_dict(item.payload)
+                for item in session.scalars(
+                    select(DirectorConfirmationRow)
+                    .where(
+                        DirectorConfirmationRow.workspace_id == row.workspace_id,
+                        DirectorConfirmationRow.script_id == row.script_id,
+                    )
+                    .order_by(DirectorConfirmationRow.sequence)
+                )
+            ),
         )
 
     def _load_version(
@@ -843,6 +951,10 @@ class SqlAlchemyContentRepository:
         elif len(before.versions) < len(document.versions):
             summary = document.current_version.change_summary
             action = "content.script.ai_analyzed" if summary == "AI 结构化解析" else "content.script.revised"
+        elif before.director_confirmations != document.director_confirmations:
+            action = "content.director_profile.confirmed"
+        elif before.director_versions != document.director_versions:
+            action = "content.director_profile.candidate_created"
         elif before.director_profile != document.director_profile:
             action = "content.director_profile.updated"
         else:

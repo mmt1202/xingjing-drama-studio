@@ -16,6 +16,8 @@ from lib.text_backends.base import TextBackend, TextTaskType
 async def create_text_backend_for_task(
     task_type: TextTaskType,
     project_name: str | None = None,
+    *,
+    read_only: bool = False,
 ) -> tuple[TextBackend, str]:
     """从 DB 配置创建文本 backend，随 backend 返回解析层 registry provider_id。
 
@@ -25,7 +27,11 @@ async def create_text_backend_for_task(
     resolver = ConfigResolver(async_session_factory)
 
     async with resolver.session() as r:
-        provider_id, model_id = await r.text_backend_for_task(task_type, project_name)
+        provider_id, model_id = (
+            await r.text_backend_for_task(task_type, project_name, read_only=True)
+            if read_only
+            else await r.text_backend_for_task(task_type, project_name)
+        )
         backend = await assemble_backend(
             provider_id=provider_id,
             media_type="text",

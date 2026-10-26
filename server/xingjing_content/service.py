@@ -4,8 +4,18 @@ import hashlib
 import json
 import uuid
 from dataclasses import asdict, dataclass, is_dataclass, replace
+from datetime import UTC, datetime
+from typing import Literal
 
-from .models import ContentAnalysis, DirectorProfile, ScriptDocument, SourceDocument
+from .models import (
+    ContentAnalysis,
+    DirectorConfirmation,
+    DirectorProfile,
+    DirectorVersion,
+    ScriptDocument,
+    SourceDocument,
+    director_profile_digest,
+)
 from .parser import parse_script
 from .repository import FileContentRepository
 
@@ -45,6 +55,19 @@ class SetDirectorProfileCommand:
     expected_revision: int
     idempotency_key: str
     profile: DirectorProfile
+    origin: Literal["manual", "ai"] = "manual"
+    actor_id: str = "system"
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmDirectorProfileCommand:
+    workspace_id: str
+    script_id: str
+    expected_revision: int
+    idempotency_key: str
+    candidate_id: str
+    actor_id: str
+    note: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,17 +138,85 @@ class ContentService:
         return self._transact(command.workspace_id, command.idempotency_key, fingerprint, revise)
 
     def set_director_profile(self, command: SetDirectorProfileCommand) -> ScriptDocument:
-        fingerprint = _fingerprint(command)
+        # Actor/origin are trusted evidence; retain existing command fingerprints.
+        request = asdict(command)
+        request.pop("origin")
+        request.pop("actor_id")
+        fingerprint = _fingerprint(request)
 
         def update(scripts: dict[str, ScriptDocument]) -> tuple[dict[str, ScriptDocument], ScriptDocument]:
             script = _owned_script(scripts, command.script_id, command.workspace_id)
             if script.revision != command.expected_revision:
                 raise ContentConflict("VERSION_CONFLICT")
-            directed = replace(script, revision=script.revision + 1, director_profile=command.profile)
+            _validate_director_profile(command.profile)
+            if command.origin not in {"manual", "ai"} or not command.actor_id.strip():
+                raise ValueError("INVALID_DIRECTOR_PROFILE")
+            candidate = DirectorVersion(
+                str(uuid.uuid4()),
+                len(script.director_versions) + 1,
+                f"{script.script_id}@{script.current_version.number}",
+                hashlib.sha256(script.current_version.source_content.encode()).hexdigest(),
+                command.profile,
+                command.origin,
+                command.actor_id,
+                datetime.now(UTC).isoformat(),
+            )
+            directed = replace(
+                script,
+                revision=script.revision + 1,
+                director_profile=command.profile,
+                director_versions=(*script.director_versions, candidate),
+            )
             scripts[script.script_id] = directed
             return scripts, directed
 
         return self._transact(command.workspace_id, command.idempotency_key, fingerprint, update)
+
+    def confirm_director_profile(self, command: ConfirmDirectorProfileCommand) -> ScriptDocument:
+        fingerprint = _fingerprint(command)
+
+        def confirm(scripts: dict[str, ScriptDocument]) -> tuple[dict[str, ScriptDocument], ScriptDocument]:
+            script = _owned_script(scripts, command.script_id, command.workspace_id)
+            if script.revision != command.expected_revision:
+                raise ContentConflict("VERSION_CONFLICT")
+            if script.locked_version_number is None:
+                raise ValueError("SCRIPT_NOT_FROZEN")
+            candidate = script.director_candidate
+            if not any(item.id == command.candidate_id for item in script.director_versions):
+                raise KeyError("DIRECTOR_CANDIDATE_NOT_FOUND")
+            if (
+                candidate is None
+                or candidate.id != command.candidate_id
+                or candidate.script_version_id != f"{script.script_id}@{script.locked_version_number}"
+                or candidate.script_content_digest
+                != hashlib.sha256(script.current_version.source_content.encode()).hexdigest()
+            ):
+                raise ContentConflict("DIRECTOR_CANDIDATE_STALE")
+            _validate_director_profile(candidate.profile, complete=True)
+            if len(command.note) > 1000 or not command.actor_id.strip():
+                raise ValueError("INVALID_DIRECTOR_PROFILE")
+            if script.confirmed_director is not None:
+                return scripts, script
+            confirmation = DirectorConfirmation(
+                str(uuid.uuid4()),
+                candidate.id,
+                candidate.number,
+                candidate.script_version_id,
+                candidate.script_content_digest,
+                director_profile_digest(candidate.profile),
+                command.actor_id,
+                datetime.now(UTC).isoformat(),
+                command.note.strip(),
+            )
+            directed = replace(
+                script,
+                revision=script.revision + 1,
+                director_confirmations=(*script.director_confirmations, confirmation),
+            )
+            scripts[script.script_id] = directed
+            return scripts, directed
+
+        return self._transact(command.workspace_id, command.idempotency_key, fingerprint, confirm)
 
     def restore_script_version(
         self,
@@ -305,6 +396,22 @@ def _owned_script(scripts: dict[str, ScriptDocument], script_id: str, workspace_
     if script is None or script.workspace_id != workspace_id:
         raise KeyError("SCRIPT_NOT_FOUND")
     return script
+
+
+def _validate_director_profile(profile: DirectorProfile, *, complete: bool = False) -> None:
+    values = (profile.audience, profile.pacing, profile.visual_style, profile.camera_language)
+    if any(value is not None and not _bounded_text(value, 1000) for value in values):
+        raise ValueError("INVALID_DIRECTOR_PROFILE")
+    if len(profile.production_constraints) > 100 or any(
+        not _bounded_text(value, 2000) or not value.strip() for value in profile.production_constraints
+    ):
+        raise ValueError("INVALID_DIRECTOR_PROFILE")
+    if complete and any(value is None or not value.strip() for value in values):
+        raise ValueError("DIRECTOR_PROFILE_INCOMPLETE")
+
+
+def _bounded_text(value: object, maximum: int) -> bool:
+    return isinstance(value, str) and len(value) <= maximum
 
 
 def _fingerprint(value: object) -> str:

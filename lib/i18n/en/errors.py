@@ -365,4 +365,13 @@ MESSAGES = {
     "project_config_invalid": "Invalid project configuration; check the parameters and retry",
     "invalid_discovery_format": "Unsupported model discovery format: {discovery_format}",
     "request_invalid": "Invalid request, please check and retry",
+    "director_candidate_not_found": "The selected director candidate was not found. Reload the document.",
+    "director_candidate_stale": "Save the historical profile as a new candidate, then confirm the latest candidate matching the frozen script.",
+    "director_profile_incomplete": "Complete the audience, pacing, visual style and camera language before confirming the director profile.",
+    "director_confirmation_required": "Confirm the latest director candidate matching the frozen script before generating a Smart storyboard.",
+    "director_profile_invalid": "Check the format and length of the director profile fields before saving.",
+    "smart_storyboard_source_context_missing": "This historical request has no complete input provenance. Check existing storyboard results first; the model will not be called again automatically.",
+    "smart_storyboard_source_context_mismatch": "The storyboard input versions cannot be verified. Check the frozen script, director confirmation and asset snapshot.",
+    "content_ai_configuration_unavailable": "The script text model cannot be prepared. Ask an administrator to check its configuration. You can continue editing manually; no new script version was created.",
+    "content_ai_model_failed": "AI processing failed and no new script version was created. Retry the original operation or continue editing manually.",
 }

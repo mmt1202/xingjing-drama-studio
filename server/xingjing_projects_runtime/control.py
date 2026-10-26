@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -12,7 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lib.episode_editor import EpisodeEditError, read_episodes
 from lib.project_manager import get_project_manager
-from server.xingjing_content_persistence.repository import ScriptRow, ScriptVersionRow
+from server.xingjing_content.models import (
+    director_confirmation_from_dict,
+    director_profile_digest,
+    director_version_from_dict,
+)
+from server.xingjing_content_persistence.repository import (
+    DirectorConfirmationRow,
+    DirectorVersionRow,
+    ScriptRow,
+    ScriptVersionRow,
+)
 from server.xingjing_editing_persistence.models import TimelineHeadRow
 from server.xingjing_generation_persistence.repository import GenerationBillingHoldRow, TaskRow
 from server.xingjing_identity_context import TrustedWorkspaceContext
@@ -50,6 +61,76 @@ def scoped(model: Any, context: TrustedWorkspaceContext, project_id: str):
         model.workspace_id == context.workspace_id,
         model.project_id == project_id,
     )
+
+
+async def _confirmed_director_scripts(
+    session: AsyncSession,
+    context: TrustedWorkspaceContext,
+    project_id: str,
+    scripts: list[ScriptRow],
+    versions: dict[str, ScriptVersionRow],
+) -> set[str]:
+    """Only explicit confirmations of the latest candidate count as stage evidence."""
+    if not scripts or "script.view" not in context.permissions:
+        return set()
+    candidates = await session.scalars(
+        select(DirectorVersionRow)
+        .join(
+            ScriptRow,
+            and_(
+                ScriptRow.workspace_id == DirectorVersionRow.workspace_id,
+                ScriptRow.script_id == DirectorVersionRow.script_id,
+            ),
+        )
+        .where(ScriptRow.workspace_id == context.workspace_id, ScriptRow.project_id == project_id)
+        .order_by(DirectorVersionRow.number.desc())
+    )
+    latest: dict[str, DirectorVersionRow] = {}
+    for candidate in candidates:
+        latest.setdefault(candidate.script_id, candidate)
+    confirmations = await session.scalars(
+        select(DirectorConfirmationRow)
+        .join(
+            ScriptRow,
+            and_(
+                ScriptRow.workspace_id == DirectorConfirmationRow.workspace_id,
+                ScriptRow.script_id == DirectorConfirmationRow.script_id,
+            ),
+        )
+        .where(ScriptRow.workspace_id == context.workspace_id, ScriptRow.project_id == project_id)
+    )
+    confirmed: set[str] = set()
+    scoped_scripts = {script.script_id: script for script in scripts}
+    for row in confirmations:
+        script = scoped_scripts.get(row.script_id)
+        version = versions.get(row.script_id)
+        candidate_row = latest.get(row.script_id)
+        if not script or not version or not candidate_row or script.locked_version_number != version.number:
+            continue
+        try:
+            candidate = director_version_from_dict(candidate_row.payload)
+            confirmation = director_confirmation_from_dict(row.payload)
+        except (KeyError, TypeError, ValueError):
+            continue
+        version_id = f"{script.script_id}@{version.number}"
+        digest = hashlib.sha256(version.source_content.encode()).hexdigest()
+        fields = (
+            candidate.profile.audience,
+            candidate.profile.pacing,
+            candidate.profile.visual_style,
+            candidate.profile.camera_language,
+        )
+        if (
+            candidate.id == candidate_row.candidate_id == confirmation.candidate_id
+            and candidate.number == candidate_row.number == row.candidate_number == confirmation.candidate_number
+            and confirmation.id == row.confirmation_id
+            and candidate.script_version_id == confirmation.script_version_id == version_id
+            and candidate.script_content_digest == confirmation.script_content_digest == digest
+            and confirmation.profile_digest == director_profile_digest(candidate.profile)
+            and all(isinstance(value, str) and value.strip() for value in fields)
+        ):
+            confirmed.add(script.script_id)
+    return confirmed
 
 
 async def production_facts(
@@ -95,6 +176,7 @@ async def production_facts(
     latest: dict[str, ScriptVersionRow] = {}
     for version in versions:
         latest.setdefault(version.script_id, version)
+    confirmed_directors = await _confirmed_director_scripts(session, context, project_id, scripts, latest)
     timelines = []
     if "final.view" in context.permissions:
         timelines = list(
@@ -194,14 +276,7 @@ async def production_facts(
             identity in latest and bool(latest[identity].analysis) and not latest[identity].validation_errors
             for identity in working_ids
         ),
-        "director": all_working
-        and all(
-            all(
-                working_scripts[identity].director_profile.get(field)
-                for field in ("audience", "pacing", "visual_style", "camera_language")
-            )
-            for identity in working_ids
-        ),
+        "director": all_working and all(identity in confirmed_directors for identity in working_ids),
         "frozen": bool(catalog["scripts"]),
         "assets": any(s["valid"] and s["assets"] for s in catalog["snapshots"]),
         "assetsReady": asset_ready,

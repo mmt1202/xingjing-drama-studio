@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from lib.i18n import get_translator
 from server.xingjing_content import (
     ApplyAnalysisCommand,
+    ConfirmDirectorProfileCommand,
     ContentConflict,
     ContentService,
     DirectorProfile,
@@ -68,8 +69,13 @@ class ContentContractRoute(APIRoute):
                 code = str(error) or "INVALID_REQUEST"
                 if code == "CONTENT_AI_REQUEST_IN_PROGRESS":
                     return _error_response(request, code, status.HTTP_409_CONFLICT)
-                if code == "CONTENT_AI_MODEL_FAILED":
-                    return _error_response(request, code, status.HTTP_502_BAD_GATEWAY)
+                if code in {"CONTENT_AI_MODEL_FAILED", "CONTENT_AI_CONFIGURATION_UNAVAILABLE"}:
+                    return _error_response(
+                        request,
+                        code,
+                        status.HTTP_502_BAD_GATEWAY,
+                        {"operationStatus": "failed", "scriptChanged": False},
+                    )
                 if code in {"SCRIPT_FROZEN", "SCRIPT_NOT_FROZEN"}:
                     return _error_response(request, code, status.HTTP_409_CONFLICT)
                 if code in {
@@ -87,6 +93,12 @@ class ContentContractRoute(APIRoute):
 
 def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
     result = APIRouter(route_class=ContentContractRoute)
+
+    @result.get("/projects/{project_id}/content-ai-readiness")
+    async def content_ai_readiness(request: Request, project_id: str):
+        context = await _context(request, project_id, dependencies, "script.view")
+        readiness = await dependencies.ai_service_for(context, project_id).readiness()
+        return _success(context, readiness)
 
     @result.get("/projects/{project_id}/scripts")
     async def list_scripts(request: Request, project_id: str):
@@ -189,7 +201,24 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                 )
             elif action == "setDirectorProfile":
                 document = service.set_director_profile(
-                    SetDirectorProfileCommand(context.workspace_id, script_id, expected, key, _profile(payload))
+                    SetDirectorProfileCommand(
+                        context.workspace_id, script_id, expected, key, _profile(payload), actor_id=context.actor_id
+                    )
+                )
+            elif action == "confirmDirectorProfile":
+                note = payload.get("note", "")
+                if not isinstance(note, str):
+                    raise ContentHttpError("INVALID_DIRECTOR_PROFILE")
+                document = service.confirm_director_profile(
+                    ConfirmDirectorProfileCommand(
+                        context.workspace_id,
+                        script_id,
+                        expected,
+                        key,
+                        _required_text(payload, "candidateId"),
+                        context.actor_id,
+                        note,
+                    )
                 )
             elif action == "freeze":
                 document = service.freeze_script(
@@ -230,7 +259,9 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
                     idempotency_key=key,
                 )
                 document = service.set_director_profile(
-                    SetDirectorProfileCommand(context.workspace_id, script_id, expected, key, profile)
+                    SetDirectorProfileCommand(
+                        context.workspace_id, script_id, expected, key, profile, origin="ai", actor_id=context.actor_id
+                    )
                 )
             elif action == "rewrite":
                 content, summary = await dependencies.ai_service_for(context, project_id).rewrite(
@@ -399,6 +430,35 @@ def _script(document: ScriptDocument, request: Request) -> dict[str, object]:
         "versions": [_version_payload(item, document, request) for item in document.versions],
         "aiInputLimitCharacters": MAX_AI_INPUT_CHARS,
         "lockedVersionNumber": document.locked_version_number,
+        "directorState": document.director_state,
+        "currentDirectorConfirmationId": document.confirmed_director.id if document.confirmed_director else None,
+        "directorCandidates": [
+            {
+                "id": candidate.id,
+                "number": candidate.number,
+                "scriptVersionId": candidate.script_version_id,
+                "scriptContentDigest": candidate.script_content_digest,
+                "profile": _profile_projection(candidate.profile),
+                "origin": candidate.origin,
+                "createdBy": candidate.created_by,
+                "createdAt": candidate.created_at,
+            }
+            for candidate in document.director_versions
+        ],
+        "directorConfirmations": [
+            {
+                "id": confirmation.id,
+                "candidateId": confirmation.candidate_id,
+                "candidateNumber": confirmation.candidate_number,
+                "scriptVersionId": confirmation.script_version_id,
+                "scriptContentDigest": confirmation.script_content_digest,
+                "profileDigest": confirmation.profile_digest,
+                "confirmedBy": confirmation.confirmed_by,
+                "confirmedAt": confirmation.confirmed_at,
+                "note": confirmation.note,
+            }
+            for confirmation in document.director_confirmations
+        ],
         "directorProfile": {
             "audience": document.director_profile.audience,
             "pacing": document.director_profile.pacing,
@@ -406,6 +466,16 @@ def _script(document: ScriptDocument, request: Request) -> dict[str, object]:
             "cameraLanguage": document.director_profile.camera_language,
             "productionConstraints": list(document.director_profile.production_constraints),
         },
+    }
+
+
+def _profile_projection(profile: DirectorProfile) -> dict[str, object]:
+    return {
+        "audience": profile.audience,
+        "pacing": profile.pacing,
+        "visualStyle": profile.visual_style,
+        "cameraLanguage": profile.camera_language,
+        "productionConstraints": list(profile.production_constraints),
     }
 
 
@@ -558,6 +628,13 @@ def _error_response(
 
 def _error_message(code: str, request: Request) -> str:
     translated = {
+        "DIRECTOR_CANDIDATE_NOT_FOUND": "director_candidate_not_found",
+        "DIRECTOR_CANDIDATE_STALE": "director_candidate_stale",
+        "DIRECTOR_PROFILE_INCOMPLETE": "director_profile_incomplete",
+        "DIRECTOR_CONFIRMATION_REQUIRED": "director_confirmation_required",
+        "INVALID_DIRECTOR_PROFILE": "director_profile_invalid",
+        "CONTENT_AI_CONFIGURATION_UNAVAILABLE": "content_ai_configuration_unavailable",
+        "CONTENT_AI_MODEL_FAILED": "content_ai_model_failed",
         "CONTENT_AI_INPUT_TOO_LARGE": "content_ai_input_too_large",
         "CONTENT_AI_LEGACY_RESULT_REQUIRES_NEW_OPERATION": "content_ai_legacy_result_requires_new_operation",
         "SCRIPT_AI_STRUCTURE_INVALID": "script_ai_structure_invalid",
@@ -567,7 +644,6 @@ def _error_message(code: str, request: Request) -> str:
     if code in translated:
         return get_translator(request)(translated[code])
     messages = {
-        "CONTENT_AI_MODEL_FAILED": "AI 模型调用失败，请检查模型配置后重试。",
         "CONTENT_AI_REQUEST_IN_PROGRESS": "相同操作正在处理中，请稍后刷新。",
         "SCRIPT_FROZEN": "剧本已冻结，不能再修改正文或结构。",
         "SCRIPT_NOT_FROZEN": "请先冻结当前剧本版本，再生成导演方案。",

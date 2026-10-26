@@ -8,14 +8,14 @@ from fastapi import Request
 
 from server.xingjing_generation_runtime import GenerationRuntime
 from server.xingjing_identity_context import TrustedWorkspaceContext
-from server.xingjing_storyboard.service import AccessContext, ShotDraft, StoryboardService
+from server.xingjing_storyboard.service import AccessContext, ShotDraft, SmartDraftResult, StoryboardService
 from server.xingjing_storyboard_persistence import SqlAlchemyPromptTemplateRepository, SqlAlchemyStoryboardRepository
 
 TrustedContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
 ProjectScopeAuthorizer = Callable[[TrustedWorkspaceContext, str], bool | Awaitable[bool]]
 SmartDraftGenerator = Callable[
     [AccessContext, str, str, str],
-    tuple[ShotDraft, ...] | Awaitable[tuple[ShotDraft, ...]],
+    tuple[ShotDraft, ...] | SmartDraftResult | Awaitable[tuple[ShotDraft, ...] | SmartDraftResult],
 ]
 
 

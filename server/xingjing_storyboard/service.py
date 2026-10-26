@@ -26,6 +26,7 @@ from .models import (
     Shot,
     ShotReplacement,
     Storyboard,
+    StoryboardSourceContext,
     StoryboardStatus,
     StoryboardVersion,
     frozen_storyboard_digest,
@@ -89,6 +90,12 @@ class ShotDraft:
             "cost_tier": self.cost_tier,
             "asset_references": [item.to_dict() for item in self.asset_references],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class SmartDraftResult:
+    drafts: tuple[ShotDraft, ...]
+    source_context: StoryboardSourceContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +193,7 @@ class StoryboardService:
         episode_id: str,
         shots: Sequence[ShotDraft],
         idempotency_key: str,
+        source_context: StoryboardSourceContext | None = None,
     ) -> MutationResult:
         action = "storyboard.created"
         self._authorize(context, MANAGE_PERMISSION, action, "pending")
@@ -199,6 +207,7 @@ class StoryboardService:
                 "scope": _scope_dict(context.scope),
                 "episode_id": episode_id,
                 "shots": [draft.to_dict() for draft in drafts],
+                **({"source_context": source_context.to_dict()} if source_context is not None else {}),
             }
         )
         replay = self._repository.replay(context.scope, idempotency_key=idempotency_key, fingerprint=fingerprint)
@@ -223,6 +232,7 @@ class StoryboardService:
                 versions=(version,),
                 created_at=now,
                 updated_at=now,
+                source_context=source_context,
             )
             audit = self._audit(context, action, storyboard_id, "succeeded", {}, _summary(storyboard))
             outcome = self._repository.commit(
@@ -1080,6 +1090,7 @@ class StoryboardService:
                 shots=checked_shots,
                 frozen_at=now,
                 digest="",
+                source_context=current.source_context,
             )
             snapshot = replace(draft_snapshot, digest=frozen_storyboard_digest(draft_snapshot))
             frozen = replace(

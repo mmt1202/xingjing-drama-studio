@@ -15,6 +15,7 @@ from .models import (
 from .repository import FileContentRepository
 from .service import (
     ApplyAnalysisCommand,
+    ConfirmDirectorProfileCommand,
     ContentConflict,
     ContentService,
     ImportScriptCommand,
@@ -25,6 +26,7 @@ from .service import (
 
 __all__ = [
     "ApplyAnalysisCommand",
+    "ConfirmDirectorProfileCommand",
     "ContentConflict",
     "ContentService",
     "CharacterInsight",

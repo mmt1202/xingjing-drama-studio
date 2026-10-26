@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, cast
@@ -118,6 +120,37 @@ class DirectorProfile:
     production_constraints: tuple[str, ...] = ()
 
 
+def director_profile_digest(profile: DirectorProfile) -> str:
+    return hashlib.sha256(
+        json.dumps(asdict(profile), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class DirectorVersion:
+    id: str
+    number: int
+    script_version_id: str
+    script_content_digest: str
+    profile: DirectorProfile
+    origin: Literal["manual", "ai"]
+    created_by: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DirectorConfirmation:
+    id: str
+    candidate_id: str
+    candidate_number: int
+    script_version_id: str
+    script_content_digest: str
+    profile_digest: str
+    confirmed_by: str
+    confirmed_at: str
+    note: str = ""
+
+
 @dataclass(frozen=True, slots=True)
 class ScriptDocument:
     script_id: str
@@ -129,10 +162,52 @@ class ScriptDocument:
     versions: tuple[ScriptVersion, ...]
     locked_version_number: int | None = None
     director_profile: DirectorProfile = field(default_factory=DirectorProfile)
+    director_versions: tuple[DirectorVersion, ...] = ()
+    director_confirmations: tuple[DirectorConfirmation, ...] = ()
 
     @property
     def current_version(self) -> ScriptVersion:
         return self.versions[-1]
+
+    @property
+    def director_candidate(self) -> DirectorVersion | None:
+        return self.director_versions[-1] if self.director_versions else None
+
+    @property
+    def confirmed_director(self) -> DirectorConfirmation | None:
+        candidate = self.director_candidate
+        if candidate is None or candidate.script_version_id != f"{self.script_id}@{self.locked_version_number}":
+            return None
+        version = next((item for item in self.versions if item.number == self.locked_version_number), None)
+        if (
+            version is None
+            or candidate.script_content_digest != hashlib.sha256(version.source_content.encode()).hexdigest()
+        ):
+            return None
+        return next(
+            (
+                item
+                for item in reversed(self.director_confirmations)
+                if item.candidate_id == candidate.id
+                and item.script_version_id == candidate.script_version_id
+                and item.script_content_digest == candidate.script_content_digest
+                and item.profile_digest == director_profile_digest(candidate.profile)
+            ),
+            None,
+        )
+
+    @property
+    def director_state(self) -> str:
+        candidate = self.director_candidate
+        if candidate is not None:
+            if (
+                candidate.script_version_id != f"{self.script_id}@{self.current_version.number}"
+                or candidate.script_content_digest
+                != hashlib.sha256(self.current_version.source_content.encode()).hexdigest()
+            ):
+                return "stale"
+            return "confirmed" if self.confirmed_director is not None else "unconfirmed"
+        return "unconfirmed" if any(asdict(self.director_profile).values()) else "missing"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -173,7 +248,11 @@ class ScriptDocument:
             "scenes": [asdict(scene) for scene in version.scenes],
             **self.mapping_projection(version),
             "source_preamble": version.source_preamble,
-            "director_profile": asdict(self.director_profile),
+            "director_profile": asdict(self.director_candidate.profile)
+            if self.confirmed_director is not None and self.director_candidate is not None
+            else None,
+            "director_state": self.director_state,
+            "director_confirmation": asdict(self.confirmed_director) if self.confirmed_director else None,
         }
 
 
@@ -222,6 +301,42 @@ def script_from_dict(data: dict[str, object]) -> ScriptDocument:
         versions=tuple(versions),
         locked_version_number=(_integer(value) if (value := data.get("locked_version_number")) is not None else None),
         director_profile=_profile_from_dict(profile_data),
+        director_versions=tuple(
+            director_version_from_dict(_dict(item)) for item in _list(data.get("director_versions", []))
+        ),
+        director_confirmations=tuple(
+            director_confirmation_from_dict(_dict(item)) for item in _list(data.get("director_confirmations", []))
+        ),
+    )
+
+
+def director_version_from_dict(data: dict[str, object]) -> DirectorVersion:
+    origin = data["origin"]
+    if origin not in {"manual", "ai"}:
+        raise ValueError("INVALID_DIRECTOR_ORIGIN")
+    return DirectorVersion(
+        _string(data["id"]),
+        _integer(data["number"]),
+        _string(data["script_version_id"]),
+        _string(data["script_content_digest"]),
+        _profile_from_dict(_dict(data["profile"])),
+        cast(Literal["manual", "ai"], origin),
+        _string(data["created_by"]),
+        _string(data["created_at"]),
+    )
+
+
+def director_confirmation_from_dict(data: dict[str, object]) -> DirectorConfirmation:
+    return DirectorConfirmation(
+        _string(data["id"]),
+        _string(data["candidate_id"]),
+        _integer(data["candidate_number"]),
+        _string(data["script_version_id"]),
+        _string(data["script_content_digest"]),
+        _string(data["profile_digest"]),
+        _string(data["confirmed_by"]),
+        _string(data["confirmed_at"]),
+        _string(data.get("note", "")),
     )
 
 

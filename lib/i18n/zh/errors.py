@@ -321,4 +321,13 @@ MESSAGES = {
     "project_config_invalid": "项目配置无效，请检查参数后重试",
     "invalid_discovery_format": "不支持的模型发现格式：{discovery_format}",
     "request_invalid": "请求无效，请检查后重试",
+    "director_candidate_not_found": "所选导演候选不存在，请重新读取。",
+    "director_candidate_stale": "请先将历史方案保存为新的候选，再确认与当前冻结剧本匹配的最新方案。",
+    "director_profile_incomplete": "请补全受众、节奏、视觉风格和镜头语言，再确认导演方案。",
+    "director_confirmation_required": "请先在 AI 导演中确认与当前冻结剧本匹配的最新方案，再生成智能分镜。",
+    "director_profile_invalid": "导演方案字段格式或长度不符合要求，请检查后保存。",
+    "smart_storyboard_source_context_missing": "此历史请求未记录完整输入来源，请先查看已有分镜结果；不会自动重新调用模型。",
+    "smart_storyboard_source_context_mismatch": "分镜请求的来源版本无法核对，请检查冻结剧本、导演确认和资产快照。",
+    "content_ai_configuration_unavailable": "当前无法准备剧本文本模型。请管理员检查模型配置；你可以继续手动编辑，本次未创建新剧本版本。",
+    "content_ai_model_failed": "AI 处理失败，本次未创建新剧本版本。可以重试原操作，或继续手动编辑。",
 }

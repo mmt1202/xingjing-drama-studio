@@ -367,4 +367,13 @@ MESSAGES = {
     "project_config_invalid": "Cấu hình dự án không hợp lệ; hãy kiểm tra tham số và thử lại",
     "invalid_discovery_format": "Định dạng khám phá mô hình không được hỗ trợ: {discovery_format}",
     "request_invalid": "Yêu cầu không hợp lệ, vui lòng kiểm tra và thử lại",
+    "director_candidate_not_found": "Không tìm thấy phương án đạo diễn đã chọn. Hãy tải lại tài liệu.",
+    "director_candidate_stale": "Lưu phương án cũ thành ứng viên mới, rồi xác nhận ứng viên mới nhất khớp với kịch bản đã khóa.",
+    "director_profile_incomplete": "Điền đủ khán giả, nhịp điệu, phong cách hình ảnh và ngôn ngữ máy quay trước khi xác nhận.",
+    "director_confirmation_required": "Xác nhận phương án đạo diễn mới nhất khớp với kịch bản đã khóa trước khi tạo phân cảnh thông minh.",
+    "director_profile_invalid": "Kiểm tra định dạng và độ dài các trường của phương án đạo diễn trước khi lưu.",
+    "smart_storyboard_source_context_missing": "Yêu cầu cũ này chưa lưu đầy đủ nguồn đầu vào. Hãy kiểm tra phân cảnh đã có; hệ thống không tự gọi lại mô hình.",
+    "smart_storyboard_source_context_mismatch": "Không thể xác minh phiên bản đầu vào của phân cảnh. Hãy kiểm tra kịch bản đã khóa, xác nhận đạo diễn và bản chụp tài sản.",
+    "content_ai_configuration_unavailable": "Không thể chuẩn bị mô hình văn bản kịch bản. Hãy nhờ quản trị viên kiểm tra cấu hình. Bạn có thể tiếp tục sửa thủ công; chưa tạo phiên bản kịch bản mới.",
+    "content_ai_model_failed": "Xử lý AI thất bại và chưa tạo phiên bản kịch bản mới. Hãy thử lại thao tác ban đầu hoặc tiếp tục sửa thủ công.",
 }

@@ -43,9 +43,15 @@ class TextGenerator:
         cls,
         task_type: TextTaskType,
         project_name: str | None = None,
+        *,
+        read_only: bool = False,
     ) -> TextGenerator:
         """工厂方法：根据任务类型创建对应的 backend + ledger。"""
-        backend, provider_id = await create_text_backend_for_task(task_type, project_name)
+        backend, provider_id = (
+            await create_text_backend_for_task(task_type, project_name, read_only=True)
+            if read_only
+            else await create_text_backend_for_task(task_type, project_name)
+        )
         return cls(backend, Ledger(), provider_id)
 
     async def generate(

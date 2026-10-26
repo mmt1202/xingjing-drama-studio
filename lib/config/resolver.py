@@ -1543,13 +1543,18 @@ class ConfigResolver:
         self,
         task_type: TextTaskType,
         project_name: str | None = None,
+        *,
+        read_only: bool = False,
     ) -> tuple[str, str]:
         """按任务档位解析文本 backend。
 
         优先级（项目优先）：项目档位 > 项目默认模型 > 全局档位 > 全局默认模型 > 自动推断。
         任务需要 vision 时校验解析结果的能力，不满足直接报错、不静默换模型（docs/adr/0051）。
+        read_only 时项目元数据只在内存归一化，不持久化旧字段迁移。
         """
         async with self._open_session() as (session, svc):
+            if read_only:
+                return await self._resolve_text_backend(svc, session, task_type, project_name, read_only=True)
             return await self._resolve_text_backend(svc, session, task_type, project_name)
 
     async def _resolve_text_backend(
@@ -1558,8 +1563,15 @@ class ConfigResolver:
         session: AsyncSession,
         task_type: TextTaskType,
         project_name: str | None,
+        *,
+        read_only: bool = False,
     ) -> tuple[str, str]:
-        project = get_project_manager().load_project(project_name) if project_name else None
+        project = None
+        if project_name:
+            manager = get_project_manager()
+            project = (
+                manager.load_project(project_name, read_only=True) if read_only else manager.load_project(project_name)
+            )
         keys = _TEXT_LAYERED_KEYS[TEXT_TASK_TIERS[task_type]]
         resolved = await self._resolve_layered_backend(svc, session, project, keys)
         if task_type in VISION_REQUIRED_TASKS:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -24,6 +25,12 @@ from .parser import parse_script
 
 MAX_AI_INPUT_CHARS = 20_000
 MAX_AI_INSTRUCTION_CHARS = 2_000
+logger = logging.getLogger(__name__)
+
+
+class ContentAiConfigurationUnavailable(ValueError):
+    def __init__(self) -> None:
+        super().__init__("CONTENT_AI_CONFIGURATION_UNAVAILABLE")
 
 
 class ContentAiInputTooLarge(ValueError):
@@ -112,6 +119,19 @@ class ContentAiService:
         self._requests = requests
         self._tenant_id = tenant_id
         self._project_name = project_name
+
+    async def readiness(self) -> dict[str, object]:
+        """Resolve local model configuration without submitting text or recording usage."""
+        try:
+            await TextGenerator.create(TextTaskType.SCRIPT, self._project_name, read_only=True)
+        except (ValueError, KeyError, FileNotFoundError):
+            state = "configuration_unavailable"
+        except Exception as error:
+            logger.warning("Content AI readiness unavailable (%s)", type(error).__name__)
+            state = "temporarily_unavailable"
+        else:
+            state = "ready"
+        return {"ready": state == "ready", "status": state, "checksProviderConnection": False}
 
     async def analyze(
         self, document: ScriptDocument, *, expected_revision: int, idempotency_key: str
@@ -273,7 +293,10 @@ class ContentAiService:
         if not claim.claimed:
             raise ValueError("CONTENT_AI_REQUEST_IN_PROGRESS")
         try:
-            generator = await TextGenerator.create(TextTaskType.SCRIPT, self._project_name)
+            try:
+                generator = await TextGenerator.create(TextTaskType.SCRIPT, self._project_name)
+            except (ValueError, KeyError, FileNotFoundError) as error:
+                raise ContentAiConfigurationUnavailable() from error
             generated = await generator.generate(
                 TextGenerationRequest(
                     system_prompt=system_prompt,
@@ -349,4 +372,6 @@ class ContentAiService:
                 reason=str(error),
                 now=datetime.now(UTC),
             )
+            if isinstance(error, ContentAiConfigurationUnavailable):
+                raise
             raise ValueError("CONTENT_AI_MODEL_FAILED") from error

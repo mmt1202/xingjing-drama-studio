@@ -23,6 +23,7 @@ import { useDraftProtection } from "./useDraftProtection";
 import { clearProductionDraft, productionDraftSlot, type ProductionDraftScope } from "./draft-state";
 import { useRecoverableDraft } from "./useRecoverableDraft";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
+import { StoryboardSourceNotice } from "./StoryboardSourceNotice";
 import {
   BatchResultPanel,
   ConfirmDialog,
@@ -1831,6 +1832,7 @@ export function StoryboardWorkspace({
       actions={actions}
     >
       {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}
+      <StoryboardSourceNotice items={items} />
       {draftBlocked ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? null }, "smart", scope.episodeId ?? "project")); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}
       {versionConflict ? (
         <StatePanel

@@ -5,9 +5,10 @@ import { CreatorApiError } from "./api";
 import { CreatorPage } from "./shared";
 import { useProjectNavigationBlocker } from "./ProjectFlowShell";
 import { useScriptTranslation } from "./script-i18n";
-import type { CreatorProjectsPort, ScriptDocument, ScriptVersion, SessionContext } from "./types";
+import type { ContentAiReadiness, CreatorProjectsPort, ScriptDocument, ScriptVersion, SessionContext } from "./types";
+import { useScriptExperienceTranslation } from "./script-experience-i18n";
 
-export interface ScriptPageProps { api: CreatorProjectsPort; projectId: string; selectedScriptId?: string; onNavigate?: (target: string) => void }
+export interface ScriptPageProps { api: CreatorProjectsPort; projectId: string; selectedScriptId?: string; selectedDirectorCandidateId?: string; onNavigate?: (target: string) => void }
 export const scriptSteps = [
   ["script-import", "import"], ["source", "source"], ["script-checkup", "checkup"], ["script-lab", "lab"], ["rewrite", "rewrite"], ["versions", "versions"], ["ai-director", "director"], ["director-assets", "assets"], ["source-mapping", "mapping"],
 ] as const;
@@ -53,16 +54,18 @@ export function useScriptMutation() {
     catch (reason) { if (mounted.current) setError({ scope, reason }); }
     finally { latch.current = false; if (mounted.current) setPending(undefined); }
   };
-  const uncertain = Boolean(error && (!(error.reason instanceof CreatorApiError) || error.reason.status >= 500 || error.reason.code === "CONTENT_AI_REQUEST_IN_PROGRESS"));
+  const terminalFailure = error?.reason instanceof CreatorApiError && ["CONTENT_AI_MODEL_FAILED", "CONTENT_AI_CONFIGURATION_UNAVAILABLE"].includes(error.reason.code);
+  const uncertain = Boolean(error && !terminalFailure && (!(error.reason instanceof CreatorApiError) || error.reason.status >= 500 || error.reason.code === "CONTENT_AI_REQUEST_IN_PROGRESS"));
   return { pending, error, saved, uncertain, run, retry: () => original.current?.(), clear: () => { if (!latch.current) { setError(undefined); setSaved(undefined); original.current = undefined; } } };
 }
 export function ScriptError({ error, retry, reload }: { error: unknown; retry?: () => void; reload?: () => void }) {
   const { t } = useScriptTranslation();
+  const { t: experience } = useScriptExperienceTranslation();
   const problem = error instanceof CreatorApiError ? error : undefined;
   const code = problem?.code;
   const key = code === "VERSION_CONFLICT" ? "conflict" : code === "SCRIPT_FROZEN" ? "frozenError" : code === "SCRIPT_NOT_FROZEN" ? "notFrozenError" : code === "CONTENT_AI_REQUEST_IN_PROGRESS" ? "inProgress"
     : code === "SCRIPT_VALIDATION_FAILED" ? "validationError" : code === "CONTENT_AI_INPUT_TOO_LARGE" ? problem?.details?.inputScope === "instruction" ? "instructionTooLarge" : "tooLarge" : problem?.status === 403 ? "forbidden" : problem?.status === 503 ? "unavailable" : "failed";
-  const message = t(key, { limit: problem?.details?.maxCharacters ?? 2000 });
+  const message = code === "CONTENT_AI_MODEL_FAILED" ? experience("modelFailed") : code === "CONTENT_AI_CONFIGURATION_UNAVAILABLE" ? experience("configurationFailed") : t(key, { limit: problem?.details?.maxCharacters ?? 2000 });
   return <div role="alert" className="rounded-xl border border-amber-400/30 bg-amber-400/[.04] p-4 text-sm leading-6 text-amber-100"><p>{error instanceof AuthSessionError ? error.message : message}</p>{error instanceof Error && !(error instanceof AuthSessionError) && error.message && error.message !== code && error.message !== message ? <p className="mt-2 whitespace-pre-wrap text-xs text-slate-400">{error.message}</p> : null}{code ? <p className="mt-2 break-all font-mono text-xs text-slate-500">{t("diagnostic", { code })}</p> : null}{problem?.requestId ? <p className="mt-1 font-mono text-xs text-slate-500">{t("requestId", { id: problem.requestId })}</p> : null}<div className="mt-3 flex flex-wrap gap-2">{retry ? <button type="button" className={scriptButton} onClick={retry}>{t("retry")}</button> : null}{reload ? <button type="button" className={scriptButton} onClick={reload}>{t(code === "VERSION_CONFLICT" ? "conflictRead" : "refresh")}</button> : null}</div></div>;
 }
 export function TextPreview({ text, label }: { text: string; label?: string }) {
@@ -73,9 +76,10 @@ export function TextPreview({ text, label }: { text: string; label?: string }) {
 }
 export function ValidationSummary({ script }: { script: ScriptDocument }) {
   const { t } = useScriptTranslation();
+  const { t: experience } = useScriptExperienceTranslation();
   const version = currentVersion(script);
   if (!version) return <p className="text-sm text-amber-200">{t("detailPending")}</p>;
-  return <section className="mt-4 rounded-xl border border-white/10 p-4"><h3 className="text-sm font-medium">{t("validation")} · {t("version", { number: version.number })}</h3><p className={"mt-2 text-sm " + (version.validationErrors.length ? "text-amber-200" : "text-emerald-300")}>{t(version.validationErrors.length ? "validationIssues" : "validationPass", { count: version.validationErrors.length })}</p>{version.validationErrors.length ? <ul className="mt-3 space-y-2 text-xs text-slate-400">{version.validationErrors.map((issue, index) => <li key={index}><span className="font-mono">{issue.code}{issue.field ? " · " + issue.field : ""}</span>{issue.message ? "：" + issue.message : ""}</li>)}</ul> : null}</section>;
+  return <section className="mt-4 rounded-xl border border-white/10 p-4"><h3 className="text-sm font-medium">{t("validation")} · {t("version", { number: version.number })}</h3><p className={"mt-2 text-sm " + (version.validationErrors.length ? "text-amber-200" : "text-emerald-300")}>{t(version.validationErrors.length ? "validationIssues" : "validationPass", { count: version.validationErrors.length })}</p>{version.validationErrors.length ? <ul className="mt-3 space-y-2 text-xs text-slate-400">{version.validationErrors.map((issue, index) => <li key={index}>{issue.code === "SCENE_HEADING_REQUIRED" ? experience("missingScene") : issue.code === "SCRIPT_PREFIX_CONTENT_UNPARSED" ? experience("unstructuredText") : issue.code === "PARAGRAPH_TEXT_REQUIRED" ? experience("emptyParagraph") : issue.message || issue.code}<details className="mt-1"><summary className="cursor-pointer text-slate-500">{experience("technicalDetails")}</summary><span className="font-mono">{issue.code}{issue.field ? " · " + issue.field : ""}</span></details></li>)}</ul> : null}</section>;
 }
 export function AiLimitNotice({ script }: { script: ScriptDocument }) {
   const { t } = useScriptTranslation();
@@ -85,6 +89,7 @@ export function AiLimitNotice({ script }: { script: ScriptDocument }) {
 export interface ScriptFrameContext {
   script?: ScriptDocument; scripts: ScriptDocument[]; context: SessionContext; canManage: boolean; reading: boolean; canNavigate: boolean; blocked: boolean;
   navigate: (step: string, scriptId?: string) => void; reload: () => void; accept: (document: ScriptDocument) => void;
+  aiReadiness?: ContentAiReadiness; aiReady: boolean; readinessChecking: boolean; readinessError?: unknown; recheckReadiness: () => void;
 }
 export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, page, blocked, children }: ScriptPageProps & { page: ScriptStep; blocked: boolean; children: (value: ScriptFrameContext) => ReactNode }) {
   const { t } = useScriptTranslation();
@@ -95,6 +100,25 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
   const [reading, setReading] = useState(true);
   const [query, setQuery] = useState(""), [locked, setLocked] = useState("all");
   const [reload, setReload] = useState(0);
+  const [readiness, setReadiness] = useState<{ api: CreatorProjectsPort; projectId: string; value: ContentAiReadiness }>();
+  const [readinessError, setReadinessError] = useState<unknown>();
+  const [readinessChecking, setReadinessChecking] = useState(false), [readinessRevision, setReadinessRevision] = useState(0);
+  const needsAi = page === "script-lab" || page === "rewrite" || page === "ai-director";
+  useEffect(() => {
+    if (!needsAi) return;
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => {
+      setReadinessChecking(true); setReadinessError(undefined);
+      if (!api.getContentAiReadiness) { setReadinessError(new Error("CONTENT_AI_READINESS_UNAVAILABLE")); setReadinessChecking(false); return; }
+      void api.getContentAiReadiness(projectId, abort.signal).then((value) => {
+        if (abort.signal.aborted) return;
+        if (!value || !["ready", "configuration_unavailable", "temporarily_unavailable"].includes(value.status) || typeof value.ready !== "boolean" || value.ready !== (value.status === "ready") || value.checksProviderConnection !== false) throw new Error("INVALID_CONTENT_AI_READINESS");
+        setReadiness({ api, projectId, value });
+      }).catch((error: unknown) => { if (!abort.signal.aborted) setReadinessError(error); }).finally(() => { if (!abort.signal.aborted) setReadinessChecking(false); });
+    }, 0);
+    return () => { abort.abort(); window.clearTimeout(timer); };
+  }, [api, projectId, needsAi, readinessRevision]);
+  const aiReadiness = readiness?.api === api && readiness.projectId === projectId ? readiness.value : undefined;
   const sequence = useRef(0);
   const itemsRef = useRef<ScriptDocument[]>([]);
   const items = result?.api === api && result.projectId === projectId ? result.items : undefined;
@@ -137,7 +161,7 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
     {!items && !error ? <p role="status" className="py-8 text-slate-400">{t("loading")}</p> : null}
     {page === "script-import" && items?.length === 0 ? <p role="status" className="text-sm text-slate-500">{t("noScripts")}</p> : null}
     {page !== "script-import" && !script && items ? <section className={scriptPanel}><p role="status" className="text-sm text-amber-100">{t(preferred !== undefined ? "unavailableSelection" : !items.length ? "noScripts" : "chooseHint")}</p><button type="button" className={scriptButton + " mt-4"} disabled={blocked || !onNavigate} onClick={() => navigate("script-import")}>{t("openImport")}</button></section> : null}
-    {page === "script-import" || script ? children({ script, scripts: items ?? [], context, canManage: context.permissions.includes("script.manage") && !error && !reading, reading, canNavigate: Boolean(onNavigate), blocked, navigate, accept, reload: () => { void read(); } }) : null}
+    {page === "script-import" || script ? children({ script, scripts: items ?? [], context, canManage: context.permissions.includes("script.manage") && !error && !reading, reading, canNavigate: Boolean(onNavigate), blocked, navigate, accept, reload: () => { void read(); }, aiReadiness, aiReady: Boolean(aiReadiness?.ready && !readinessError && !readinessChecking), readinessChecking, readinessError, recheckReadiness: () => setReadinessRevision((value) => value + 1) }) : null}
     <details className="text-xs text-slate-500"><summary className="cursor-pointer">{t("search")}</summary><div className="mt-3 flex flex-wrap gap-3"><label className="flex-1">{t("search")}<input className={scriptField} value={query} placeholder={t("searchHint")} disabled={blocked} onChange={(event) => setQuery(event.target.value)} /></label><label>{t("lockFilter")}<select className={scriptField} value={locked} disabled={blocked} onChange={(event) => setLocked(event.target.value)}><option value="all">{t("all")}</option><option value="editable">{t("editable")}</option><option value="locked">{t("frozen")}</option></select></label></div></details>
     {items && items.length < (result?.total ?? 0) ? <button type="button" className={scriptButton} disabled={blocked || reading} onClick={() => void read(true)}>{t(reading ? "loading" : "loadMore")}</button> : null}
   </div>}</CreatorPage>;

@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 
+from lib.i18n import get_translator
 from server.xingjing_generation import GenerationRequest, MediaType, TaskStatus
 from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
 from server.xingjing_identity_context import TrustedWorkspaceContext
@@ -30,7 +31,7 @@ from server.xingjing_storyboard.errors import (
 from server.xingjing_storyboard.exchange import ExportFormat, import_shots
 from server.xingjing_storyboard.models import AssetKind, AssetReference, Storyboard, StoryboardStatus
 from server.xingjing_storyboard.ports import AuditEvent
-from server.xingjing_storyboard.service import AccessContext, ShotEdit
+from server.xingjing_storyboard.service import AccessContext, ShotEdit, SmartDraftResult
 
 from .dependencies import ProjectScopeAuthorizer, StoryboardHttpDependencies
 from .projection import project_shot
@@ -389,8 +390,9 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             result_value = dependencies.service.create_storyboard(
                 context,
                 episode_id=_required_text(payload, "episodeId"),
-                shots=drafts,
+                shots=drafts.drafts if isinstance(drafts, SmartDraftResult) else drafts,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
+                source_context=drafts.source_context if isinstance(drafts, SmartDraftResult) else None,
             )
             persisted = dependencies.service.get_storyboard(context, result_value.storyboard.storyboard_id)
             return _action_response(
@@ -1370,10 +1372,16 @@ def _error_response(
     details: dict[str, object],
 ) -> JSONResponse:
     request_id = (request.headers.get("X-Request-Id") or "").strip() or str(uuid.uuid4())
+    translated = {
+        "DIRECTOR_CONFIRMATION_REQUIRED": "director_confirmation_required",
+        "SMART_STORYBOARD_SOURCE_CONTEXT_MISSING": "smart_storyboard_source_context_missing",
+        "SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH": "smart_storyboard_source_context_mismatch",
+    }
+    message = get_translator(request)(translated[code]) if code in translated else code
     return JSONResponse(
         status_code=status_code,
         content={
-            "error": {"code": code, "message": code, "retryable": status_code >= 500, "details": details},
+            "error": {"code": code, "message": message, "retryable": status_code >= 500, "details": details},
             "meta": {"requestId": request_id},
         },
         headers={"X-Request-Id": request_id},

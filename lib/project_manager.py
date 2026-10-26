@@ -1414,12 +1414,13 @@ class ProjectManager:
             project["style"] = resolve_template_prompt(new_id)
         return True
 
-    def load_project(self, project_name: str) -> dict:
+    def load_project(self, project_name: str, *, read_only: bool = False) -> dict:
         """
         加载项目元数据
 
         Args:
             project_name: 项目名称
+            read_only: 仅在内存归一化旧字段，不创建锁文件或持久化迁移。
 
         Returns:
             项目元数据字典
@@ -1428,6 +1429,14 @@ class ProjectManager:
 
         if not project_file.exists():
             raise FileNotFoundError(f"项目元数据文件不存在: {project_file}")
+
+        if read_only:
+            with open(project_file, encoding="utf-8") as stream:
+                project = json.load(stream)
+            self._migrate_legacy_style(project)
+            if "episode_order" in project:
+                project["episodes"] = ordered_episode_entries(project)
+            return project
 
         migrated = False
         with self._project_lock(project_name):

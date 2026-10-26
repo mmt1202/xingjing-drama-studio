@@ -23,6 +23,8 @@ from lib.episode_ledger import (
     ordered_episode_entries,
 )
 from lib.episode_paths import REFERENCE_VIDEO_STEP1_FILENAME, STEP1_FILENAMES, episode_script_relpath
+from lib.i18n import DEFAULT_LOCALE
+from lib.i18n import _ as translate
 from lib.json_io import atomic_write_json
 from lib.path_safety import safe_join
 from lib.project_change_hints import emit_project_change_hint
@@ -164,6 +166,27 @@ def read_episodes(
     }
 
 
+def _preview_episode_title(fragment: str, number: int, locale: str) -> str:
+    meaningful_lines = [
+        " ".join(line.split()) for line in fragment.splitlines() if any(character.isalnum() for character in line)
+    ]
+    if not meaningful_lines:
+        return translate("draft_event_label", locale=locale, episode=number, label_prefix="")
+    first_line = meaningful_lines[0]
+    heading = re.sub(r"^#{1,6}\s+", "", first_line)
+    short_heading = len(heading) <= 48 and not re.search(r"[。！？!?]", heading)
+    explicit_chapter = re.fullmatch(
+        r"(?:第[零〇一二三四五六七八九十百千万两\d]{1,16}[章节回集话幕卷](?:\s+.{1,30}|[：:、.．\-—].{1,30})?"
+        r"|(?:chapter|episode|part|act|scene|book)\s+(?:\d+|[ivxlcdm]+)(?:[\s:：.\-—].{0,30})?"
+        r"|(?:chương|tập|phần|hồi|cảnh)\s+\d+(?:[\s:：.\-—].{0,30})?)",
+        heading,
+        re.IGNORECASE,
+    )
+    if short_heading and (heading != first_line or explicit_chapter is not None):
+        return heading
+    return first_line if len(first_line) <= 36 else first_line[:35].rstrip() + "…"
+
+
 def split_remaining(
     manager: ProjectManager,
     project_id: str,
@@ -172,6 +195,7 @@ def split_remaining(
     revision: str,
     *,
     source_texts: dict[str, str] | None = None,
+    locale: str = DEFAULT_LOCALE,
 ) -> list[dict]:
     """Preview a deterministic paragraph split; never call a paid model or write files."""
     snapshot = read_episodes(manager, project_id, source_texts=source_texts)
@@ -203,10 +227,11 @@ def split_remaining(
     result = []
     for i in range(count):
         begin, end = boundaries[i : i + 2]
-        title = text[begin:end].strip().splitlines()[0][:80]
+        number = snapshot["nextEpisode"] + i
+        title = _preview_episode_title(text[begin:end], number, locale)
         result.append(
             EpisodeEdit(
-                episode=snapshot["nextEpisode"] + i,
+                episode=number,
                 title=title,
                 targetDuration=snapshot["defaultDuration"],
                 sourceRange=SourceRange(source_file=source, start=begin, end=end),

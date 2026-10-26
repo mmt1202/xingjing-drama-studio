@@ -16,12 +16,15 @@ export interface ContentAnalysis { wordCount: number; characterCount: number; sc
 export interface ScriptTextMapping { targetId: string; sourceStart: number; sourceEnd: number }
 export interface ScriptVersion { number: number; sourceContent: string; sourcePreamble?: string; scenes: ScriptScene[]; sourceMappings: ScriptTextMapping[]; scriptMappings?: ScriptTextMapping[]; scriptMappingCoordinateSystem?: "script_version"; sourceMappingCoordinateSystem?: "original_source" | "unmapped"; unmappedParagraphIds?: string[]; validationErrors: Array<{ code?: string; field?: string; path?: string; severity?: "error" | "warning"; message?: string }>; changeSummary: string; analysis: ContentAnalysis }
 export interface DirectorProfile { audience: string | null; pacing: string | null; visualStyle: string | null; cameraLanguage: string | null; productionConstraints: string[] }
-export interface ScriptDocument { id: string; projectId: string; title: string; revision: number; sourceDocument: { filename: string; mediaType: string; content: string }; versions: ScriptVersion[]; aiInputLimitCharacters?: number; lockedVersionNumber: number | null; directorProfile: DirectorProfile }
+export interface DirectorCandidate { id: string; number: number; scriptVersionId: string; scriptContentDigest: string; profile: DirectorProfile; origin: "manual" | "ai"; createdBy: string; createdAt: string }
+export interface DirectorConfirmation { id: string; candidateId: string; candidateNumber: number; scriptVersionId: string; scriptContentDigest: string; profileDigest: string; confirmedBy: string; confirmedAt: string; note: string }
+export interface ScriptDocument { id: string; projectId: string; title: string; revision: number; sourceDocument: { filename: string; mediaType: string; content: string }; versions: ScriptVersion[]; aiInputLimitCharacters?: number; lockedVersionNumber: number | null; directorProfile: DirectorProfile; directorState?: "missing" | "unconfirmed" | "stale" | "confirmed"; directorCandidates?: DirectorCandidate[]; directorConfirmations?: DirectorConfirmation[]; currentDirectorConfirmationId?: string | null }
 export interface ScriptComparison { baselineVersion: number; candidateVersion: number; changedFields: string[] }
+export interface ContentAiReadiness { ready: boolean; status: "ready" | "configuration_unavailable" | "temporarily_unavailable"; checksProviderConnection: false }
 export interface PageResult<T> { items: T[]; nextToken: string | null; total?: number; offset?: number; limit?: number }
 
 export type ProjectAction = "create" | "update" | "updateOverview" | "archive" | "restore" | "advance" | "rollback" | "saveDraft" | "activate";
-export type ScriptAction = "import" | "revise" | "setDirectorProfile" | "freeze" | "compareVersions" | "analyze" | "generateDirector" | "rewrite";
+export type ScriptAction = "import" | "revise" | "setDirectorProfile" | "confirmDirectorProfile" | "freeze" | "compareVersions" | "analyze" | "generateDirector" | "rewrite";
 export type ScriptActionResult = ScriptDocument | ScriptComparison;
 
 export interface CreatorProjectsPort {
@@ -32,6 +35,7 @@ export interface CreatorProjectsPort {
   projectAction(projectId: string, action: ProjectAction, payload?: unknown, version?: number): Promise<ProjectDetail>;
   listScripts(projectId: string, params?: { offset?: number; limit?: number; query?: string; locked?: boolean }): Promise<PageResult<ScriptDocument>>;
   getScript?(projectId: string, scriptId: string, signal?: AbortSignal): Promise<ScriptDocument>;
+  getContentAiReadiness?(projectId: string, signal?: AbortSignal): Promise<ContentAiReadiness>;
   importScriptFile(projectId: string, title: string, file: File): Promise<ScriptDocument>;
   scriptAction(projectId: string, action: ScriptAction, payload?: unknown, revision?: number, targetId?: string): Promise<ScriptActionResult>;
 }

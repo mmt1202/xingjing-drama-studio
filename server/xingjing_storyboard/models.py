@@ -281,6 +281,56 @@ class StoryboardVersion:
 
 
 @dataclass(frozen=True, slots=True)
+class StoryboardSourceContext:
+    script_version_id: str
+    script_content_digest: str
+    asset_snapshot_id: str
+    director_confirmation_id: str
+    director_candidate_id: str
+    director_profile_digest: str
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.script_version_id,
+            self.asset_snapshot_id,
+            self.director_confirmation_id,
+            self.director_candidate_id,
+        ):
+            _require_text(value, "STORYBOARD_SOURCE_CONTEXT_INVALID")
+        if any(
+            len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
+            for value in (self.script_content_digest, self.director_profile_digest)
+        ):
+            raise ContractViolation("STORYBOARD_SOURCE_CONTEXT_INVALID")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "script_version_id": self.script_version_id,
+            "script_content_digest": self.script_content_digest,
+            "asset_snapshot_id": self.asset_snapshot_id,
+            "director_confirmation_id": self.director_confirmation_id,
+            "director_candidate_id": self.director_candidate_id,
+            "director_profile_digest": self.director_profile_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        return cls(
+            *(
+                _string(value, name)
+                for name in (
+                    "script_version_id",
+                    "script_content_digest",
+                    "asset_snapshot_id",
+                    "director_confirmation_id",
+                    "director_candidate_id",
+                    "director_profile_digest",
+                )
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class FrozenStoryboard:
     snapshot_id: str
     storyboard_id: str
@@ -292,6 +342,7 @@ class FrozenStoryboard:
     shots: tuple[Shot, ...]
     frozen_at: datetime
     digest: str
+    source_context: StoryboardSourceContext | None = None
 
     def __post_init__(self) -> None:
         for value, code in (
@@ -328,6 +379,9 @@ class FrozenStoryboard:
             shots=tuple(Shot.from_dict(item) for item in _mapping_list(value, "shots")),
             frozen_at=_datetime(value, "frozen_at"),
             digest=_string(value, "digest"),
+            source_context=StoryboardSourceContext.from_dict(_mapping(value["source_context"]))
+            if value.get("source_context") is not None
+            else None,
         )
 
 
@@ -345,6 +399,7 @@ class Storyboard:
     created_at: datetime
     updated_at: datetime
     frozen_snapshot: FrozenStoryboard | None = None
+    source_context: StoryboardSourceContext | None = None
 
     def __post_init__(self) -> None:
         for value, code in (
@@ -372,6 +427,8 @@ class Storyboard:
         if self.status is StoryboardStatus.FROZEN:
             if self.frozen_snapshot is None or not self.frozen_snapshot.verify_digest():
                 raise ContractViolation("INVALID_FROZEN_SNAPSHOT")
+            if self.source_context != self.frozen_snapshot.source_context:
+                raise ContractViolation("STORYBOARD_SOURCE_CONTEXT_INVALID")
         elif self.frozen_snapshot is not None:
             raise ContractViolation("DRAFT_HAS_FROZEN_SNAPSHOT")
 
@@ -390,6 +447,7 @@ class Storyboard:
             "created_at": _datetime_text(self.created_at),
             "updated_at": _datetime_text(self.updated_at),
             "frozen_snapshot": self.frozen_snapshot.to_dict() if self.frozen_snapshot else None,
+            **({"source_context": self.source_context.to_dict()} if self.source_context is not None else {}),
         }
 
     @classmethod
@@ -411,6 +469,9 @@ class Storyboard:
             created_at=_datetime(value, "created_at"),
             updated_at=_datetime(value, "updated_at"),
             frozen_snapshot=snapshot,
+            source_context=StoryboardSourceContext.from_dict(_mapping(value["source_context"]))
+            if value.get("source_context") is not None
+            else None,
         )
 
 
@@ -434,6 +495,7 @@ def _frozen_payload(snapshot: FrozenStoryboard) -> dict[str, object]:
         "source_version": snapshot.source_version,
         "shots": [shot.to_dict() for shot in snapshot.shots],
         "frozen_at": _datetime_text(snapshot.frozen_at),
+        **({"source_context": snapshot.source_context.to_dict()} if snapshot.source_context is not None else {}),
     }
 
 

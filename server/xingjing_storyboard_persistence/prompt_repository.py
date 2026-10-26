@@ -70,6 +70,7 @@ class SmartStoryboardRequestRow(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False)
     result_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    input_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)
     failure_reason: Mapped[str | None] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -86,6 +87,17 @@ class SqlAlchemySmartStoryboardRequestRepository:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
+    def input_for(self, scope: StoryboardScope, idempotency_key: str) -> dict[str, object] | None:
+        with self._session_factory() as session:
+            row = session.get(
+                SmartStoryboardRequestRow, (scope.tenant_id, scope.workspace_id, scope.project_id, idempotency_key)
+            )
+            if row is None:
+                return None
+            if row.input_payload is None:
+                raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISSING")
+            return dict(row.input_payload)
+
     def claim(
         self,
         scope: StoryboardScope,
@@ -94,6 +106,7 @@ class SqlAlchemySmartStoryboardRequestRepository:
         request_fingerprint: str,
         now: datetime,
         stale_after: timedelta = timedelta(minutes=5),
+        input_payload: dict[str, object] | None = None,
     ) -> SmartStoryboardClaim:
         if not idempotency_key.strip():
             raise ContractViolation("IDEMPOTENCY_KEY_REQUIRED")
@@ -117,6 +130,7 @@ class SqlAlchemySmartStoryboardRequestRepository:
                             status="running",
                             attempts=1,
                             result_payload=None,
+                            input_payload=input_payload,
                             failure_reason=None,
                             created_at=now,
                             updated_at=now,
@@ -195,8 +209,7 @@ class SqlAlchemySmartStoryboardRequestRepository:
             raise IdempotencyConflict("IDEMPOTENCY_KEY_REUSED")
         if row.status == "succeeded":
             return SmartStoryboardClaim(False, row.status, row.result_payload)
-        updated_at = now_utc(row.updated_at)
-        if row.status == "running" and updated_at + stale_after > now:
+        if row.status == "running":
             return SmartStoryboardClaim(False, row.status, None)
         row.status = "running"
         row.attempts += 1
@@ -241,15 +254,17 @@ class SqlAlchemyPromptTemplateRepository:
             predicates.append(PromptTemplateRow.archived_at.is_(None))
         with self._session_factory() as session:
             rows = session.scalars(
-                select(PromptTemplateRow).where(*predicates).order_by(
-                    PromptTemplateRow.updated_at.desc(), PromptTemplateRow.prompt_id.desc()
-                )
+                select(PromptTemplateRow)
+                .where(*predicates)
+                .order_by(PromptTemplateRow.updated_at.desc(), PromptTemplateRow.prompt_id.desc())
             ).all()
             return tuple(self._model(row) for row in rows)
 
     def get(self, scope: StoryboardScope, prompt_id: str) -> PromptTemplate | None:
         with self._session_factory() as session:
-            row = session.scalar(select(PromptTemplateRow).where(*self._scope(scope), PromptTemplateRow.prompt_id == prompt_id))
+            row = session.scalar(
+                select(PromptTemplateRow).where(*self._scope(scope), PromptTemplateRow.prompt_id == prompt_id)
+            )
             return None if row is None else self._model(row)
 
     def create(
@@ -267,18 +282,37 @@ class SqlAlchemyPromptTemplateRepository:
     ) -> tuple[PromptTemplate, bool]:
         now = audit.occurred_at
         prompt = PromptTemplate(
-            prompt_id=f"prompt-{uuid4()}", tenant_id=scope.tenant_id, workspace_id=scope.workspace_id,
-            project_id=scope.project_id, name=name, media_type=media_type, template=template,
-            negative_prompt=negative_prompt, variables=variables, model_adapter_versions=model_adapter_versions,
-            version=1, created_at=now, updated_at=now,
+            prompt_id=f"prompt-{uuid4()}",
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            name=name,
+            media_type=media_type,
+            template=template,
+            negative_prompt=negative_prompt,
+            variables=variables,
+            model_adapter_versions=model_adapter_versions,
+            version=1,
+            created_at=now,
+            updated_at=now,
         )
-        fingerprint = self._fingerprint({
-            "name": name, "media_type": media_type, "template": template, "negative_prompt": negative_prompt,
-            "variables": variables, "model_adapter_versions": model_adapter_versions,
-        })
+        fingerprint = self._fingerprint(
+            {
+                "name": name,
+                "media_type": media_type,
+                "template": template,
+                "negative_prompt": negative_prompt,
+                "variables": variables,
+                "model_adapter_versions": model_adapter_versions,
+            }
+        )
         return self._write(
-            scope, prompt, expected_version=None, idempotency_key=idempotency_key,
-            fingerprint=fingerprint, audit=audit,
+            scope,
+            prompt,
+            expected_version=None,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+            audit=audit,
         )
 
     def update(
@@ -292,16 +326,26 @@ class SqlAlchemyPromptTemplateRepository:
     ) -> tuple[PromptTemplate, bool]:
         if prompt.version != expected_version + 1:
             raise ContractViolation("INVALID_PROMPT_VERSION_TRANSITION")
-        fingerprint = self._fingerprint({
-            "prompt_id": prompt.prompt_id, "expected_version": expected_version, "name": prompt.name,
-            "media_type": prompt.media_type, "template": prompt.template,
-            "negative_prompt": prompt.negative_prompt, "variables": prompt.variables,
-            "model_adapter_versions": prompt.model_adapter_versions,
-            "archived": prompt.archived_at is not None,
-        })
+        fingerprint = self._fingerprint(
+            {
+                "prompt_id": prompt.prompt_id,
+                "expected_version": expected_version,
+                "name": prompt.name,
+                "media_type": prompt.media_type,
+                "template": prompt.template,
+                "negative_prompt": prompt.negative_prompt,
+                "variables": prompt.variables,
+                "model_adapter_versions": prompt.model_adapter_versions,
+                "archived": prompt.archived_at is not None,
+            }
+        )
         return self._write(
-            scope, prompt, expected_version=expected_version, idempotency_key=idempotency_key,
-            fingerprint=fingerprint, audit=audit,
+            scope,
+            prompt,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+            audit=audit,
         )
 
     def _write(
@@ -320,11 +364,15 @@ class SqlAlchemyPromptTemplateRepository:
         operation = "prompt.create" if expected_version is None else "prompt.update"
         try:
             with self._session_factory() as session, session.begin():
-                receipt = session.scalar(select(IdempotencyRow).where(
-                    IdempotencyRow.tenant_id == scope.tenant_id, IdempotencyRow.workspace_id == scope.workspace_id,
-                    IdempotencyRow.project_id == scope.project_id, IdempotencyRow.operation_kind == operation,
-                    IdempotencyRow.idempotency_key == idempotency_key,
-                ))
+                receipt = session.scalar(
+                    select(IdempotencyRow).where(
+                        IdempotencyRow.tenant_id == scope.tenant_id,
+                        IdempotencyRow.workspace_id == scope.workspace_id,
+                        IdempotencyRow.project_id == scope.project_id,
+                        IdempotencyRow.operation_kind == operation,
+                        IdempotencyRow.idempotency_key == idempotency_key,
+                    )
+                )
                 if receipt is not None:
                     if receipt.fingerprint != fingerprint:
                         raise IdempotencyConflict("IDEMPOTENCY_KEY_REUSED")
@@ -335,28 +383,55 @@ class SqlAlchemyPromptTemplateRepository:
                 if expected_version is None:
                     session.add(self._row(prompt))
                 else:
-                    result = session.execute(update(PromptTemplateRow).where(
-                        *self._scope(scope), PromptTemplateRow.prompt_id == prompt.prompt_id,
-                        PromptTemplateRow.version == expected_version,
-                    ).values(
-                        name=prompt.name, media_type=prompt.media_type, template=prompt.template,
-                        negative_prompt=prompt.negative_prompt, variables=list(prompt.variables),
-                        model_adapter_versions=list(prompt.model_adapter_versions), version=prompt.version,
-                        updated_at=prompt.updated_at, archived_at=prompt.archived_at,
-                    ))
+                    result = session.execute(
+                        update(PromptTemplateRow)
+                        .where(
+                            *self._scope(scope),
+                            PromptTemplateRow.prompt_id == prompt.prompt_id,
+                            PromptTemplateRow.version == expected_version,
+                        )
+                        .values(
+                            name=prompt.name,
+                            media_type=prompt.media_type,
+                            template=prompt.template,
+                            negative_prompt=prompt.negative_prompt,
+                            variables=list(prompt.variables),
+                            model_adapter_versions=list(prompt.model_adapter_versions),
+                            version=prompt.version,
+                            updated_at=prompt.updated_at,
+                            archived_at=prompt.archived_at,
+                        )
+                    )
                     if result.rowcount != 1:  # pyright: ignore[reportAttributeAccessIssue]
                         raise VersionConflict("VERSION_CONFLICT")
-                session.add(IdempotencyRow(
-                    tenant_id=scope.tenant_id, workspace_id=scope.workspace_id, project_id=scope.project_id,
-                    operation_kind=operation, idempotency_key=idempotency_key, fingerprint=fingerprint,
-                    result_payload={"id": prompt.prompt_id}, created_at=now_utc(audit.occurred_at),
-                ))
-                session.add(AuditRow(
-                    tenant_id=audit.tenant_id, workspace_id=audit.workspace_id, project_id=audit.project_id,
-                    request_id=audit.request_id, actor_id=audit.actor_id, action=audit.action,
-                    object_id=prompt.prompt_id, result="succeeded", occurred_at=audit.occurred_at,
-                    before_payload=audit.before, after_payload=payload, error_code=None,
-                ))
+                session.add(
+                    IdempotencyRow(
+                        tenant_id=scope.tenant_id,
+                        workspace_id=scope.workspace_id,
+                        project_id=scope.project_id,
+                        operation_kind=operation,
+                        idempotency_key=idempotency_key,
+                        fingerprint=fingerprint,
+                        result_payload={"id": prompt.prompt_id},
+                        created_at=now_utc(audit.occurred_at),
+                    )
+                )
+                session.add(
+                    AuditRow(
+                        tenant_id=audit.tenant_id,
+                        workspace_id=audit.workspace_id,
+                        project_id=audit.project_id,
+                        request_id=audit.request_id,
+                        actor_id=audit.actor_id,
+                        action=audit.action,
+                        object_id=prompt.prompt_id,
+                        result="succeeded",
+                        occurred_at=audit.occurred_at,
+                        before_payload=audit.before,
+                        after_payload=payload,
+                        error_code=None,
+                    )
+                )
         except IntegrityError as error:
             replay = self._replay(scope, operation, idempotency_key, fingerprint)
             if replay is not None:
@@ -368,13 +443,15 @@ class SqlAlchemyPromptTemplateRepository:
         self, scope: StoryboardScope, operation: str, idempotency_key: str, fingerprint: str
     ) -> PromptTemplate | None:
         with self._session_factory() as session:
-            receipt = session.scalar(select(IdempotencyRow).where(
-                IdempotencyRow.tenant_id == scope.tenant_id,
-                IdempotencyRow.workspace_id == scope.workspace_id,
-                IdempotencyRow.project_id == scope.project_id,
-                IdempotencyRow.operation_kind == operation,
-                IdempotencyRow.idempotency_key == idempotency_key,
-            ))
+            receipt = session.scalar(
+                select(IdempotencyRow).where(
+                    IdempotencyRow.tenant_id == scope.tenant_id,
+                    IdempotencyRow.workspace_id == scope.workspace_id,
+                    IdempotencyRow.project_id == scope.project_id,
+                    IdempotencyRow.operation_kind == operation,
+                    IdempotencyRow.idempotency_key == idempotency_key,
+                )
+            )
             if receipt is None:
                 return None
             if receipt.fingerprint != fingerprint:
@@ -382,9 +459,12 @@ class SqlAlchemyPromptTemplateRepository:
             prompt_id = receipt.result_payload.get("id")
             if not isinstance(prompt_id, str):
                 raise ContractViolation("PROMPT_REPLAY_STATE_INVALID")
-            row = session.scalar(select(PromptTemplateRow).where(
-                *self._scope(scope), PromptTemplateRow.prompt_id == prompt_id,
-            ))
+            row = session.scalar(
+                select(PromptTemplateRow).where(
+                    *self._scope(scope),
+                    PromptTemplateRow.prompt_id == prompt_id,
+                )
+            )
             if row is None:
                 raise ContractViolation("PROMPT_REPLAY_STATE_MISSING")
             return self._model(row)
@@ -404,21 +484,38 @@ class SqlAlchemyPromptTemplateRepository:
     @staticmethod
     def _row(value: PromptTemplate) -> PromptTemplateRow:
         return PromptTemplateRow(
-            tenant_id=value.tenant_id, workspace_id=value.workspace_id, project_id=value.project_id,
-            prompt_id=value.prompt_id, name=value.name, media_type=value.media_type, template=value.template,
-            negative_prompt=value.negative_prompt, variables=list(value.variables),
-            model_adapter_versions=list(value.model_adapter_versions), version=value.version,
-            created_at=value.created_at, updated_at=value.updated_at, archived_at=value.archived_at,
+            tenant_id=value.tenant_id,
+            workspace_id=value.workspace_id,
+            project_id=value.project_id,
+            prompt_id=value.prompt_id,
+            name=value.name,
+            media_type=value.media_type,
+            template=value.template,
+            negative_prompt=value.negative_prompt,
+            variables=list(value.variables),
+            model_adapter_versions=list(value.model_adapter_versions),
+            version=value.version,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+            archived_at=value.archived_at,
         )
 
     @staticmethod
     def _model(row: PromptTemplateRow) -> PromptTemplate:
         return PromptTemplate(
-            prompt_id=row.prompt_id, tenant_id=row.tenant_id, workspace_id=row.workspace_id,
-            project_id=row.project_id, name=row.name, media_type=row.media_type, template=row.template,
-            negative_prompt=row.negative_prompt, variables=tuple(row.variables),
-            model_adapter_versions=tuple(row.model_adapter_versions), version=row.version,
-            created_at=now_utc(row.created_at), updated_at=now_utc(row.updated_at),
+            prompt_id=row.prompt_id,
+            tenant_id=row.tenant_id,
+            workspace_id=row.workspace_id,
+            project_id=row.project_id,
+            name=row.name,
+            media_type=row.media_type,
+            template=row.template,
+            negative_prompt=row.negative_prompt,
+            variables=tuple(row.variables),
+            model_adapter_versions=tuple(row.model_adapter_versions),
+            version=row.version,
+            created_at=now_utc(row.created_at),
+            updated_at=now_utc(row.updated_at),
             archived_at=now_utc(row.archived_at) if row.archived_at else None,
         )
 

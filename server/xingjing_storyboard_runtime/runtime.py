@@ -4,9 +4,10 @@ import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+from typing import cast
 from uuid import uuid4
 
 from fastapi import Request
@@ -19,8 +20,18 @@ from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequ
 from lib.text_generator import TextGenerator
 from lib.text_utils import strip_json_code_fences
 from server.xingjing_assets_persistence import AssetScope, SqlAlchemyAssetRepository
+from server.xingjing_content.models import (
+    director_confirmation_from_dict,
+    director_profile_digest,
+    director_version_from_dict,
+)
 from server.xingjing_content.parser import parse_script
-from server.xingjing_content_persistence.repository import ScriptRow, ScriptVersionRow
+from server.xingjing_content_persistence.repository import (
+    DirectorConfirmationRow,
+    DirectorVersionRow,
+    ScriptRow,
+    ScriptVersionRow,
+)
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
     TrustedWorkspaceContext,
@@ -29,7 +40,7 @@ from server.xingjing_identity_context import (
 from server.xingjing_platform_persistence.persistence import ProjectRow
 from server.xingjing_storyboard.errors import ContractViolation
 from server.xingjing_storyboard.models import AssetKind as StoryboardAssetKind
-from server.xingjing_storyboard.models import AssetReference
+from server.xingjing_storyboard.models import AssetReference, StoryboardSourceContext
 from server.xingjing_storyboard.ports import (
     AssetReferenceFailure,
     AssetReferenceValidator,
@@ -37,7 +48,7 @@ from server.xingjing_storyboard.ports import (
     StoryboardRepository,
 )
 from server.xingjing_storyboard.quality import QualityPolicy
-from server.xingjing_storyboard.service import AccessContext, ShotDraft, StoryboardService
+from server.xingjing_storyboard.service import AccessContext, ShotDraft, SmartDraftResult, StoryboardService
 from server.xingjing_storyboard_persistence import (
     SqlAlchemyPromptTemplateRepository,
     SqlAlchemySmartStoryboardRequestRepository,
@@ -187,7 +198,7 @@ class StoryboardRuntime:
         script_version_id: str,
         asset_snapshot_id: str,
         idempotency_key: str,
-    ) -> tuple[ShotDraft, ...]:
+    ) -> SmartDraftResult:
         """Use the configured text model to derive validated drafts from frozen inputs."""
         if "@" not in script_version_id:
             raise ContractViolation("FROZEN_SCRIPT_VERSION_ID_INVALID")
@@ -196,6 +207,20 @@ class StoryboardRuntime:
             raise ContractViolation("FROZEN_SCRIPT_VERSION_ID_INVALID")
         if not asset_snapshot_id.strip():
             raise ContractViolation("ASSET_SNAPSHOT_ID_REQUIRED")
+        if not idempotency_key.strip():
+            raise ContractViolation("IDEMPOTENCY_KEY_REQUIRED")
+        previous_input = self.smart_storyboard_requests.input_for(context.scope, idempotency_key)
+        pinned_source = None
+        if previous_input is not None:
+            raw_context = previous_input.get("sourceContext")
+            if not isinstance(raw_context, dict):
+                raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISSING")
+            pinned_source = StoryboardSourceContext.from_dict(cast(dict[str, object], raw_context))
+            if (
+                pinned_source.script_version_id != script_version_id
+                or pinned_source.asset_snapshot_id != asset_snapshot_id
+            ):
+                raise ContractViolation("IDEMPOTENCY_KEY_REUSED")
         version_number = int(number_text)
         try:
             with self._session_factory() as session:
@@ -204,10 +229,11 @@ class StoryboardRuntime:
                         ScriptRow.workspace_id == context.workspace_id,
                         ScriptRow.project_id == context.project_id,
                         ScriptRow.script_id == script_id,
-                        ScriptRow.locked_version_number == version_number,
                     )
                 )
                 if script is None:
+                    raise ContractViolation("FROZEN_SCRIPT_VERSION_NOT_FOUND")
+                if previous_input is None and script.locked_version_number != version_number:
                     raise ContractViolation("FROZEN_SCRIPT_VERSION_NOT_FOUND")
                 project = session.scalar(
                     select(ProjectRow).where(
@@ -238,7 +264,76 @@ class StoryboardRuntime:
                         "FROZEN_SCRIPT_INVALID",
                         details={"issues": [item.code for item in parsed.validation_errors]},
                     )
-                director_profile = script.director_profile
+                candidates = tuple(
+                    director_version_from_dict(row.payload)
+                    for row in session.scalars(
+                        select(DirectorVersionRow)
+                        .where(
+                            DirectorVersionRow.workspace_id == context.workspace_id,
+                            DirectorVersionRow.script_id == script_id,
+                        )
+                        .order_by(DirectorVersionRow.number)
+                    )
+                )
+                confirmations = tuple(
+                    director_confirmation_from_dict(row.payload)
+                    for row in session.scalars(
+                        select(DirectorConfirmationRow)
+                        .where(
+                            DirectorConfirmationRow.workspace_id == context.workspace_id,
+                            DirectorConfirmationRow.script_id == script_id,
+                        )
+                        .order_by(DirectorConfirmationRow.sequence)
+                    )
+                )
+                candidate = (
+                    next(
+                        (
+                            item
+                            for item in candidates
+                            if pinned_source and item.id == pinned_source.director_candidate_id
+                        ),
+                        None,
+                    )
+                    if pinned_source
+                    else candidates[-1]
+                    if candidates
+                    else None
+                )
+                confirmation = next(
+                    (
+                        item
+                        for item in reversed(confirmations)
+                        if candidate
+                        and item.candidate_id == candidate.id
+                        and (pinned_source is None or item.id == pinned_source.director_confirmation_id)
+                    ),
+                    None,
+                )
+                source_digest = sha256(version.source_content.encode("utf-8")).hexdigest()
+                if (
+                    candidate is None
+                    or confirmation is None
+                    or candidate.script_version_id != script_version_id
+                    or candidate.script_content_digest != source_digest
+                    or confirmation.script_version_id != script_version_id
+                    or confirmation.script_content_digest != source_digest
+                    or confirmation.candidate_number != candidate.number
+                    or confirmation.profile_digest != director_profile_digest(candidate.profile)
+                ):
+                    raise ContractViolation("DIRECTOR_CONFIRMATION_REQUIRED")
+                source_context = StoryboardSourceContext(
+                    script_version_id,
+                    source_digest,
+                    asset_snapshot_id,
+                    confirmation.id,
+                    candidate.id,
+                    confirmation.profile_digest,
+                )
+                if pinned_source is not None and source_context != pinned_source:
+                    raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH")
+                director_profile = asdict(candidate.profile)
+                director_profile["production_constraints"] = list(candidate.profile.production_constraints)
         except SQLAlchemyError as error:
             raise ContractViolation("SMART_STORYBOARD_SOURCE_UNAVAILABLE") from error
 
@@ -296,12 +391,37 @@ class StoryboardRuntime:
                 for item in snapshot_assets
             ],
         }
+        if previous_input is not None:
+            stored_prompt = previous_input.get("promptInput")
+            if not isinstance(stored_prompt, dict) or stored_prompt.get("directorProfile") != director_profile:
+                raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH")
+            prompt_input = cast(dict[str, object], stored_prompt)
+            stored_assets = prompt_input.get("assets")
+            if not isinstance(stored_assets, list):
+                raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH")
+            references = {}
+            by_id = {item.asset_id: item for item in snapshot_assets}
+            for raw_asset in stored_assets:
+                if not isinstance(raw_asset, dict):
+                    raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH")
+                asset = by_id.get(str(raw_asset.get("id")))
+                if (
+                    asset is None
+                    or not any(item.version_id == raw_asset.get("versionId") for item in asset.versions)
+                    or asset.kind.value != raw_asset.get("kind")
+                ):
+                    raise ContractViolation("SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH")
+                references[asset.asset_id] = AssetReference(
+                    asset.asset_id, str(raw_asset["versionId"]), StoryboardAssetKind(asset.kind.value)
+                )
+        input_payload = {"sourceContext": source_context.to_dict(), "promptInput": prompt_input}
         fingerprint = sha256(
             json.dumps(
                 {
                     "scriptVersionId": script_version_id,
                     "assetSnapshotId": asset_snapshot_id,
                     "input": prompt_input,
+                    "sourceContext": source_context.to_dict(),
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -313,6 +433,7 @@ class StoryboardRuntime:
             idempotency_key=idempotency_key,
             request_fingerprint=fingerprint,
             now=datetime.now(UTC),
+            input_payload=input_payload,
         )
         if claim.status == "succeeded":
             if claim.result_payload is None:
@@ -391,7 +512,7 @@ class StoryboardRuntime:
                 result_payload=stored_result,
                 now=datetime.now(UTC),
             )
-        return drafts
+        return SmartDraftResult(drafts, source_context)
 
     def close(self) -> None:
         if self._close is not None:

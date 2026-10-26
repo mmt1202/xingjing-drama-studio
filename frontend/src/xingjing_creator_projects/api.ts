@@ -1,4 +1,4 @@
-import type { CreatorProjectsPort, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, SessionContext } from "./types";
+import type { CreatorProjectsPort, ContentAiReadiness, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, SessionContext } from "./types";
 import i18n from "@/i18n";
 import { createAuthenticatedFetcher } from "@/utils/auth";
 
@@ -83,6 +83,7 @@ export function createCreatorProjectsApi({ fetcher: providedFetcher, workspaceId
     },
     getProject: (id) => request<ProjectDetail>(`/projects/${encodeURIComponent(id)}`).then((r) => r.value),
     getProjectSetupOptions: () => request<ProjectSetupOptions>("/project-setup/options").then((r) => r.value),
+    getContentAiReadiness: (id, signal) => request<ContentAiReadiness>(`/projects/${encodeURIComponent(id)}/content-ai-readiness`, { signal }).then((r) => r.value),
     projectAction: (id, name: ProjectAction, payload, version) => action(`/projects/${encodeURIComponent(id)}/actions`, name, payload, version),
     listScripts: (id, params = {}) => {
       const offset = params.offset ?? 0;

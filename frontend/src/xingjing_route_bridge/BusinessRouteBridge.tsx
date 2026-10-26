@@ -267,6 +267,7 @@ function ProjectBusinessContent({
     api: creatorApi,
     projectId,
     selectedScriptId: complianceQuery.get("scriptId") ?? undefined,
+    selectedDirectorCandidateId: complianceQuery.get("directorCandidateId") ?? undefined,
     onNavigate: (target: string) => {
       if (projectFlow) projectFlow.go(target);
       else go(target);

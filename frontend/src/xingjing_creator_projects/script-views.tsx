@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CreatorApiError } from "./api";
 import { useScriptTranslation } from "./script-i18n";
+import { AiReadinessNotice, ManualScriptFormat } from "./ScriptExperience";
 import {
   AiLimitNotice, NextStep, SavedNotice, ScriptError, ScriptPageFrame, TextPreview, ValidationSummary,
   characterCount, completeScript, contentOf, currentVersion, scriptButton, scriptField, scriptPanel, scriptPrimary,
@@ -8,11 +9,11 @@ import {
 } from "./script-workflow";
 import type { ScriptComparison, ScriptDocument, ScriptTextMapping } from "./types";
 
-export function MutationFeedback({ mutation, reload }: { mutation: ReturnType<typeof useScriptMutation>; reload: () => void }) {
+export function MutationFeedback({ mutation, reload, allowRetry = true }: { mutation: ReturnType<typeof useScriptMutation>; reload: () => void; allowRetry?: boolean }) {
   const { t } = useScriptTranslation();
   const [confirm, setConfirm] = useState(false);
   const conflict = mutation.error?.reason instanceof CreatorApiError && mutation.error.reason.code === "VERSION_CONFLICT";
-  return <>{mutation.error ? <ScriptError error={mutation.error.reason} retry={conflict || mutation.pending ? undefined : () => void mutation.retry()} reload={mutation.pending ? undefined : reload} /> : null}{mutation.uncertain && !mutation.pending ? <div className="mt-3">{confirm ? <><p className="text-xs leading-6 text-amber-200">{t("uncertainDiscard")}</p><div className="mt-3 flex gap-2"><button type="button" className={scriptButton} onClick={() => { setConfirm(false); mutation.clear(); }}>{t("acknowledgeResult")}</button><button type="button" className={scriptButton} onClick={() => setConfirm(false)}>{t("keep")}</button></div></> : <button type="button" className={scriptButton} onClick={() => setConfirm(true)}>{t("reviewRecovery")}</button>}</div> : null}{mutation.saved && mutation.saved !== "compare" ? <SavedNotice /> : null}</>;
+  return <>{mutation.error ? <ScriptError error={mutation.error.reason} retry={conflict || mutation.pending || !allowRetry ? undefined : () => void mutation.retry()} reload={mutation.pending ? undefined : reload} /> : null}{mutation.uncertain && !mutation.pending ? <div className="mt-3">{confirm ? <><p className="text-xs leading-6 text-amber-200">{t("uncertainDiscard")}</p><div className="mt-3 flex gap-2"><button type="button" className={scriptButton} onClick={() => { setConfirm(false); mutation.clear(); }}>{t("acknowledgeResult")}</button><button type="button" className={scriptButton} onClick={() => setConfirm(false)}>{t("keep")}</button></div></> : <button type="button" className={scriptButton} onClick={() => setConfirm(true)}>{t("reviewRecovery")}</button>}</div> : null}{mutation.saved && mutation.saved !== "compare" ? <SavedNotice /> : null}</>;
 }
 
 export function ScriptImportPage(props: ScriptPageProps) {
@@ -103,11 +104,14 @@ export function ScriptCheckupPage(props: ScriptPageProps) {
 }
 
 export function ScriptLabPage(props: ScriptPageProps) {
-  const { t } = useScriptTranslation(), mutation = useScriptMutation();
-  return <ScriptPageFrame {...props} page="script-lab" blocked={Boolean(mutation.pending || mutation.uncertain)}>{(frame) => {
-    const script = frame.script!, tooLarge = characterCount(contentOf(script)) > aiCharacterLimit(script);
-    return <section className={scriptPanel}><p className="text-sm leading-7 text-slate-400">{t("labHelp")}</p>{script.lockedVersionNumber ? <p className="mt-4 text-sm text-amber-200">{t("frozenEdit")}</p> : null}<AiLimitNotice script={script} /><button type="button" className={scriptPrimary + " mt-5"} disabled={!frame.canManage || Boolean(script.lockedVersionNumber) || Boolean(mutation.pending) || mutation.uncertain || tooLarge} onClick={() => void mutation.run(script.id, () => props.api.scriptAction(props.projectId, "analyze", {}, script.revision, script.id), (value) => { if (!completeScript(value)) throw new Error(t("invalidResponse")); frame.accept(value); })}>{t(mutation.pending ? "analyzing" : "analyze")}</button><div className="mt-4"><MutationFeedback mutation={mutation} reload={frame.reload} /></div><ValidationSummary script={script} /><AnalysisSummary script={script} /><VersionText script={script} /><CheckNext frame={frame} currentStep="script-lab" /></section>;
-  }}</ScriptPageFrame>;
+  const [blocked, setBlocked] = useState(false);
+  return <ScriptPageFrame {...props} page="script-lab" blocked={blocked}>{(frame) => <ScriptLabActions key={frame.script!.id} {...props} frame={frame} onBlocked={setBlocked} />}</ScriptPageFrame>;
+}
+function ScriptLabActions({ api, projectId, frame, onBlocked }: ScriptPageProps & { frame: ScriptFrameContext; onBlocked: (value: boolean) => void }) {
+  const { t } = useScriptTranslation(), mutation = useScriptMutation(), script = frame.script!;
+  const tooLarge = characterCount(contentOf(script)) > aiCharacterLimit(script);
+  useEffect(() => { onBlocked(Boolean(mutation.pending || mutation.uncertain)); return () => onBlocked(false); }, [mutation.pending, mutation.uncertain, onBlocked]);
+  return <section className={scriptPanel}><p className="text-sm leading-7 text-slate-400">{t("labHelp")}</p>{script.lockedVersionNumber ? <p className="mt-4 text-sm text-amber-200">{t("frozenEdit")}</p> : null}<AiReadinessNotice frame={frame} /><AiLimitNotice script={script} /><button type="button" className={scriptPrimary + " mt-5"} disabled={!frame.canManage || !frame.aiReady || Boolean(script.lockedVersionNumber) || Boolean(mutation.pending) || mutation.uncertain || tooLarge} onClick={() => void mutation.run(script.id, () => api.scriptAction(projectId, "analyze", {}, script.revision, script.id), (value) => { if (!completeScript(value) || value.id !== script.id) throw new Error(t("invalidResponse")); frame.accept(value); })}>{t(mutation.pending ? "analyzing" : "analyze")}</button><div className="mt-4"><MutationFeedback mutation={mutation} reload={frame.reload} allowRetry={frame.aiReady || mutation.uncertain} /></div><ValidationSummary script={script} /><ManualScriptFormat /><AnalysisSummary script={script} /><VersionText script={script} /><CheckNext frame={frame} currentStep="script-lab" /></section>;
 }
 
 export function DirectorAssetsPage(props: ScriptPageProps) {

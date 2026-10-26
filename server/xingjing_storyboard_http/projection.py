@@ -67,6 +67,20 @@ def project_shot(storyboard: Storyboard, shot: Shot) -> dict[str, object]:
         "id": shot.shot_id,
         "storyboardId": storyboard.storyboard_id,
         "episodeId": storyboard.episode_id,
+        **(
+            {
+                "sourceContext": {
+                    "scriptVersionId": storyboard.source_context.script_version_id,
+                    "scriptContentDigest": storyboard.source_context.script_content_digest,
+                    "assetSnapshotId": storyboard.source_context.asset_snapshot_id,
+                    "directorConfirmationId": storyboard.source_context.director_confirmation_id,
+                    "directorCandidateId": storyboard.source_context.director_candidate_id,
+                    "directorProfileDigest": storyboard.source_context.director_profile_digest,
+                }
+            }
+            if storyboard.source_context is not None
+            else {}
+        ),
         "shotNo": shot.shot_number,
         "sequenceNo": shot.position,
         "version": storyboard.version,

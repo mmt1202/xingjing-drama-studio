@@ -13,6 +13,7 @@ from sqlalchemy import select, update
 from lib.config.resolver import ConfigResolver
 from lib.db import async_session_factory
 from lib.episode_editor import EpisodeEdit, EpisodeEditError, read_episodes, save_episodes, split_remaining
+from lib.i18n import get_locale
 from lib.project_manager import get_project_manager
 from server.services.cost_estimation import CostEstimationService
 from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
@@ -140,6 +141,7 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             body.get("count", 0),
             revision,
             source_texts=collection.texts,
+            locale=get_locale(request),
         )
         return {"data": data, "meta": {"requestId": context.request_id}}
 
