@@ -6,6 +6,7 @@ it at a provider gateway that accepts jobs and returns an immutable job id.
 
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,6 +14,9 @@ import httpx
 
 from server.xingjing_generation.contracts import GenerationRequest
 from server.xingjing_generation.ports import ProviderSubmission
+
+from .artifact_storage import LocalGenerationArtifactStore
+from .input_assets import read_verified_input, validate_input_media
 
 
 class GenerationProviderGatewayError(RuntimeError):
@@ -28,6 +32,8 @@ class HttpGenerationProviderGateway:
         submit_url: str,
         cancel_url_template: str,
         bearer_token: str,
+        artifact_store: LocalGenerationArtifactStore | None = None,
+        input_contract: str | None = None,
     ) -> None:
         values = (provider_id, default_model_id, submit_url, cancel_url_template, bearer_token)
         if not all(value.strip() for value in values):
@@ -39,11 +45,42 @@ class HttpGenerationProviderGateway:
         self._submit_url = submit_url
         self._cancel_url_template = cancel_url_template
         self._bearer_token = bearer_token
+        self._artifact_store = artifact_store
+        self.input_contract = input_contract
 
-    async def submit(self, request: GenerationRequest, *, task_id: str, attempt: int, deadline: datetime) -> ProviderSubmission:
+    def validate_input_contract(self, request: GenerationRequest) -> None:
+        if request.input_asset_ids and self.input_contract != "verified-media/v1":
+            raise GenerationProviderGatewayError("GENERATION_PROVIDER_INPUT_CONTRACT_UNAVAILABLE")
+
+    async def submit(
+        self, request: GenerationRequest, *, task_id: str, attempt: int, deadline: datetime
+    ) -> ProviderSubmission:
+        self.validate_input_contract(request)
         if request.requested_provider_id and request.requested_provider_id != self.provider_id:
             raise GenerationProviderGatewayError("GENERATION_PROVIDER_NOT_AVAILABLE")
         model_id = request.requested_model_id or self.default_model_id
+        inputs: list[dict[str, Any]] = []
+        try:
+            validate_input_media(request)
+            for item in request.resolved_input_assets:
+                content = await read_verified_input(self._artifact_store, item)
+                inputs.append(
+                    {
+                        "assetId": item.asset_id,
+                        "assetVersionId": item.asset_version_id,
+                        "assetContentSha256": item.asset_content_sha256,
+                        "generatedAssetId": item.generated_asset_id,
+                        "sourceProjectId": item.source_project_id,
+                        "sourceTaskId": item.source_task_id,
+                        "mediaType": item.media_type,
+                        "sha256": item.content_sha256,
+                        "sizeBytes": item.size_bytes,
+                        "mimeType": item.mime_type,
+                        "dataUrl": f"data:{item.mime_type};base64,{base64.b64encode(content).decode('ascii')}",
+                    }
+                )
+        except ValueError as error:
+            raise GenerationProviderGatewayError(str(error)) from error
         payload: dict[str, Any] = {
             "taskId": task_id,
             "workspaceId": request.workspace_id,
@@ -53,6 +90,8 @@ class HttpGenerationProviderGateway:
             "prompt": request.prompt,
             "parameters": request.parameters,
             "inputAssetIds": list(request.input_asset_ids),
+            "inputAssets": inputs,
+            "inputContract": "verified-media/v1",
             "providerId": self.provider_id,
             "modelId": model_id,
             "attempt": attempt,
@@ -62,7 +101,11 @@ class HttpGenerationProviderGateway:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
                 response = await client.post(
                     self._submit_url,
-                    headers={"Authorization": f"Bearer {self._bearer_token}", "Accept": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {self._bearer_token}",
+                        "Accept": "application/json",
+                        "Idempotency-Key": f"generation:{task_id}",
+                    },
                     json=payload,
                 )
                 response.raise_for_status()

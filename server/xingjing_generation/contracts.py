@@ -5,9 +5,18 @@ import json
 import re
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+    model_validator,
+)
 
 Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 Capability = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{1,63}$")]
@@ -40,6 +49,35 @@ class Failure(BaseModel):
     details: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class GenerationAssetReference(BaseModel):
+    """A catalog JSON version, whose digest is distinct from the media digest."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    asset_id: Identifier
+    asset_version_id: Identifier
+    asset_content_sha256: Sha256 | None = None
+
+
+class ResolvedGenerationInput(BaseModel):
+    """Server-verified immutable media used by a provider submission."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    asset_id: Identifier
+    asset_version_id: Identifier | None = None
+    asset_content_sha256: Sha256 | None = None
+    generated_asset_id: Identifier
+    source_project_id: Identifier
+    source_task_id: Identifier
+    object_key: Annotated[str, StringConstraints(min_length=1, max_length=1024)]
+    media_type: Literal["image", "video"]
+    mime_type: Annotated[str, StringConstraints(pattern=r"^(image|video)/[a-z0-9.+-]+$")]
+    content_sha256: Sha256
+    size_bytes: Annotated[int, Field(gt=0)]
+
+
 class GenerationRequest(BaseModel):
     """Provider 无关且可持久化的媒体生成请求。"""
 
@@ -52,6 +90,8 @@ class GenerationRequest(BaseModel):
     prompt: Annotated[str, StringConstraints(min_length=1, max_length=100_000)]
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     input_asset_ids: tuple[Identifier, ...] = ()
+    input_asset_references: tuple[GenerationAssetReference, ...] = ()
+    resolved_input_assets: tuple[ResolvedGenerationInput, ...] = ()
     requested_provider_id: Identifier | None = None
     requested_model_id: Identifier | None = None
 
@@ -59,7 +99,23 @@ class GenerationRequest(BaseModel):
     def validate_provider_selection(self) -> GenerationRequest:
         if self.requested_model_id is not None and self.requested_provider_id is None:
             raise ValueError("指定模型时必须同时指定供应商")
+        references = [item.asset_id for item in self.input_asset_references]
+        if len(references) != len(set(references)) or not set(references).issubset(self.input_asset_ids):
+            raise ValueError("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
+        if (
+            self.resolved_input_assets
+            and tuple(item.asset_id for item in self.resolved_input_assets) != self.input_asset_ids
+        ):
+            raise ValueError("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        result = handler(self)
+        for key in ("input_asset_references", "resolved_input_assets"):
+            if not result.get(key):
+                result.pop(key, None)
+        return result
 
 
 def compute_request_fingerprint(request: GenerationRequest) -> str:

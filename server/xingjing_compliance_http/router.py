@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
 
+from lib.i18n import get_translator
 from server.xingjing_compliance.models import ExportGateDecision, FormalExportRequest
 from server.xingjing_compliance_persistence import (
     ComplianceIdempotencyConflict,
@@ -105,7 +106,11 @@ class ComplianceContractRoute(APIRoute):
                 code = raw_code if isinstance(raw_code, str) else "REQUEST_REJECTED"
                 return _error(request, code, error.status_code)
             except ValueError as error:
-                return _error(request, str(error) or "INVALID_COMPLIANCE_REQUEST", status.HTTP_400_BAD_REQUEST)
+                code = str(error) or "INVALID_COMPLIANCE_REQUEST"
+                response_status = (
+                    status.HTTP_409_CONFLICT if code == "PROJECT_BILLING_NOT_SETTLED" else status.HTTP_400_BAD_REQUEST
+                )
+                return _error(request, code, response_status)
 
         return handler
 
@@ -348,9 +353,20 @@ def _success(request: Request, data: Mapping[str, object]) -> JSONResponse:
 
 
 def _error(request: Request, code: str, status_code: int, details: Mapping[str, object] | None = None) -> JSONResponse:
+    translated = {
+        "EXPORT_BILLING_SOURCE_UNRESOLVED",
+        "EXPORT_BILLING_SOURCE_MISMATCH",
+        "EXPORT_BILLING_SOURCE_CYCLE",
+        "EXPORT_BILLING_EVIDENCE_MISSING",
+        "PROJECT_BILLING_NOT_SETTLED",
+    }
+    message = {"message": get_translator(request)(code.lower())} if code in translated else {}
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "details": dict(details or {})}, "meta": {"requestId": _request_id(request)}},
+        content={
+            "error": {"code": code, **message, "details": dict(details or {})},
+            "meta": {"requestId": _request_id(request)},
+        },
     )
 
 

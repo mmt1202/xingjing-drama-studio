@@ -1,4 +1,5 @@
 import { createAuthenticatedFetcher } from "@/utils/auth";
+import i18n from "@/i18n";
 import type {
   ActionInput,
   AssetAction,
@@ -227,6 +228,7 @@ export function createAssetsStoryboardApi(
     const requestId = createId();
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
+    headers.set("Accept-Language", i18n.resolvedLanguage ?? i18n.language ?? "zh");
     headers.set("X-Request-Id", requestId);
     const token = await options.getAccessToken?.();
     if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -321,8 +323,8 @@ export function createAssetsStoryboardApi(
         ? { ...input.payload, episodeId: scope.episodeId }
         : (input.payload ?? {});
     const body = { action: input.action, targetId: input.targetId, payload };
-    const fingerprint = stableFingerprint(scope, path, body);
-    const idempotencyKey = replayKeys.get(fingerprint) ?? createId();
+    const fingerprint = stableFingerprint(scope, path, { ...body, version: input.version ?? null });
+    const idempotencyKey = input.idempotencyKey ?? replayKeys.get(fingerprint) ?? createId();
     replayKeys.set(fingerprint, idempotencyKey);
     const headers = new Headers({
       "Content-Type": "application/json",
@@ -373,6 +375,13 @@ export function createAssetsStoryboardApi(
         permissions,
         featureFlags: {},
       };
+    },
+    async getAsset(scope, assetId, signal) {
+      const base = scope.projectId
+        ? `/projects/${requireProject(scope)}/assets`
+        : `/workspaces/${encodeURIComponent(scope.workspaceId)}/assets`;
+      const result = await request<{ asset: AssetItem }>(scope, `${base}/${encodeURIComponent(assetId)}`, {}, signal);
+      return result.data.asset;
     },
     listAssets: (scope, query = {}, signal) =>
       list<AssetItem>(

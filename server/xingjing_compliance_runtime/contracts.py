@@ -26,6 +26,8 @@ class ExportAuthorityEvidence:
     input_digest: str | None = None
     release_creative_digest: str | None = None
     reviewed_creative_digest: str | None = None
+    billing_settlement_reference: str | None = None
+    billing_supersedes_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

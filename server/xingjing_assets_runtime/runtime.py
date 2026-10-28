@@ -16,7 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from server.xingjing_assets_http import create_asset_router, create_unavailable_asset_router
-from server.xingjing_assets_persistence import SqlAlchemyAssetRepository
+from server.xingjing_assets_persistence import AssetScope, SqlAlchemyAssetRepository
 from server.xingjing_content_persistence.repository import ScriptRow, ScriptVersionRow
 from server.xingjing_generation import GenerationRequest, GenerationTask
 from server.xingjing_generation_persistence import GeneratedAsset
@@ -119,7 +119,9 @@ class AssetRuntime:
         self._evidence_storage = evidence_storage
         self.unavailable_code = unavailable_code
         self._close = close
-        self._router = create_unavailable_asset_router(unavailable_code) if unavailable_code else create_asset_router(self)
+        self._router = (
+            create_unavailable_asset_router(unavailable_code) if unavailable_code else create_asset_router(self)
+        )
 
     @property
     def available(self) -> bool:
@@ -155,9 +157,7 @@ class AssetRuntime:
     ) -> GenerationTask:
         if self._generation_submitter is None:
             raise AssetRuntimeConfigurationError("ASSET_GENERATION_SUBMISSION_UNAVAILABLE")
-        return await self._generation_submitter(
-            context, project_id, request, idempotency_key=idempotency_key
-        )
+        return await self._generation_submitter(context, project_id, request, idempotency_key=idempotency_key)
 
     async def resolve_generated_asset(
         self,
@@ -170,11 +170,49 @@ class AssetRuntime:
             raise AssetRuntimeConfigurationError("ASSET_GENERATION_OUTPUT_UNAVAILABLE")
         asset, _path = await self._generation_asset_resolver(context, project_id, generated_asset_id)
         task = await self._generation_task_resolver(context, project_id, asset.task_id)
-        if source_asset_id not in task.request.input_asset_ids or generated_asset_id not in task.output_asset_ids:
+        initial_reference = (
+            task.request.capability == "image_generation"
+            and not task.request.input_asset_ids
+            and task.request.parameters.get("asset_operation") == "reference_image"
+            and task.request.parameters.get("asset_id") == source_asset_id
+            and bool(task.request.parameters.get("source_version_id"))
+            and bool(task.request.parameters.get("source_content_sha256"))
+        )
+        if initial_reference:
+            original = (
+                self.repository.get(AssetScope(context.tenant_id, context.workspace_id), source_asset_id)
+                if self.repository
+                else None
+            )
+            source_version = (
+                next(
+                    (
+                        item
+                        for item in original.versions
+                        if item.version_id == task.request.parameters.get("source_version_id")
+                    ),
+                    None,
+                )
+                if original
+                else None
+            )
+            if (
+                original is None
+                or original.owner_project_id != project_id
+                or source_version is None
+                or source_version.content_sha256 != task.request.parameters.get("source_content_sha256")
+                or asset.media_type != "image"
+            ):
+                raise LookupError("GENERATED_ASSET_NOT_FOUND")
+        if (
+            source_asset_id not in task.request.input_asset_ids and not initial_reference
+        ) or generated_asset_id not in task.output_asset_ids:
             raise LookupError("GENERATED_ASSET_NOT_FOUND")
         return asset
 
-    def store_rights_evidence(self, context: TrustedWorkspaceContext, project_id: str, content: bytes) -> tuple[str, str]:
+    def store_rights_evidence(
+        self, context: TrustedWorkspaceContext, project_id: str, content: bytes
+    ) -> tuple[str, str]:
         if self._evidence_storage is None:
             raise AssetRuntimeConfigurationError("ASSET_EVIDENCE_STORAGE_UNAVAILABLE")
         return self._evidence_storage.put(context, project_id, content)
@@ -186,16 +224,23 @@ class AssetRuntime:
         assert self.session_factory is not None
         try:
             with self.session_factory() as session:
-                return session.scalar(select(ProjectRow.id).where(
-                    ProjectRow.id == project_id,
-                    ProjectRow.tenant_id == context.tenant_id,
-                    ProjectRow.workspace_id == context.workspace_id,
-                    ProjectRow.deleted_at.is_(None),
-                )) is not None
+                return (
+                    session.scalar(
+                        select(ProjectRow.id).where(
+                            ProjectRow.id == project_id,
+                            ProjectRow.tenant_id == context.tenant_id,
+                            ProjectRow.workspace_id == context.workspace_id,
+                            ProjectRow.deleted_at.is_(None),
+                        )
+                    )
+                    is not None
+                )
         except SQLAlchemyError as error:
             raise AssetRuntimeConfigurationError("ASSET_RUNTIME_UNAVAILABLE") from error
 
-    def frozen_script(self, context: TrustedWorkspaceContext, project_id: str, snapshot_id: str) -> tuple[str, int, str]:
+    def frozen_script(
+        self, context: TrustedWorkspaceContext, project_id: str, snapshot_id: str
+    ) -> tuple[str, int, str]:
         """Resolve the stable M03 ``script-id@version`` snapshot reference.
 
         The version must still be the document's locked version; a client cannot
@@ -209,23 +254,32 @@ class AssetRuntime:
         assert self.session_factory is not None
         try:
             with self.session_factory() as session:
-                script = session.scalar(select(ScriptRow).where(
-                    ScriptRow.workspace_id == context.workspace_id,
-                    ScriptRow.project_id == project_id,
-                    ScriptRow.script_id == script_id,
-                    ScriptRow.locked_version_number == int(number_text),
-                ))
+                script = session.scalar(
+                    select(ScriptRow).where(
+                        ScriptRow.workspace_id == context.workspace_id,
+                        ScriptRow.project_id == project_id,
+                        ScriptRow.script_id == script_id,
+                        ScriptRow.locked_version_number == int(number_text),
+                    )
+                )
                 if script is None:
                     raise LookupError("FROZEN_SCRIPT_VERSION_NOT_FOUND")
-                version = session.scalar(select(ScriptVersionRow).where(
-                    ScriptVersionRow.workspace_id == context.workspace_id,
-                    ScriptVersionRow.script_id == script.script_id,
-                    ScriptVersionRow.number == int(number_text),
-                ))
+                version = session.scalar(
+                    select(ScriptVersionRow).where(
+                        ScriptVersionRow.workspace_id == context.workspace_id,
+                        ScriptVersionRow.script_id == script.script_id,
+                        ScriptVersionRow.number == int(number_text),
+                    )
+                )
                 if version is None:
                     raise LookupError("FROZEN_SCRIPT_VERSION_NOT_FOUND")
                 import hashlib
-                return script.script_id, int(number_text), hashlib.sha256(version.source_content.encode("utf-8")).hexdigest()
+
+                return (
+                    script.script_id,
+                    int(number_text),
+                    hashlib.sha256(version.source_content.encode("utf-8")).hexdigest(),
+                )
         except SQLAlchemyError as error:
             raise AssetRuntimeConfigurationError("ASSET_DEPENDENCY_UNAVAILABLE") from error
 
@@ -239,19 +293,23 @@ class AssetRuntime:
         assert self.session_factory is not None
         try:
             with self.session_factory() as session:
-                script = session.scalar(select(ScriptRow).where(
-                    ScriptRow.workspace_id == context.workspace_id,
-                    ScriptRow.project_id == project_id,
-                    ScriptRow.script_id == script_id,
-                    ScriptRow.locked_version_number == int(number_text),
-                ))
+                script = session.scalar(
+                    select(ScriptRow).where(
+                        ScriptRow.workspace_id == context.workspace_id,
+                        ScriptRow.project_id == project_id,
+                        ScriptRow.script_id == script_id,
+                        ScriptRow.locked_version_number == int(number_text),
+                    )
+                )
                 if script is None:
                     raise LookupError("FROZEN_SCRIPT_VERSION_NOT_FOUND")
-                version = session.scalar(select(ScriptVersionRow).where(
-                    ScriptVersionRow.workspace_id == context.workspace_id,
-                    ScriptVersionRow.script_id == script.script_id,
-                    ScriptVersionRow.number == int(number_text),
-                ))
+                version = session.scalar(
+                    select(ScriptVersionRow).where(
+                        ScriptVersionRow.workspace_id == context.workspace_id,
+                        ScriptVersionRow.script_id == script.script_id,
+                        ScriptVersionRow.number == int(number_text),
+                    )
+                )
                 if version is None:
                     raise LookupError("FROZEN_SCRIPT_VERSION_NOT_FOUND")
                 return version.source_content
@@ -275,9 +333,27 @@ def create_production_asset_runtime(
 ) -> AssetRuntime:
     url = (database_url or os.environ.get("XINGJING_ASSET_DATABASE_URL", "")).strip()
     if not url:
-        return AssetRuntime(repository=None, storyboards=None, session_factory=None, context_resolver=None, generation_submitter=generation_submitter, generation_asset_resolver=generation_asset_resolver, generation_task_resolver=generation_task_resolver, unavailable_code="XINGJING_ASSET_DATABASE_URL_REQUIRED")
+        return AssetRuntime(
+            repository=None,
+            storyboards=None,
+            session_factory=None,
+            context_resolver=None,
+            generation_submitter=generation_submitter,
+            generation_asset_resolver=generation_asset_resolver,
+            generation_task_resolver=generation_task_resolver,
+            unavailable_code="XINGJING_ASSET_DATABASE_URL_REQUIRED",
+        )
     if "+aiosqlite" in url or "+asyncpg" in url:
-        return AssetRuntime(repository=None, storyboards=None, session_factory=None, context_resolver=None, generation_submitter=generation_submitter, generation_asset_resolver=generation_asset_resolver, generation_task_resolver=generation_task_resolver, unavailable_code="XINGJING_ASSET_DATABASE_URL_MUST_BE_SYNC")
+        return AssetRuntime(
+            repository=None,
+            storyboards=None,
+            session_factory=None,
+            context_resolver=None,
+            generation_submitter=generation_submitter,
+            generation_asset_resolver=generation_asset_resolver,
+            generation_task_resolver=generation_task_resolver,
+            unavailable_code="XINGJING_ASSET_DATABASE_URL_MUST_BE_SYNC",
+        )
     root = (evidence_storage_root or os.environ.get("XINGJING_ASSET_EVIDENCE_ROOT", "")).strip()
     try:
         engine = create_engine(url, pool_pre_ping=True)

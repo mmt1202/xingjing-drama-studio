@@ -9,13 +9,15 @@ import { readAnalyticsReturn } from "@/xingjing_analytics/return-state";
 import { readVersionReturn } from "@/xingjing_versions/return-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { getTokenForSession } from "@/utils/auth";
-import { CreatorApiError } from "./api";
+import { createCreatorProjectsApi, CreatorApiError } from "./api";
 import type { ProjectControl, ProjectControlApi } from "./control-api";
 import { useControlTranslation } from "./control-i18n";
 import { compactEpisodeTitle } from "./episode-title";
+import { productionNavigationQuery } from "./production-navigation";
+import { projectOwnerId, projectOwnerName } from "./project-owner";
 
 export const controlButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-[#2A2E3A] px-3 py-2 text-sm transition hover:border-[#FF6B4A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:cursor-not-allowed disabled:opacity-40";
-const FlowContext = createContext<{ data: ProjectControl; loading: boolean; refresh: () => void; go: (target: string, episode?: number | null) => void; registerGuard: (guard: () => boolean) => () => void } | null>(null);
+const FlowContext = createContext<{ data: ProjectControl; ownerDisplayName: string; loading: boolean; refresh: () => void; go: (target: string, episode?: number | null) => void; registerGuard: (guard: () => boolean) => () => void } | null>(null);
 export function useProjectNavigationBlocker(blocked: boolean) {
   const register = useContext(FlowContext)?.registerGuard;
   useEffect(() => register?.(() => !blocked), [register, blocked]);
@@ -28,8 +30,6 @@ export function useProjectFlow() {
 export function useOptionalProjectFlow() {
   return useContext(FlowContext);
 }
-
-const scriptRoutes = new Set(["script-import", "script-lab", "source", "rewrite", "versions", "source-mapping", "script-checkup", "ai-director", "director-assets"]);
 
 function activeStage(slug: string) {
   if (slug === "version-history") return "versions";
@@ -58,6 +58,8 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const token = useAuthStore((state) => state.token);
   const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const workspaceApi = useMemo(() => createHomeApi(workspaceId, getTokenForSession(sessionEpoch)), [workspaceId, sessionEpoch]);
+  const memberApi = useMemo(() => createCreatorProjectsApi({ workspaceId, getAccessToken: () => getTokenForSession(sessionEpoch) }), [workspaceId, sessionEpoch]);
+  const [memberDirectory, setMemberDirectory] = useState<{ api: typeof memberApi; members: { id: string; name: string }[] }>();
   const [workspaceContext, setWorkspaceContext] = useState<{ api: HomeApi; access?: WorkspaceAccess; failed?: boolean }>();
   const [workspaceReload, setWorkspaceReload] = useState(0);
   const [data, setData] = useState<ProjectControl>();
@@ -106,6 +108,20 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   const workspaceBase = `/app/workspaces/${encodeURIComponent(workspaceId)}`;
   const workspaceAccess = workspaceContext?.api === workspaceApi ? workspaceContext.access : undefined;
   const workspaceUnavailable = workspaceContext?.api === workspaceApi && workspaceContext.failed;
+  const ownerId = validData ? projectOwnerId(validData.project) : "";
+  const needsMemberDirectory = Boolean(ownerId && workspaceAccess && ownerId !== workspaceAccess.actorId && validData?.permissions.includes("project.manage"));
+  useEffect(() => {
+    if (!needsMemberDirectory) return;
+    let active = true;
+    void memberApi.getProjectSetupOptions?.().then((options) => {
+      if (active) setMemberDirectory({ api: memberApi, members: options.members });
+    }).catch(() => {
+      if (active) setMemberDirectory({ api: memberApi, members: [] });
+    });
+    return () => { active = false; };
+  }, [memberApi, needsMemberDirectory, reload]);
+  const ownerDisplayName = projectOwnerName(ownerId, workspaceAccess ? { id: workspaceAccess.actorId, name: workspaceAccess.userName } : undefined,
+    needsMemberDirectory && memberDirectory?.api === memberApi ? memberDirectory.members : []) ?? t("ownerNameUnavailable");
   const filterKey = `control:${workspaceId}:${projectId}:filters`;
   function canLeave() {
     const allowed = [...guards.current].every((guard) => guard());
@@ -115,9 +131,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   function go(target: string, number?: number | null) {
     if (!canLeave()) return;
     const [path, supplied = ""] = target.split("?");
-    const query = new URLSearchParams(supplied);
-    const scriptId = params.get("scriptId");
-    if (number === undefined && scriptId && scriptRoutes.has(path) && scriptRoutes.has(slug) && !query.has("scriptId")) query.set("scriptId", scriptId);
+    let query = new URLSearchParams(supplied);
     let restoringVersionReturn = false;
     if (path === "version-history" && slug !== "version-history" && number === undefined && !supplied && workspaceAccess) {
       const previous = readVersionReturn(workspaceAccess.actorId, workspaceId, projectId);
@@ -128,18 +142,9 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     if (path === "control" && !supplied) {
       for (const [key, value] of new URLSearchParams(sessionStorage.getItem(filterKey) ?? "")) query.set(key, value);
     }
-    const selected = number === null ? undefined : number === undefined ? episode : validData?.episodes.find((e) => e.episode === number);
-    if (selected && !query.has("episodeId") && !restoringVersionReturn) query.set("episodeId", String(selected.episode));
-    if (selected && scriptRoutes.has(path) && !query.has("scriptId") && selected.scriptId) query.set("scriptId", selected.scriptId);
-    if (selected && (path.startsWith("assets") || path.startsWith("shots") || path === "storyboard")) {
-      if (!query.has("scriptVersionId") && selected.scriptVersionId) query.set("scriptVersionId", selected.scriptVersionId);
-      if (!query.has("assetSnapshotId") && selected.assetSnapshotId) query.set("assetSnapshotId", selected.assetSnapshotId);
-    }
-    if (/^(release|export|cover|compliance|rights|provenance|aigc)/.test(path) && selected?.finalVersionId) {
-      if (!query.has("projectVersion")) query.set("projectVersion", selected.finalVersionId);
-      if (!query.has("target")) query.set("target", validData?.project.targetPlatform ?? "douyin");
-    }
-    if (path === "postproduction" && selected?.timelineId) query.set("timelineId", selected.timelineId);
+    query = productionNavigationQuery({ path, currentPath: slug, currentQuery: params, targetQuery: query,
+      episodes: validData?.episodes ?? [], episodeOverride: number, inheritContext: !restoringVersionReturn,
+      targetPlatform: validData?.project.targetPlatform ?? "douyin" });
     setGate(undefined);
     navigate(`${base}/${path}${query.size ? `?${query}` : ""}`);
   }
@@ -178,7 +183,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
               <div className="min-w-0 flex-1">
                 <button className="max-w-full truncate text-left text-lg font-semibold text-white hover:text-violet-200" title={validData.project.name} onClick={() => go("control")}>{validData.project.name}</button>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400"><span className="rounded-full border border-white/10 bg-white/[.03] px-3 py-1">{t(`projectType.${validData.project.type}`, { defaultValue: validData.project.type })}</span><span className="rounded-full border border-white/10 bg-white/[.03] px-3 py-1">{t("planned", { count: validData.plannedCount })}</span><span>{t("productionState")}: {t(`status.${validData.project.archived ? "archived" : validData.project.productionStatus}`, { defaultValue: validData.project.productionStatus })}</span></div>
-                <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] leading-5 text-slate-500">{[["projectId", validData.project.id], ["target", validData.project.targetPlatform], ["owner", validData.project.ownerName], ["version", validData.project.version]].map(([label, value]) => <div key={label} className="flex min-w-0 max-w-full gap-2"><dt>{t(String(label))}</dt><dd className="min-w-0 truncate text-slate-300" title={String(value)}>{value}</dd></div>)}</dl>
+                <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] leading-5 text-slate-500">{[["projectId", validData.project.id], ["target", validData.project.targetPlatform], ["owner", ownerDisplayName], ["version", validData.project.version]].map(([label, value]) => <div key={label} className="flex min-w-0 max-w-full gap-2"><dt>{t(String(label))}</dt><dd className="min-w-0 truncate text-slate-300" title={String(value)}>{value}</dd></div>)}</dl>
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-start gap-3 sm:items-end">
@@ -205,7 +210,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
           : !validData ? <p role="status" className="p-12 text-center text-slate-400">{t("loading")}</p>
           : invalidEpisode ? <section role="alert" className="p-6"><p>{t("invalidEpisode")}</p><button className={controlButton + " mt-4"} onClick={() => go("control", null)}>{t("title")}</button></section>
           : pageGate ? <section role="status" className="rounded-xl border border-amber-400/30 p-6"><h1 className="text-lg">{t(`stage.${pageGate.id}`)}</h1><p className="my-4 text-sm text-amber-200">{t(`gate.${pageGate.reason}`)}</p>{pageGate.recovery ? <button className={controlButton} onClick={() => go(pageGate.recovery!)}>{t("recovery")}</button> : null}</section>
-          : <FlowContext.Provider value={{ data: validData, loading: loading || loadedKey !== requestKey, refresh, go, registerGuard }}><div key={`${projectId}:${location}:${episodeId ?? ""}:${params.get("timelineId") ?? ""}`}>{["generation", "audio", "audio-subtitle"].includes(slug) ? <p className="mb-4 text-xs leading-6 text-slate-400">{t("projectWide")}</p> : null}{children}</div></FlowContext.Provider>}
+          : <FlowContext.Provider value={{ data: validData, ownerDisplayName, loading: loading || loadedKey !== requestKey, refresh, go, registerGuard }}><div key={`${projectId}:${location}:${episodeId ?? ""}:${params.get("timelineId") ?? ""}`}>{["generation", "audio", "audio-subtitle"].includes(slug) ? <p className="mb-4 text-xs leading-6 text-slate-400">{t("projectWide")}</p> : null}{children}</div></FlowContext.Provider>}
       </div>
     </div>
   </CreatorShell>;

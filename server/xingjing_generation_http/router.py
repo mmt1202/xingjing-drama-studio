@@ -13,6 +13,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import Response
 
+from lib.i18n import get_translator
 from server.xingjing_generation import GenerationRequest
 from server.xingjing_generation_persistence import GenerationBillingError, TaskScopeNotFound, VersionConflict
 from server.xingjing_generation_runtime.runtime import GenerationRuntime, GenerationRuntimeUnavailable
@@ -43,7 +44,11 @@ class GenerationContractRoute(APIRoute):
                 return _error(request, "GENERATION_TASK_VERSION_CONFLICT", status.HTTP_409_CONFLICT)
             except GenerationBillingError as error:
                 code = str(error) or "GENERATION_BILLING_REJECTED"
-                http_status = status.HTTP_402_PAYMENT_REQUIRED if code == "GENERATION_INSUFFICIENT_CREDITS" else status.HTTP_409_CONFLICT
+                http_status = (
+                    status.HTTP_402_PAYMENT_REQUIRED
+                    if code == "GENERATION_INSUFFICIENT_CREDITS"
+                    else status.HTTP_409_CONFLICT
+                )
                 return _error(request, code, http_status)
             except PermissionError as error:
                 return _error(request, "PERMISSION_DENIED", status.HTTP_403_FORBIDDEN, {"permission": str(error)})
@@ -60,9 +65,11 @@ class GenerationContractRoute(APIRoute):
                 return _error(request, "GENERATION_RUNTIME_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE)
             except ValueError as error:
                 code = str(error) or "INVALID_GENERATION_REQUEST"
-                http_status = status.HTTP_409_CONFLICT if code in {
-                    "GENERATION_TASK_VERSION_CONFLICT", "GENERATION_TASK_NOT_CANCELLABLE"
-                } else status.HTTP_400_BAD_REQUEST
+                http_status = (
+                    status.HTTP_409_CONFLICT
+                    if code in {"GENERATION_TASK_VERSION_CONFLICT", "GENERATION_TASK_NOT_CANCELLABLE"}
+                    else status.HTTP_400_BAD_REQUEST
+                )
                 return _error(request, code, http_status)
 
         return handler
@@ -94,7 +101,9 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
         context = await runtime.context_for(request, project_id, "generation.view")
         media_type = _optional_choice(request.query_params.get("mediaType"), {"image", "video"}, "INVALID_MEDIA_TYPE")
         capability = _optional_identifier(request.query_params.get("capability"), "INVALID_CAPABILITY")
-        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
         limit = _integer(request.query_params.get("limit"), default=20, minimum=1, maximum=100, code="INVALID_LIMIT")
         candidates, total = await runtime.generated_candidate_sets(
             context, project_id, media_type=media_type, capability=capability, offset=offset, limit=limit
@@ -120,7 +129,9 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
         context = await runtime.context_for(request, project_id, "generation.view")
         asset, path = await runtime.generated_artifact_file(context, project_id, asset_id)
         media_type = asset.metadata.get("mime_type") if isinstance(asset.metadata.get("mime_type"), str) else None
-        return FileResponse(path, media_type=media_type, filename=f"{asset.asset_id}{_suffix_for_media(asset.media_type)}")
+        return FileResponse(
+            path, media_type=media_type, filename=f"{asset.asset_id}{_suffix_for_media(asset.media_type)}"
+        )
 
     @router.get("/projects/{project_id}/generation-tasks")
     async def list_generation_tasks(request: Request, project_id: str):
@@ -196,11 +207,15 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
     @router.post("/generation-providers/recover-submissions")
     async def recover_generation_provider_submissions(request: Request):
         limit = _integer(
-            request.query_params.get("limit"), default=100, minimum=1,
-            maximum=1_000, code="INVALID_LIMIT",
+            request.query_params.get("limit"),
+            default=100,
+            minimum=1,
+            maximum=1_000,
+            code="INVALID_LIMIT",
         )
         result = await runtime.recover_provider_submissions(
-            secret=request.headers.get("X-Xingjing-Recovery-Secret", ""), limit=limit,
+            secret=request.headers.get("X-Xingjing-Recovery-Secret", ""),
+            limit=limit,
         )
         return _success(request.headers.get("X-Request-Id", "provider-recovery"), result)
 
@@ -209,11 +224,15 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
 
 async def _list_generation_tasks(runtime: GenerationRuntime, request: Request, project_id: str) -> JSONResponse:
     context = await runtime.context_for(request, project_id, "generation.view")
-    offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+    offset = _integer(
+        request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+    )
     limit = _integer(request.query_params.get("limit"), default=50, minimum=1, maximum=200, code="INVALID_LIMIT")
-    task_status = _optional_choice(request.query_params.get("status"), {
-        "queued", "running", "retrying", "cancelling", "succeeded", "failed", "timeout", "cancelled"
-    }, "INVALID_GENERATION_TASK_STATUS")
+    task_status = _optional_choice(
+        request.query_params.get("status"),
+        {"queued", "running", "retrying", "cancelling", "succeeded", "failed", "timeout", "cancelled"},
+        "INVALID_GENERATION_TASK_STATUS",
+    )
     media_type = _optional_choice(request.query_params.get("mediaType"), {"image", "video"}, "INVALID_MEDIA_TYPE")
     capability = _optional_identifier(request.query_params.get("capability"), "INVALID_CAPABILITY")
     tasks, total = await runtime.list_tasks(
@@ -226,6 +245,7 @@ async def _list_generation_tasks(runtime: GenerationRuntime, request: Request, p
         capability=capability,
     )
     return _success(context.request_id, {"tasks": [task.model_dump(mode="json") for task in tasks]}, total=total)
+
 
 async def _get_generation_task(
     runtime: GenerationRuntime, request: Request, project_id: str, task_id: str
@@ -249,6 +269,7 @@ async def _get_generation_task(
         },
     )
 
+
 async def _submit_generation_task(runtime: GenerationRuntime, request: Request, project_id: str) -> JSONResponse:
     context = await runtime.context_for(request, project_id, "generation.manage")
     idempotency_key = request.headers.get("Idempotency-Key", "").strip()
@@ -257,14 +278,21 @@ async def _submit_generation_task(runtime: GenerationRuntime, request: Request, 
     body = await _json_object(request)
     if "workspace_id" in body or "project_id" in body:
         raise GenerationHttpError("GENERATION_REQUEST_SCOPE_SERVER_ASSIGNED")
+    if "resolved_input_assets" in body:
+        raise GenerationHttpError("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
     try:
-        generation_request = GenerationRequest.model_validate({
-            **body, "workspace_id": context.workspace_id, "project_id": project_id,
-        })
+        generation_request = GenerationRequest.model_validate(
+            {
+                **body,
+                "workspace_id": context.workspace_id,
+                "project_id": project_id,
+            }
+        )
     except ValueError as error:
         raise GenerationHttpError("INVALID_GENERATION_REQUEST", status.HTTP_422_UNPROCESSABLE_CONTENT) from error
     task = await runtime.submit(context, project_id, generation_request, idempotency_key=idempotency_key)
     return _success(context.request_id, {"task": task.model_dump(mode="json")})
+
 
 async def _generation_task_actions(
     runtime: GenerationRuntime, request: Request, project_id: str, task_id: str
@@ -381,7 +409,24 @@ def _success(request_id: str, data: Mapping[str, object], *, total: int | None =
 
 def _error(request: Request, code: str, status_code: int, details: Mapping[str, object] | None = None) -> JSONResponse:
     request_id = (request.headers.get("X-Request-Id") or "unknown").strip() or "unknown"
+    translated = {
+        "GENERATION_INPUT_ASSET_VERSION_REQUIRED",
+        "GENERATION_INPUT_ASSET_VERSION_NOT_FOUND",
+        "GENERATION_INPUT_ASSET_CONTENT_MISMATCH",
+        "GENERATION_INPUT_ASSET_MEDIA_REQUIRED",
+        "GENERATION_INPUT_ASSET_MEDIA_NOT_FOUND",
+        "GENERATION_INPUT_ASSET_MEDIA_MISMATCH",
+        "GENERATION_INPUT_ASSET_REFERENCE_INVALID",
+        "GENERATION_INPUT_ASSET_UNVERIFIED",
+        "GENERATION_INPUT_REQUIRED",
+        "GENERATION_INPUT_MEDIA_TYPE_INVALID",
+        "GENERATION_INPUT_COUNT_INVALID",
+        "GENERATION_INPUT_TOO_LARGE",
+        "GENERATION_INPUT_ROLES_UNSUPPORTED",
+        "GENERATION_PROVIDER_INPUT_CONTRACT_UNAVAILABLE",
+    }
+    message = {"message": get_translator(request)(code.lower())} if code in translated else {}
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "details": dict(details or {})}, "meta": {"requestId": request_id}},
+        content={"error": {"code": code, **message, "details": dict(details or {})}, "meta": {"requestId": request_id}},
     )

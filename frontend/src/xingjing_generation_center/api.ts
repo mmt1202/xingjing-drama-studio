@@ -1,4 +1,5 @@
 import { createAuthenticatedFetcher } from "@/utils/auth";
+import i18n from "@/i18n";
 import type { GeneratedCandidateSelection, GenerationCandidatePage, GenerationCostEvidence, GenerationModelAvailability, GenerationModelUsageReport, GenerationSubmission, GenerationTask, GenerationTaskDetail, GenerationTaskFilters, GenerationTaskPage } from "./contracts";
 
 export class GenerationCenterApiError extends Error {
@@ -31,6 +32,7 @@ export function createGenerationCenterApi({ fetcher: providedFetcher, getAccessT
   async function request<T>(path: string, init: RequestInit = {}): Promise<{ value: T; requestId: string | null; total: number | undefined }> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
+    headers.set("Accept-Language", i18n.resolvedLanguage ?? i18n.language ?? "zh");
     headers.set("X-Request-Id", key());
     if (init.body) headers.set("Content-Type", "application/json");
     const token = await getAccessToken?.();

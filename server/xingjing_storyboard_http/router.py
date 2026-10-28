@@ -18,6 +18,7 @@ from fastapi.routing import APIRoute
 
 from lib.i18n import get_translator
 from server.xingjing_generation import GenerationRequest, MediaType, TaskStatus
+from server.xingjing_generation.contracts import GenerationAssetReference
 from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_storyboard.errors import (
@@ -49,6 +50,20 @@ _GENERATION_ADMISSION_REJECTIONS = frozenset(
         "PROJECT_MODEL_UNAVAILABLE",
         "PROJECT_NOT_FOUND",
         "GENERATION_INPUT_ASSET_NOT_ACCESSIBLE",
+        "GENERATION_INPUT_ASSET_VERSION_REQUIRED",
+        "GENERATION_INPUT_ASSET_VERSION_NOT_FOUND",
+        "GENERATION_INPUT_ASSET_CONTENT_MISMATCH",
+        "GENERATION_INPUT_ASSET_MEDIA_REQUIRED",
+        "GENERATION_INPUT_ASSET_MEDIA_NOT_FOUND",
+        "GENERATION_INPUT_ASSET_MEDIA_MISMATCH",
+        "GENERATION_INPUT_ASSET_REFERENCE_INVALID",
+        "GENERATION_INPUT_ASSET_UNVERIFIED",
+        "GENERATION_INPUT_REQUIRED",
+        "GENERATION_INPUT_MEDIA_TYPE_INVALID",
+        "GENERATION_INPUT_COUNT_INVALID",
+        "GENERATION_INPUT_TOO_LARGE",
+        "GENERATION_INPUT_ROLES_UNSUPPORTED",
+        "GENERATION_PROVIDER_INPUT_CONTRACT_UNAVAILABLE",
         "GENERATION_INSUFFICIENT_CREDITS",
         "GENERATION_BILLING_ACCOUNT_MISSING",
         "GENERATION_BILLING_CURRENCY_MISMATCH",
@@ -418,6 +433,9 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             media_type = _required_text(payload, "mediaType")
             if media_type not in {"image", "video"}:
                 raise HttpContractError("GENERATION_MEDIA_TYPE_INVALID")
+            target_shot = next(item for item in storyboard.shots if item.shot_id == _required_text(body, "targetId"))
+            if len({item.asset_id for item in target_shot.asset_references}) != len(target_shot.asset_references):
+                raise HttpContractError("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
             prepared = dependencies.service.prepare_shot_generation(
                 context,
                 storyboard_id=storyboard.storyboard_id,
@@ -455,6 +473,10 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                     "duration_ms": shot.duration_ms,
                 },
                 input_asset_ids=tuple(dict.fromkeys(item.asset_id for item in shot.asset_references)),
+                input_asset_references=tuple(
+                    GenerationAssetReference(asset_id=item.asset_id, asset_version_id=item.asset_version_id)
+                    for item in shot.asset_references
+                ),
                 requested_provider_id=cast(str | None, submission["provider_id"]),
                 requested_model_id=cast(str | None, submission["model_id"]),
             )

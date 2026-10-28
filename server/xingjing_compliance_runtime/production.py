@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
 from server.xingjing_assets_runtime.runtime import LocalAssetEvidenceStorage
-from server.xingjing_audio_persistence.models import audio_billing_holds
 from server.xingjing_compliance.models import (
     AuditContext,
     ComplianceProvider,
@@ -36,8 +35,7 @@ from server.xingjing_compliance_persistence import (
     DeliveryIdempotencyConflict,
     SqlAlchemyComplianceAuthorityStore,
 )
-from server.xingjing_editing_persistence.models import EditingRenderBillingHoldRow, FinalVideoVersionRow
-from server.xingjing_generation_persistence.repository import GenerationBillingHoldRow
+from server.xingjing_editing_persistence.models import FinalVideoVersionRow
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
     TrustedWorkspaceContext,
@@ -62,6 +60,7 @@ from .release_creative import (
     review_input_digest,
 )
 from .runtime import ComplianceRuntime
+from .settlement_scope import resolve_export_settlement, verify_release_settlement
 
 TrustedContextResolver = Callable[[Request], TrustedWorkspaceContext | Awaitable[TrustedWorkspaceContext]]
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -271,7 +270,7 @@ class ProductionComplianceRuntime:
             project_id=formal_request.project_id,
             required_permission="export.manage",
         )
-        await self._synchronize_billing_settlement(context, formal_request.project_version)
+        creative = None
         if formal_request.cover_selection_id is not None:
             if self._export_executor is None:
                 raise ComplianceRuntimeUnavailable("FORMAL_EXPORT_EXECUTOR_NOT_CONFIGURED")
@@ -291,8 +290,10 @@ class ProductionComplianceRuntime:
                     project_id=formal_request.project_id,
                 )
                 await self._assert_creative_review(context, formal_request, None, creative)
-                evidence = await self._store(context).load_export_evidence(formal_request, context.audit)
-                await self._assert_creative_review(context, formal_request, evidence, creative)
+        await self._synchronize_billing_settlement(context, formal_request.project_version, release_creative=creative)
+        if creative is not None:
+            evidence = await self._store(context).load_export_evidence(formal_request, context.audit)
+            await self._assert_creative_review(context, formal_request, evidence, creative)
         return await ComplianceRuntime(authority_store=self._store(context)).authorize_export(
             formal_request, context.audit
         )
@@ -301,74 +302,33 @@ class ProductionComplianceRuntime:
         self,
         context: ComplianceRequestContext,
         project_version: str,
+        *,
+        release_creative: dict[str, object] | None = None,
     ) -> None:
         """Bind terminal M06/M07/M08 billing facts to the immutable export version."""
         trusted = context.trusted
         async with self._session_factory() as session:
-            generation = (
-                await session.execute(
-                    select(
-                        GenerationBillingHoldRow.currency,
-                        GenerationBillingHoldRow.estimated_minor,
-                        GenerationBillingHoldRow.actual_minor,
-                        GenerationBillingHoldRow.released_minor,
-                        GenerationBillingHoldRow.status,
-                        GenerationBillingHoldRow.updated_at,
-                    ).where(
-                        GenerationBillingHoldRow.workspace_id == trusted.workspace_id,
-                        GenerationBillingHoldRow.project_id == context.project_id,
-                    )
-                )
-            ).all()
-            audio = (
-                await session.execute(
-                    select(
-                        audio_billing_holds.c.currency,
-                        audio_billing_holds.c.estimated_minor,
-                        audio_billing_holds.c.actual_minor,
-                        audio_billing_holds.c.released_minor,
-                        audio_billing_holds.c.status,
-                        audio_billing_holds.c.updated_at,
-                    ).where(
-                        audio_billing_holds.c.tenant_id == trusted.tenant_id,
-                        audio_billing_holds.c.workspace_id == trusted.workspace_id,
-                        audio_billing_holds.c.project_id == context.project_id,
-                    )
-                )
-            ).all()
-            editing = (
-                await session.execute(
-                    select(
-                        EditingRenderBillingHoldRow.currency,
-                        EditingRenderBillingHoldRow.estimated_minor,
-                        EditingRenderBillingHoldRow.actual_minor,
-                        EditingRenderBillingHoldRow.released_minor,
-                        EditingRenderBillingHoldRow.status,
-                        EditingRenderBillingHoldRow.updated_at,
-                    ).where(
-                        EditingRenderBillingHoldRow.tenant_id == trusted.tenant_id,
-                        EditingRenderBillingHoldRow.workspace_id == trusted.workspace_id,
-                        EditingRenderBillingHoldRow.project_id == context.project_id,
-                    )
-                )
-            ).all()
-        summary, latest = _settlement_cost_summary(
-            (
-                ("generation", [tuple(row) for row in generation]),
-                ("audio", [tuple(row) for row in audio]),
-                ("editing", [tuple(row) for row in editing]),
+            scope = await resolve_export_settlement(
+                session,
+                tenant_id=trusted.tenant_id,
+                workspace_id=trusted.workspace_id,
+                project_id=context.project_id,
+                version_id=project_version,
             )
-        )
-        canonical = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha256(
-            f"{trusted.tenant_id}:{trusted.workspace_id}:{context.project_id}:{project_version}:{canonical}".encode()
-        ).hexdigest()
-        await self._store(context).record_billing_settlement_callback(
+            if release_creative is not None:
+                await verify_release_settlement(
+                    session,
+                    tenant_id=trusted.tenant_id,
+                    workspace_id=trusted.workspace_id,
+                    project_id=context.project_id,
+                    creative=release_creative,
+                )
+        summary, latest = _settlement_cost_summary(scope.sources)
+        await self._store(context).record_scoped_billing_settlement(
             project_id=context.project_id,
             project_version=project_version,
-            settlement_reference=f"internal:{digest}",
+            references=scope.references,
             settled_at=latest or datetime.now(UTC),
-            event_id=f"billing-settled:{digest}",
             cost_summary=summary,
             recorded_at=datetime.now(UTC),
         )
@@ -543,7 +503,7 @@ class ProductionComplianceRuntime:
         if creative is not None:
             await self._assert_creative_review(context, formal_request, None, creative)
         await self._assert_content_not_blocked(context, formal_request.project_version)
-        await self._synchronize_billing_settlement(context, formal_request.project_version)
+        await self._synchronize_billing_settlement(context, formal_request.project_version, release_creative=creative)
         evidence = await store.load_export_evidence(formal_request, audit)
         decision = await ComplianceRuntime(authority_store=store).authorize_export(formal_request, audit)
         if not decision.allowed or decision.manifest_context is None:

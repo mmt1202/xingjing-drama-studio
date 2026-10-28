@@ -253,6 +253,29 @@ class BillingSettlementRow(CompliancePersistenceBase):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ScopedBillingSettlementRow(CompliancePersistenceBase):
+    """Append-only delivery-input evidence, retaining any older project-wide receipt."""
+
+    __tablename__ = "xingjing_compliance_scoped_billing_settlements"
+    __table_args__ = (
+        CheckConstraint("scope_version = 1", name="ck_xj_scoped_billing_version"),
+        CheckConstraint("settled = true", name="ck_xj_scoped_billing_settled"),
+    )
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_version: Mapped[str] = mapped_column(String(128), primary_key=True)
+    scope_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    settled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    settlement_reference: Mapped[str] = mapped_column(String(128), nullable=False)
+    supersedes_reference: Mapped[str | None] = mapped_column(String(128))
+    input_references: Mapped[list[list[str]]] = mapped_column(JSONB, nullable=False)
+    cost_summary: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    settled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class DeliveryRow(CompliancePersistenceBase):
     __tablename__ = "xingjing_compliance_export_deliveries"
     __table_args__ = (
@@ -1047,6 +1070,91 @@ class SqlAlchemyComplianceAuthorityStore:
             )
         return stored_payload
 
+    async def record_scoped_billing_settlement(
+        self,
+        *,
+        project_id: str,
+        project_version: str,
+        references: tuple[tuple[str, str, str], ...],
+        cost_summary: list[dict[str, object]],
+        settled_at: datetime,
+        recorded_at: datetime,
+    ) -> dict[str, object]:
+        """Select exact-input evidence without rewriting legacy receipts or past exports."""
+        if not references or not any(item[0] == "editing" for item in references):
+            raise ValueError("EXPORT_BILLING_SOURCE_UNRESOLVED")
+        inputs = [list(item) for item in sorted(set(references))]
+        payload: dict[str, object] = {
+            "project_id": project_id,
+            "project_version": project_version,
+            "scope_version": 1,
+            "input_references": inputs,
+            "cost_summary": cost_summary,
+            "settled_at": _utc(settled_at).isoformat(),
+        }
+        digest = _digest(payload)
+        reference = f"scoped:v1:{digest.removeprefix('sha256:')}"
+        event_id = f"billing-scope:{digest.removeprefix('sha256:')}"
+        identity = (self._scope.tenant_id, self._scope.workspace_id, project_id, project_version)
+        async with self._session_factory.begin() as session:
+            previous = await session.get(BillingSettlementRow, identity)
+            supersedes = previous.settlement_reference if previous is not None else None
+            inserted = await session.scalar(
+                insert(ScopedBillingSettlementRow)
+                .values(
+                    tenant_id=self._scope.tenant_id,
+                    workspace_id=self._scope.workspace_id,
+                    project_id=project_id,
+                    project_version=project_version,
+                    scope_version=1,
+                    scope_digest=digest,
+                    settled=True,
+                    settlement_reference=reference,
+                    supersedes_reference=supersedes,
+                    input_references=inputs,
+                    cost_summary=cost_summary,
+                    settled_at=_utc(settled_at),
+                    recorded_at=_utc(recorded_at),
+                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "workspace_id", "project_id", "project_version"])
+                .returning(ScopedBillingSettlementRow.settlement_reference)
+            )
+            stored = await session.get(ScopedBillingSettlementRow, identity)
+            if stored is None or stored.scope_digest != digest:
+                raise ComplianceIdempotencyConflict()
+            selected = {
+                **payload,
+                "settlement_reference": stored.settlement_reference,
+                "supersedes_reference": stored.supersedes_reference,
+                "settled": True,
+            }
+            if inserted is not None:
+                session.add(
+                    ComplianceAuditRow(
+                        tenant_id=self._scope.tenant_id,
+                        workspace_id=self._scope.workspace_id,
+                        event_id=_event_id(project_id, event_id),
+                        project_id=project_id,
+                        project_version=project_version,
+                        actor_id="billing-service",
+                        request_id=event_id,
+                        idempotency_key=event_id,
+                        command_digest=digest,
+                        action="billing.input_scope_confirmed",
+                        version=1,
+                        before_payload={}
+                        if previous is None
+                        else {
+                            "settlement_reference": previous.settlement_reference,
+                            "cost_summary": previous.cost_summary,
+                            "settled": previous.settled,
+                        },
+                        after_payload=selected,
+                        occurred_at=_utc(recorded_at),
+                    )
+                )
+            return selected
+
     async def load_compliance_status(
         self, request: FormalExportRequest, audit: AuditContext
     ) -> ExportAuthorityEvidence:
@@ -1132,7 +1240,11 @@ class SqlAlchemyComplianceAuthorityStore:
                 ),
                 "export configuration",
             )
-            settlement = await session.scalar(
+            scoped_settlement = await session.get(
+                ScopedBillingSettlementRow,
+                (self._scope.tenant_id, self._scope.workspace_id, request.project_id, request.project_version),
+            )
+            settlement = scoped_settlement or await session.scalar(
                 select(BillingSettlementRow).where(
                     BillingSettlementRow.tenant_id == self._scope.tenant_id,
                     BillingSettlementRow.workspace_id == self._scope.workspace_id,
@@ -1183,6 +1295,8 @@ class SqlAlchemyComplianceAuthorityStore:
             reviewed_at=_utc(review.reviewed_at),
             review_version=review.version,
             billing_summary=() if settlement is None else tuple(dict(item) for item in settlement.cost_summary),
+            billing_settlement_reference=None if settlement is None else settlement.settlement_reference,
+            billing_supersedes_reference=None if scoped_settlement is None else scoped_settlement.supersedes_reference,
             input_digest=review.input_digest,
             release_creative_digest=_optional_selection_id(review.review_payload.get("release_creative_digest")),
             reviewed_creative_digest=_optional_selection_id(review.review_payload.get("reviewed_creative_digest")),
@@ -1414,6 +1528,8 @@ class SqlAlchemyComplianceAuthorityStore:
                 "commercial_export_enabled": state.commercial_export_enabled,
             },
             "billing_summary": list(evidence.billing_summary),
+            "billing_settlement_reference": evidence.billing_settlement_reference,
+            "billing_supersedes_reference": evidence.billing_supersedes_reference,
             "artifact": None
             if artifact is None
             else {

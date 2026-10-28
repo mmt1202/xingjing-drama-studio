@@ -1,6 +1,12 @@
 export type GenerationTaskStatus = "queued" | "running" | "retrying" | "cancelling" | "succeeded" | "failed" | "timeout" | "cancelled";
 export type GenerationMediaType = "image" | "video";
 
+export interface GenerationInputReference {
+  readonly asset_id: string;
+  readonly asset_version_id: string;
+  readonly asset_content_sha256?: string;
+}
+
 export interface GenerationRequest {
   readonly workspace_id: string;
   readonly project_id: string;
@@ -9,6 +15,7 @@ export interface GenerationRequest {
   readonly prompt: string;
   readonly parameters: Record<string, unknown>;
   readonly input_asset_ids: readonly string[];
+  readonly input_asset_references?: readonly GenerationInputReference[];
   readonly requested_provider_id: string | null;
   readonly requested_model_id: string | null;
 }
@@ -79,6 +86,7 @@ export interface GenerationModelAvailability {
   readonly model_id: string | null;
   readonly submission_available: boolean;
   readonly callback_available: boolean;
+  readonly input_contract_available?: boolean;
   readonly billing_currency: string | null;
   readonly estimated_cost_minor: number | null;
   readonly pricing_version: string | null;
@@ -178,6 +186,7 @@ export interface GenerationSubmission {
   readonly prompt: string;
   readonly parameters?: Record<string, unknown>;
   readonly input_asset_ids?: readonly string[];
+  readonly input_asset_references?: readonly GenerationInputReference[];
   readonly requested_provider_id?: string;
   readonly requested_model_id?: string;
 }

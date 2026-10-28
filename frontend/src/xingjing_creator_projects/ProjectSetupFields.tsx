@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSetupTranslation } from "./setup-i18n";
+import { useControlTranslation } from "./control-i18n";
 import type { ProjectSetup, ProjectSetupOptions, SessionContext } from "./types";
 
 export const setupInput = "mt-2 w-full rounded-xl border border-[#343845] bg-[#0d1018] px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20 disabled:opacity-50";
@@ -15,6 +16,7 @@ export function ProjectSetupFields({ step, name, onName, value, patch, context, 
   onReadingFile: (reading: boolean) => void;
 }) {
   const { t } = useSetupTranslation();
+  const { t: controlText } = useControlTranslation();
   const [fileError, setFileError] = useState(false);
   const readSequence = useRef(0);
   useEffect(() => () => { readSequence.current++; }, []);
@@ -65,7 +67,7 @@ export function ProjectSetupFields({ step, name, onName, value, patch, context, 
         <Field label={t("ownerId")}><select className={setupInput} value={value.ownerId} aria-invalid={invalidFields.includes("ownerId")} onChange={(event) => patch({ ownerId: event.target.value })}>
           <option value={context.user.id}>{context.user.name}</option>
           {options?.members.filter((member) => member.id !== context.user.id).map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-          {value.ownerId !== context.user.id && !options?.members.some((member) => member.id === value.ownerId) && <option value={value.ownerId}>{value.ownerId}</option>}
+          {value.ownerId !== context.user.id && !options?.members.some((member) => member.id === value.ownerId) && <option value={value.ownerId}>{controlText("ownerNameUnavailable")}</option>}
         </select></Field>
         <Field label={t("workspace")}><input className={setupInput} readOnly value={context.workspace.name} /></Field>
         {select("projectType", ["drama", "comic", "brand", "adaptation"])}

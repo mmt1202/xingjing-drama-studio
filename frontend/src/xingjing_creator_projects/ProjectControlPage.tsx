@@ -13,7 +13,7 @@ const states = ["unbound", "script_frozen", "storyboard_ready", "final_ready", "
 
 export function ProjectControlPage({ api }: { api: CreatorProjectsPort }) {
   const { t, i18n } = useControlTranslation();
-  const { data, loading, refresh, go } = useProjectFlow();
+  const { data, ownerDisplayName, loading, refresh, go } = useProjectFlow();
   const [location, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const [query, setQuery] = useState(params.get("q") ?? "");
@@ -86,7 +86,7 @@ export function ProjectControlPage({ api }: { api: CreatorProjectsPort }) {
           {!data.transitions.length && <p className="mt-4 text-xs text-slate-400">{t("noTransitions")}</p>}{feedback && <div role={failure ? "alert" : "status"} className={`mt-3 text-sm ${failure ? "text-amber-200" : "text-emerald-300"}`}>{feedback}{failure && <button className={controlButton + " mt-2"} onClick={refresh}>{t("retry")}</button>}</div>}
         </section>
         <section className={panel}><h2 className="text-lg font-semibold">{t("budget")}</h2>{costs === null ? <p className="mt-4 text-sm text-slate-500">{t("restricted")}</p> : <><p className="mt-4 text-xs text-slate-400">{t("budgetAmount")}</p><p className="mt-2 font-mono text-xl">{project.configuration?.budgetMinor ? money(project.configuration.budgetMinor, "CNY") : t("noBudget")}</p><div className="mt-4 space-y-3">{costs.map((cost) => <div key={cost.currency} className="rounded-lg border border-[#2A2E3A] p-3"><p className="font-mono text-xs text-slate-500">{cost.currency}</p><p className="mt-2 text-sm text-slate-400">{t("spent")} <strong className="float-right font-mono text-slate-100">{money(cost.spentMinor, cost.currency)}</strong></p><p className="mt-2 text-sm text-slate-400">{t("held")} <strong className="float-right font-mono text-slate-100">{money(cost.heldMinor, cost.currency)}</strong></p></div>)}</div>{!costs.length && <p className="mt-4 text-sm text-slate-500">{t("noCosts")}</p>}<p className="mt-4 text-xs leading-5 text-slate-500">{t("costHint")}</p></>}</section>
-        <section className={panel}><h2 className="text-lg font-semibold">{t("team")}</h2><dl className="mt-4 space-y-3 text-sm">{[["owner", project.ownerName], ["seats", project.configuration?.teamSeats ?? "—"], ["reviewSeats", project.configuration?.reviewSeats ?? "—"], ["schedule", project.configuration?.scheduleDays ? t("days", { count: project.configuration.scheduleDays }) : "—"]].map(([key, value]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-400">{t(String(key))}</dt><dd className="max-w-40 break-all text-right">{value}</dd></div>)}</dl><p className="mt-4 text-xs leading-5 text-slate-500">{t("planningHint")}</p></section>
+        <section className={panel}><h2 className="text-lg font-semibold">{t("team")}</h2><dl className="mt-4 space-y-3 text-sm">{[["owner", ownerDisplayName], ["seats", project.configuration?.teamSeats ?? "—"], ["reviewSeats", project.configuration?.reviewSeats ?? "—"], ["schedule", project.configuration?.scheduleDays ? t("days", { count: project.configuration.scheduleDays }) : "—"]].map(([key, value]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-400">{t(String(key))}</dt><dd className="max-w-40 break-all text-right">{value}</dd></div>)}</dl><p className="mt-4 text-xs leading-5 text-slate-500">{t("planningHint")}</p></section>
       </aside>
     </div>
     <p className="text-xs text-slate-500">{t("refreshed", { time: date(data.updatedAt) })}</p>

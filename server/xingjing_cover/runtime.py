@@ -549,6 +549,8 @@ class CoverRuntime:
         _require(context, "settings.manage")
         action = command.action
         payload = ACTION_MODELS[action].model_validate(command.payload).model_dump(mode="json")
+        if action == "generate" and not payload.get("inputAssetReferences"):
+            payload.pop("inputAssetReferences", None)
         fingerprint = self._fingerprint(project_id, plan_id, action, {"version": command.version, "payload": payload})
         if action == "generate":
             _require(context, "generation.view", "generation.manage")
@@ -742,6 +744,7 @@ class CoverRuntime:
                     "prompt": payload["prompt"] or row.prompt,
                     "parameters": parameters,
                     "input_asset_ids": payload["inputAssetIds"],
+                    "input_asset_references": payload.get("inputAssetReferences", []),
                     "requested_provider_id": payload["providerId"],
                     "requested_model_id": payload["modelId"],
                 }
@@ -774,6 +777,7 @@ class CoverRuntime:
             or task.request.prompt != request.prompt
             or task.request.parameters != request.parameters
             or task.request.input_asset_ids != request.input_asset_ids
+            or task.request.input_asset_references != request.input_asset_references
             or request.requested_provider_id is not None
             and task.request.requested_provider_id != request.requested_provider_id
             or request.requested_model_id is not None

@@ -328,6 +328,10 @@ class LocalFormalExportExecutor:
             "manifest": asdict(manifest),
             "policy": {"id": evidence.policy_id, "version": evidence.policy_version},
             "authorizations": list(evidence.authorization_ids),
+            "billing": {
+                "settlement_reference": evidence.billing_settlement_reference,
+                "supersedes_reference": evidence.billing_supersedes_reference,
+            },
             "aigc": {"generated": True, "declaration": "本交付包含人工智能生成或辅助生成内容"},
             "source": {
                 "final_video_version": version.version_id,
@@ -409,6 +413,8 @@ class LocalFormalExportExecutor:
                         "schema": "xingjing.cost-report/v1",
                         "project": {"id": manifest.project_id, "version": manifest.project_version},
                         "settled": evidence.state.billing_settled,
+                        "settlementReference": evidence.billing_settlement_reference,
+                        "supersedesReference": evidence.billing_supersedes_reference,
                         "breakdown": list(evidence.billing_summary),
                     },
                     ensure_ascii=False,

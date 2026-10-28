@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from server.xingjing_generation.contracts import GenerationAssetReference
+
 Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 Target = Literal["douyin", "kuaishou", "wechat", "xiaohongshu"]
 AspectRatio = Literal["9:16", "3:4", "1:1", "16:9"]
@@ -94,6 +96,7 @@ class Generate(StrictModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=12000)
     parameters: dict[str, object] = Field(default_factory=dict)
     inputAssetIds: list[Identifier] = Field(default_factory=list, max_length=12)
+    inputAssetReferences: list[GenerationAssetReference] = Field(default_factory=list, max_length=12)
 
 
 ACTION_MODELS: dict[str, type[BaseModel]] = {

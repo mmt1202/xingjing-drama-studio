@@ -78,6 +78,9 @@ export interface AssetVersion {
   readonly thumbnailUrl?: string;
   readonly createdAt: string;
   readonly createdBy?: string;
+  readonly generatedAssetId?: string;
+  readonly generatedMediaType?: "image" | "video";
+  readonly assetContentSha256?: string;
 }
 
 export interface RightsRecord {
@@ -289,6 +292,7 @@ export type AssetAction =
   | "restoreVersion"
   | "saveRights"
   | "bindReference"
+  | "generateReferenceImage"
   | "generateTurnaround"
   | "generateExpressions"
   | "adoptGenerationOutput"
@@ -319,6 +323,7 @@ export type ShotAction =
 
 export interface ActionInput<TAction extends string> {
   readonly action: TAction;
+  readonly idempotencyKey?: string;
   readonly targetId?: string;
   readonly version?: number;
   readonly payload?: Readonly<Record<string, unknown>>;
@@ -351,6 +356,11 @@ export interface RightsEvidenceUpload {
 }
 
 export interface AssetsStoryboardPort {
+  getAsset?(
+    scope: WorkspaceProjectScope,
+    assetId: string,
+    signal?: AbortSignal,
+  ): Promise<AssetItem>;
   getSessionContext(
     scope: WorkspaceProjectScope,
     signal?: AbortSignal,

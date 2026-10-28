@@ -22,11 +22,10 @@ from typing import cast
 from uuid import uuid4
 
 from fastapi import Request
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from server.xingjing_assets_persistence.repository import AssetRow, ReferenceRow
 from server.xingjing_generation import GenerationRequest, GenerationTask, TaskStatus
 from server.xingjing_generation.lifecycle import (
     CallbackDisposition,
@@ -49,7 +48,6 @@ from server.xingjing_generation_persistence import (
     TaskScopeNotFound,
     VersionConflict,
 )
-from server.xingjing_generation_persistence.repository import GeneratedAssetRow
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
     TrustedWorkspaceContext,
@@ -59,6 +57,7 @@ from server.xingjing_model_control import ModelRouteResolver
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import GeneratedArtifactStorageError, LocalGenerationArtifactStore
+from .input_assets import GenerationInputResolver, validate_input_media
 from .provider_callback import GenerationProviderCallbackService, ProviderGeneratedOutput
 from .provider_gateway import GenerationProviderGatewayError, HttpGenerationProviderGateway
 
@@ -95,6 +94,7 @@ class GenerationModelAvailability:
     estimated_cost_minor: int | None
     pricing_version: str | None
     models: tuple[GenerationModelDefinition, ...] = ()
+    input_contract_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -236,6 +236,8 @@ class GenerationRuntime:
             estimated_cost_minor=billing.estimated_minor if billing else None,
             pricing_version=billing.pricing_version if billing else None,
             models=self._model_catalog,
+            input_contract_available=isinstance(gateway, HttpGenerationProviderGateway)
+            and gateway.input_contract == "verified-media/v1",
         )
 
     async def read_model_availability(self) -> GenerationModelAvailability:
@@ -531,12 +533,33 @@ class GenerationRuntime:
         *,
         idempotency_key: str,
     ) -> GenerationTask:
-        gateway = self._provider_or_raise()
-        billing = self._billing_policy_or_raise()
         if request.workspace_id != context.workspace_id or request.project_id != project_id:
             raise ValueError("GENERATION_REQUEST_SCOPE_MISMATCH")
+        existing = await self._repository_or_raise().get_by_idempotency_scope(
+            f"{context.workspace_id}:{idempotency_key}", project_id=project_id
+        )
+        if existing is not None:
+            if self._session_factory is not None and not await self._project_exists(context, project_id):
+                raise TaskScopeNotFound()
+            replay = request.model_copy(
+                update={
+                    "requested_provider_id": request.requested_provider_id or existing.request.requested_provider_id,
+                    "requested_model_id": request.requested_model_id or existing.request.requested_model_id,
+                    "resolved_input_assets": existing.request.resolved_input_assets,
+                }
+            )
+            if replay != existing.request:
+                raise ValueError("IDEMPOTENCY_KEY_REUSED")
+            return existing
+        gateway = self._provider_or_raise()
+        billing = self._billing_policy_or_raise()
         request = await self._project_model_default(context, project_id, request)
-        await self._validate_input_assets(context, project_id, request)
+        request = await self._resolve_input_assets(context, project_id, request)
+        if request.input_asset_ids:
+            try:
+                gateway.validate_input_contract(request)
+            except GenerationProviderGatewayError as error:
+                raise GenerationRuntimeUnavailable(str(error)) from error
         if self._model_route_resolver is None:
             raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
         try:
@@ -638,7 +661,11 @@ class GenerationRuntime:
                 model_id=route.model_id,
                 provider_job_id=submission.provider_job_id,
                 attempt=started.attempt,
-                request_summary={"capability": request.capability, "media_type": request.media_type.value},
+                request_summary={
+                    "capability": request.capability,
+                    "media_type": request.media_type.value,
+                    "inputs": [item.model_dump(mode="json") for item in request.resolved_input_assets],
+                },
                 response_summary={"accepted_at": submission.accepted_at.isoformat()},
                 occurred_at=datetime.now(UTC),
             )
@@ -694,6 +721,20 @@ class GenerationRuntime:
                 if self._model_route_resolver is None:
                     raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
                 tenant_id = await self._tenant_for_project(queued.request.workspace_id, queued.request.project_id)
+                if queued.request.input_asset_ids and not queued.request.resolved_input_assets:
+                    raise GenerationProviderGatewayError("GENERATION_INPUT_ASSET_UNVERIFIED")
+                if queued.request.input_asset_ids:
+                    gateway.validate_input_contract(queued.request)
+                try:
+                    await self._resolve_input_assets(
+                        TrustedWorkspaceContext(
+                            tenant_id, queued.request.workspace_id, "provider-recovery", queued.task_id, frozenset(), ""
+                        ),
+                        queued.request.project_id,
+                        queued.request,
+                    )
+                except ValueError as error:
+                    raise GenerationProviderGatewayError(str(error)) from error
                 route = await self._model_route_resolver.resolve(
                     tenant_id=tenant_id,
                     workspace_id=queued.request.workspace_id,
@@ -739,6 +780,7 @@ class GenerationRuntime:
                         request_summary={
                             "capability": started.request.capability,
                             "media_type": started.request.media_type.value,
+                            "inputs": [item.model_dump(mode="json") for item in started.request.resolved_input_assets],
                         },
                         response_summary={"accepted_at": submission.accepted_at.isoformat(), "recovered": True},
                         occurred_at=datetime.now(UTC),
@@ -1229,49 +1271,20 @@ class GenerationRuntime:
             raise TaskScopeNotFound()
         return str(tenant_id)
 
-    async def _validate_input_assets(
+    async def _resolve_input_assets(
         self, context: TrustedWorkspaceContext, project_id: str, request: GenerationRequest
-    ) -> None:
+    ) -> GenerationRequest:
         if not request.input_asset_ids:
-            return
-        if len(set(request.input_asset_ids)) != len(request.input_asset_ids):
-            raise ValueError("GENERATION_INPUT_ASSET_DUPLICATE")
+            validate_input_media(request)
+            return request
         if self._session_factory is None:
             raise GenerationRuntimeUnavailable(self.unavailable_code or "GENERATION_RUNTIME_UNAVAILABLE")
-        references = select(ReferenceRow.asset_id).where(
-            ReferenceRow.tenant_id == context.tenant_id,
-            ReferenceRow.workspace_id == context.workspace_id,
-            ReferenceRow.project_id == project_id,
-        )
         try:
-            async with self._session_factory() as session:
-                catalog_ids = set(
-                    (
-                        await session.scalars(
-                            select(AssetRow.asset_id).where(
-                                AssetRow.tenant_id == context.tenant_id,
-                                AssetRow.workspace_id == context.workspace_id,
-                                AssetRow.asset_id.in_(request.input_asset_ids),
-                                or_(AssetRow.owner_project_id == project_id, AssetRow.asset_id.in_(references)),
-                            )
-                        )
-                    ).all()
-                )
-                generated_ids = set(
-                    (
-                        await session.scalars(
-                            select(GeneratedAssetRow.asset_id).where(
-                                GeneratedAssetRow.workspace_id == context.workspace_id,
-                                GeneratedAssetRow.project_id == project_id,
-                                GeneratedAssetRow.asset_id.in_(request.input_asset_ids),
-                            )
-                        )
-                    ).all()
-                )
+            return await GenerationInputResolver(self._session_factory, self._artifact_store).resolve(
+                context, project_id, request
+            )
         except SQLAlchemyError as error:
             raise GenerationRuntimeUnavailable("GENERATION_RUNTIME_UNAVAILABLE") from error
-        if set(request.input_asset_ids) != catalog_ids | generated_ids:
-            raise ValueError("GENERATION_INPUT_ASSET_NOT_ACCESSIBLE")
 
 
 def create_production_generation_runtime(
@@ -1304,8 +1317,9 @@ def create_production_generation_runtime(
         if model_engine is not engine:
             await model_engine.dispose()
 
-    provider_gateway = _provider_from_environment()
     artifact_root = os.environ.get("XINGJING_M06_ARTIFACT_ROOT", "").strip()
+    artifact_store = LocalGenerationArtifactStore(artifact_root) if artifact_root else None
+    provider_gateway = _provider_from_environment(artifact_store)
     provider_project_root = os.environ.get("XINGJING_M06_PROVIDER_PROJECT_ROOT", "").strip()
     callback_secret = os.environ.get("XINGJING_M06_PROVIDER_CALLBACK_SECRET", "").strip()
     billing_callback_secret = os.environ.get("XINGJING_M06_BILLING_CALLBACK_SECRET", "").strip()
@@ -1322,7 +1336,7 @@ def create_production_generation_runtime(
         session_factory=factory,
         context_resolver=context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway()),
         provider_gateway=provider_gateway,
-        artifact_store=LocalGenerationArtifactStore(artifact_root) if artifact_root else None,
+        artifact_store=artifact_store,
         provider_callback_secret=callback_secret or None,
         provider_project_root=provider_project_root or None,
         billing_policy=billing_policy,
@@ -1342,7 +1356,9 @@ def _unavailable_runtime(code: str) -> GenerationRuntime:
     )
 
 
-def _provider_from_environment() -> HttpGenerationProviderGateway | None:
+def _provider_from_environment(
+    artifact_store: LocalGenerationArtifactStore | None = None,
+) -> HttpGenerationProviderGateway | None:
     values = {
         "provider_id": os.environ.get("XINGJING_M06_PROVIDER_ID", "").strip(),
         "default_model_id": os.environ.get("XINGJING_M06_PROVIDER_MODEL_ID", "").strip(),
@@ -1353,7 +1369,11 @@ def _provider_from_environment() -> HttpGenerationProviderGateway | None:
     if not any(values.values()):
         return None
     try:
-        return HttpGenerationProviderGateway(**values)
+        return HttpGenerationProviderGateway(
+            **values,
+            artifact_store=artifact_store,
+            input_contract=os.environ.get("XINGJING_M06_PROVIDER_INPUT_CONTRACT", "").strip() or None,
+        )
     except ValueError:
         # A partial deployment must keep the application available and fail
         # closed at generation submission instead of breaking application boot.

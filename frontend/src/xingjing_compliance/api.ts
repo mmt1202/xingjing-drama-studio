@@ -1,4 +1,5 @@
 import { createAuthenticatedFetcher } from "@/utils/auth";
+import i18n from "@/i18n";
 import type {
   ApiEnvelope,
   ApiErrorEnvelope,
@@ -55,6 +56,7 @@ export function createComplianceExportApi({
     try {
       const headers = new Headers(init.headers);
       headers.set("Accept", "application/json");
+      headers.set("Accept-Language", i18n.resolvedLanguage ?? i18n.language ?? "zh");
       if (init.body) headers.set("Content-Type", "application/json");
       const token = await getAccessToken?.();
       if (token) headers.set("Authorization", `Bearer ${token}`);
