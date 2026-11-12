@@ -2,6 +2,15 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  nativeUnknown: "供应商是否受理尚未确认。费用继续预留，系统不会自动重复生成；请管理员核对供应商记录后处理。",
+  nativePublishing: "结果已取得，正在恢复本地入库，不会再次调用供应商。",
+  nativeConfiguration: "原生图片通道尚未准备完成，请管理员核对供应商配置。",
+  nativeCredentialGrant: "当前工作区尚未获得所选供应商凭据的有效使用授权。",
+  nativeCredential: "所选供应商密钥或启用状态不可用，请管理员检查。",
+  nativePricing: "尚未配置成功交付单价，请管理员确认定价后再提交。",
+  nativeModel: "当前原生图片通道尚不支持所选模型或参数。",
+  nativeDatabase: "供应商配置与制作数据源不一致，请管理员检查部署。",
+  fixedCharge: "成功交付固定收费：{{currency}} {{amount}}；失败或未知结果以任务账单状态为准。",
   configuration: "生成配置", available: "可用", unconfigured: "待配置",
   channelStatus: "生成通道：{{submission}} · 结果确认：{{confirmation}}",
   reservation: "单次费用预留：{{amount}}；实际费用以任务账单为准。",
@@ -30,6 +39,15 @@ const zh = {
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
+  nativeUnknown: "Provider acceptance is unknown. Funds remain reserved and generation will not be repeated automatically. Ask an administrator to verify provider records.",
+  nativePublishing: "The result is available. Local publication is being recovered without another provider call.",
+  nativeConfiguration: "The native image channel is not ready. Ask an administrator to check provider configuration.",
+  nativeCredentialGrant: "This workspace has no valid grant for the selected provider credential.",
+  nativeCredential: "The selected provider key or active status is unavailable. Ask an administrator to check it.",
+  nativePricing: "The successful-delivery price is not configured. Ask an administrator to confirm pricing.",
+  nativeModel: "The native image channel does not support the selected model or parameters.",
+  nativeDatabase: "Provider configuration and production data sources differ. Ask an administrator to check deployment.",
+  fixedCharge: "Fixed successful-delivery charge: {{currency}} {{amount}}. Failed or unknown outcomes follow the task billing status.",
   configuration: "Generation configuration", available: "Available", unconfigured: "Configuration needed",
   channelStatus: "Generation channel: {{submission}} · Result confirmation: {{confirmation}}",
   reservation: "Reservation per task: {{amount}}. Actual charges appear on the task bill.",
@@ -57,6 +75,15 @@ const en: Copy = {
   estimate: "Server default model estimate: {{currency}} {{amount}}. Actual charges appear on the task bill.", changedModel: "Estimates for a manually selected model are checked by the server at submission.",
 };
 const vi: Copy = {
+  nativeUnknown: "Chưa rõ nhà cung cấp đã nhận yêu cầu chưa. Phí vẫn giữ và không tự sinh lại. Nhờ quản trị viên xác minh bản ghi nhà cung cấp.",
+  nativePublishing: "Đã có kết quả; đang khôi phục lưu cục bộ mà không gọi nhà cung cấp lần nữa.",
+  nativeConfiguration: "Kênh ảnh gốc chưa sẵn sàng. Nhờ quản trị viên kiểm tra cấu hình nhà cung cấp.",
+  nativeCredentialGrant: "Không gian chưa có cấp quyền hợp lệ cho thông tin nhà cung cấp đã chọn.",
+  nativeCredential: "Khóa hoặc trạng thái bật không khả dụng. Nhờ quản trị viên kiểm tra.",
+  nativePricing: "Chưa cấu hình đơn giá giao thành công. Nhờ quản trị viên xác nhận giá.",
+  nativeModel: "Kênh ảnh gốc không hỗ trợ mô hình hoặc tham số đã chọn.",
+  nativeDatabase: "Nguồn dữ liệu nhà cung cấp và sản xuất khác nhau. Nhờ quản trị viên kiểm tra triển khai.",
+  fixedCharge: "Phí cố định khi giao thành công: {{currency}} {{amount}}. Kết quả lỗi hoặc chưa rõ theo trạng thái hóa đơn tác vụ.",
   configuration: "Cấu hình sinh nội dung", available: "Khả dụng", unconfigured: "Cần cấu hình",
   channelStatus: "Kênh sinh: {{submission}} · Xác nhận kết quả: {{confirmation}}",
   reservation: "Giữ trước mỗi tác vụ: {{amount}}. Phí thực tế hiển thị trong hóa đơn tác vụ.",

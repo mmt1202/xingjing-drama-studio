@@ -550,7 +550,9 @@ class EditingRuntime:
         self._engine = engine
         ids = Uuid7IdGenerator()
         timeline_repository = SqlAlchemyTimelineRepository(session_factory)
-        render_repository = SqlAlchemyRenderRepository(session_factory)
+        from server.xingjing_budget import BudgetAdmissionService
+
+        render_repository = SqlAlchemyRenderRepository(session_factory, budget_guard=BudgetAdmissionService())
         audit = SqlAlchemyAuditRecorder(session_factory)
         self._media_catalog = GeneratedAssetMediaVersionCatalog(session_factory)
         storage = LocalRenderObjectStorage(root=object_storage_root, media_probe=FFprobeRenderMediaProbe())

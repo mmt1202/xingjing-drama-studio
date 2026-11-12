@@ -34,6 +34,7 @@ const copy: Record<GenerationWorkbenchView, { title: string; eyebrow: string; de
 
 function errorText(error: unknown): string {
   if (!(error instanceof GenerationCenterApiError)) return "网络暂不可用，请稍后重新读取服务端状态。";
+  if (/^(BUDGET_|PROJECT_BUDGET_|EPISODE_BUDGET_|GENERATION_NATIVE_)/.test(error.code)) return error.message;
   if (error.status === 403) return "服务端拒绝了当前工作区或项目的数据访问；不会显示任何任务详情。";
   if (error.status === 409) return "任务版本已变化。已保留当前界面，并请重新读取服务端最终状态。";
   if (error.status === 503) return "生成服务当前不可用，未提交或伪造任何任务结果。";
@@ -76,6 +77,7 @@ function ModelStatus({ model }: { readonly model: GenerationModelAvailability | 
   if (!model) return null;
   return <section className="rounded-xl border border-white/10 bg-[#12141b] p-5">
     <p className="text-sm font-medium text-slate-200">{t("configuration")}</p>
+    {model.configuration_errors?.length ? <div role="status" className="mt-2 space-y-2 text-xs text-amber-200">{[...new Set(model.configuration_errors)].map((code) => <p key={code}>{t(code.includes("GRANT") ? "nativeCredentialGrant" : code.includes("CREDENTIAL") ? "nativeCredential" : code.includes("PRICE") ? "nativePricing" : code.includes("MODEL") || code.includes("PARAMETERS") ? "nativeModel" : code.includes("DATABASE") ? "nativeDatabase" : "nativeConfiguration")}</p>)}</div> : null}
     {model.provider_id && model.model_id ? <>
       <h2 className="mt-2 text-lg font-semibold">{model.provider_id} / {model.model_id}</h2>
       <p className="mt-2 text-sm text-slate-400">{t("channelStatus", { submission: t(model.submission_available ? "available" : "unconfigured"), confirmation: t(model.callback_available ? "available" : "unconfigured") })}</p>
@@ -105,9 +107,12 @@ function CandidateComparison({ scope, candidates, total, selecting, onSelectCand
 }
 
 function DetailPanel({ detail, onClose, onSelectCandidate, selecting }: { readonly detail: GenerationTaskDetail | null; readonly onClose: () => void; readonly onSelectCandidate: (assetId: string) => void; readonly selecting: boolean }) {
+  const { t: submissionText } = useSubmissionTranslation();
   if (!detail) return <aside className="border border-white/10 bg-stone-950/50 p-5 text-sm text-stone-500">选择任务以读取服务端详情、产物 ID、校验摘要与更新时间。</aside>;
   const task = detail.task;
   return <aside className="border border-white/10 bg-stone-950/80 p-5">
+    {detail.progress.nativeExecution?.status === "unknown" ? <p role="status" className="mb-4 rounded-lg border border-amber-400/20 p-3 text-sm text-amber-200">{submissionText("nativeUnknown")}</p> : null}
+    {detail.progress.nativeExecution?.status === "result_ready" ? <p role="status" className="mb-4 rounded-lg border border-white/10 p-3 text-sm text-slate-300">{submissionText("nativePublishing")}</p> : null}
     <div className="flex items-start justify-between gap-4"><div><p className="font-mono text-[11px] text-cyan-200">TASK DETAIL</p><h2 className="mt-1 font-mono text-sm text-stone-100">{task.task_id}</h2></div><button type="button" onClick={onClose} className="text-sm text-stone-400 hover:text-stone-100">关闭</button></div>
     <dl className="mt-5 grid gap-4 text-sm">
       <div><dt className="text-xs text-stone-500">模型路由</dt><dd className="mt-1 font-mono text-xs text-stone-200">{task.resolved_provider_id ?? "待解析"} / {task.resolved_model_id ?? "待解析"}</dd></div>

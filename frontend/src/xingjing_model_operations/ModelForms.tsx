@@ -82,9 +82,13 @@ export function ModelEditor({ model, ...props }: FormProps & { model?: ModelReco
 export function PriceEditor({ model, ...props }: FormProps & { model: ModelRecord }) {
   const { t } = useModelTranslation();
   const [version, setVersion] = useState(""); const [currency, setCurrency] = useState(model.pricing?.currency ?? ""); const [amount, setAmount] = useState("");
-  return <CommandPanel {...props} title={t("price")} command={reason => ({ action: "publish_pricing", registryKey: model.registryKey, version: model.version, reason, payload: { pricingVersion: version.trim(), currency: currency.trim().toUpperCase(), estimatedMinor: Number(amount) } })}>
+  const [fixed, setFixed] = useState(false), [success, setSuccess] = useState("");
+  return <CommandPanel {...props} title={t("price")} command={reason => ({ action: "publish_pricing", registryKey: model.registryKey, version: model.version, reason, payload: { pricingVersion: version.trim(), currency: currency.trim().toUpperCase(), estimatedMinor: Number(amount), ...(fixed ? { successfulOutputMinor: Number(success) } : {}) } })}>
     <p className="break-all text-sm text-orange-200">{model.displayName} · {model.registryKey}</p><p className="text-xs leading-6 text-slate-500">{t("priceHint")}</p>
     <Field label={t("priceVersion")}><input className={modelField} value={version} onChange={event => setVersion(event.target.value)} required maxLength={64} /></Field><Field label={t("currency")}><input className={modelField} value={currency} onChange={event => setCurrency(event.target.value.toUpperCase())} required minLength={3} maxLength={3} pattern="[A-Z]{3}" /></Field><Field label={t("amount")}><input className={modelField} type="number" min={1} max={2147483647} step={1} value={amount} onChange={event => setAmount(event.target.value)} required /></Field>
+    <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={fixed} onChange={event => setFixed(event.target.checked)} />{t("fixedSuccessPrice")}</label>
+    <p className="text-xs leading-6 text-slate-400">{t("fixedSuccessHelp")}</p>
+    {fixed ? <Field label={t("successAmount")}><input className={modelField} type="number" min={0} max={amount ? Number(amount) : 2147483647} step={1} value={success} onChange={event => setSuccess(event.target.value)} required /></Field> : null}
   </CommandPanel>;
 }
 

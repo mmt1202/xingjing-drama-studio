@@ -96,8 +96,11 @@ class OpenAIImageBackend:
         model: str | None = None,
         base_url: str | None = None,
         mode: ImageBackendMode = "both",
+        automatic_retries: bool = True,
     ):
-        self._client = create_openai_client(api_key=api_key, base_url=base_url)
+        self._client = create_openai_client(
+            api_key=api_key, base_url=base_url, max_retries=None if automatic_retries else 0
+        )
         self._model = model or DEFAULT_MODEL
         self._capabilities = set(self._MODE_TO_CAPS[mode])
 
@@ -113,8 +116,14 @@ class OpenAIImageBackend:
     def capabilities(self) -> set[ImageCapability]:
         return self._capabilities
 
+    async def close(self) -> None:
+        await self._client.close()
+
     @with_retry_async(retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
+        return await self.generate_once(request)
+
+    async def generate_once(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         has_refs = bool(request.reference_images)
         if has_refs and ImageCapability.IMAGE_TO_IMAGE not in self._capabilities:
             raise ImageCapabilityError("image_endpoint_mismatch_no_i2i", model=self._model)
@@ -230,4 +239,5 @@ class OpenAIImageBackend:
             image_output_tokens=img_out,
             text_input_tokens=txt_in,
             text_output_tokens=txt_out,
+            upstream_request_id=getattr(response, "_request_id", None),
         )

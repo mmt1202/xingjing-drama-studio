@@ -7,6 +7,8 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
 
+from lib.i18n import get_translator
+from server.xingjing_budget import BudgetError
 from server.xingjing_editing import (
     AuditEvent,
     EditingError,
@@ -69,6 +71,23 @@ class EditingContractRoute(APIRoute):
         async def handler(request: Request) -> Response:
             try:
                 return await original(request)
+            except BudgetError as error:
+                response_status = 503 if error.code.endswith("UNAVAILABLE") else error.status_code
+                return JSONResponse(
+                    status_code=response_status,
+                    content={"detail": {"code": error.code, "message": get_translator(request)(error.code.lower())}},
+                )
+            except HTTPException as error:
+                detail = error.detail
+                code = str(detail.get("code", "")) if isinstance(detail, dict) else ""
+                if isinstance(detail, dict) and code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_")):
+                    response_status = 503 if code.endswith("UNAVAILABLE") else BudgetError(code).status_code
+                    raise HTTPException(
+                        status_code=response_status,
+                        detail={**detail, "message": get_translator(request)(code.lower())},
+                        headers=error.headers,
+                    ) from error
+                raise
             except LookupError as error:
                 return JSONResponse(status_code=404, content={"detail": {"code": str(error)}})
             except (SQLAlchemyError, ObjectStorageError):

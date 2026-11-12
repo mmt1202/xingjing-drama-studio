@@ -14,7 +14,7 @@ export function NotFoundPage() {
       <p className="mt-4 text-[15px] text-text-3">{t("not_found_title")}</p>
       <button
         type="button"
-        onClick={() => navigate("/app/projects", { replace: true })}
+        onClick={() => navigate("/app/home", { replace: true })}
         className={`mt-8 ${GHOST_BTN_LG_CLS}`}
       >
         {t("not_found_back")}

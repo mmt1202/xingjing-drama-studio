@@ -98,7 +98,7 @@ export function ProjectSetupFields({ step, name, onName, value, patch, context, 
     </div>}
     {step === 2 && <>
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label={t("budgetMinor")}><input className={setupInput} type="number" min="0.01" max="1000000000" step="0.01" placeholder={t("optional")} value={value.budgetMinor === null ? "" : value.budgetMinor / 100} aria-invalid={invalidFields.includes("budgetMinor")} onChange={(event) => patch({ budgetMinor: event.target.value === "" ? null : Math.round(Number(event.target.value) * 100) })} /></Field>
+        <Field label={t("budgetMinor")}><input className={setupInput} type="number" min="0" max="1000000000" step="0.01" placeholder={t("optional")} disabled={!options?.permissions?.includes("billing.view") || !options.permissions.includes("billing.budget.manage")} value={value.budgetMinor === null ? "" : value.budgetMinor / 100} aria-invalid={invalidFields.includes("budgetMinor")} onChange={(event) => patch({ budgetMinor: event.target.value === "" ? null : Math.round(Number(event.target.value) * 100) })} /></Field>
         {number("scheduleDays", 1, 3650)}{number("teamSeats", 1, 1000)}{number("reviewSeats", 1, 1000)}
         <p className="text-xs leading-5 text-slate-400 sm:col-span-2">{t("seatHelp")}</p>
         {number("internalReviewRounds", 1, 20)}{number("clientReviewRounds", 0, 20)}

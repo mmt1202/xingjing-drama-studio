@@ -27,6 +27,7 @@ from server.xingjing_audio_persistence.models import (
     subtitle_track_versions,
     subtitle_tracks,
 )
+from server.xingjing_budget import BudgetAdmissionService, BudgetError, BudgetTarget
 from server.xingjing_generation_persistence.repository import GeneratedAssetRow, GenerationBillingAccountRow
 
 
@@ -91,8 +92,11 @@ class AudioPostgresRepository:
     missing or foreign object has the same ``AudioPersistenceNotFound`` outcome.
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], *, budget_guard: BudgetAdmissionService | None = None
+    ) -> None:
         self._session_factory = session_factory
+        self._budget_guard = budget_guard
 
     async def get_audio_track(self, scope: AudioScope, track_id: str) -> Mapping[str, Any]:
         return await self._get_scoped(audio_tracks, scope, track_id)
@@ -227,13 +231,17 @@ class AudioPostgresRepository:
                 .order_by(subtitle_tracks.c.language.asc(), subtitle_tracks.c.id.asc())
             )
             selected_lip_sync = (
-                await session.execute(
-                    select(lip_sync_versions)
-                    .where(*scope.criteria(lip_sync_versions), lip_sync_versions.c.is_selected.is_(True))
-                    .order_by(lip_sync_versions.c.updated_at.desc(), lip_sync_versions.c.id.asc())
-                    .limit(1)
+                (
+                    await session.execute(
+                        select(lip_sync_versions)
+                        .where(*scope.criteria(lip_sync_versions), lip_sync_versions.c.is_selected.is_(True))
+                        .order_by(lip_sync_versions.c.updated_at.desc(), lip_sync_versions.c.id.asc())
+                        .limit(1)
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         return {
             "audioVersions": tuple(dict(row) for row in audio_rows.mappings().all()),
             "subtitleVersions": tuple(dict(row) for row in subtitle_rows.mappings().all()),
@@ -284,9 +292,7 @@ class AudioPostgresRepository:
         subtitle_version_id: str | None,
         input_video_key: str,
     ) -> None:
-        await self._assert_lip_sync_inputs(
-            scope, audio_version_id, subtitle_version_id, input_video_key
-        )
+        await self._assert_lip_sync_inputs(scope, audio_version_id, subtitle_version_id, input_video_key)
 
     async def complete_lip_sync_version(
         self,
@@ -306,8 +312,13 @@ class AudioPostgresRepository:
     ) -> Mapping[str, Any]:
         async with self._session_factory.begin() as session:
             replay = await self._claim_idempotency(
-                session, scope, "complete_lip_sync_version", idempotency_key, request_fingerprint,
-                "lip_sync_version", lip_sync_versions,
+                session,
+                scope,
+                "complete_lip_sync_version",
+                idempotency_key,
+                request_fingerprint,
+                "lip_sync_version",
+                lip_sync_versions,
             )
             if replay is not None:
                 return replay
@@ -328,14 +339,20 @@ class AudioPostgresRepository:
             result = await session.execute(
                 update(lip_sync_versions)
                 .where(
-                    *scope.criteria(lip_sync_versions), lip_sync_versions.c.id == version_id,
+                    *scope.criteria(lip_sync_versions),
+                    lip_sync_versions.c.id == version_id,
                     lip_sync_versions.c.version == expected_version,
                     lip_sync_versions.c.state.in_(("pending", "failed")),
                 )
                 .values(
-                    state="ready", source_task_id=source_task_id, output_video_key=output_key,
-                    output_sha256=output_sha256, output_size_bytes=output_size_bytes, mime_type=mime_type,
-                    failure_metadata=None, version=lip_sync_versions.c.version + 1,
+                    state="ready",
+                    source_task_id=source_task_id,
+                    output_video_key=output_key,
+                    output_sha256=output_sha256,
+                    output_size_bytes=output_size_bytes,
+                    mime_type=mime_type,
+                    failure_metadata=None,
+                    version=lip_sync_versions.c.version + 1,
                 )
                 .returning(*lip_sync_versions.c)
             )
@@ -351,7 +368,16 @@ class AudioPostgresRepository:
                 )
                 .values(resource_id=version_id, response_metadata={"resource_id": version_id})
             )
-            await self._audit(session, scope, request_id, "complete_lip_sync_version", actor_id, "lip_sync_version", version_id, "succeeded")
+            await self._audit(
+                session,
+                scope,
+                request_id,
+                "complete_lip_sync_version",
+                actor_id,
+                "lip_sync_version",
+                version_id,
+                "succeeded",
+            )
             return dict(cast(Mapping[str, Any], row))
 
     async def create_lip_sync_fallback(
@@ -367,10 +393,16 @@ class AudioPostgresRepository:
     ) -> Mapping[str, Any]:
         async with self._session_factory() as session:
             base = (
-                await session.execute(
-                    select(lip_sync_versions).where(*scope.criteria(lip_sync_versions), lip_sync_versions.c.id == fallback_of_id)
+                (
+                    await session.execute(
+                        select(lip_sync_versions).where(
+                            *scope.criteria(lip_sync_versions), lip_sync_versions.c.id == fallback_of_id
+                        )
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         if base is None:
             raise AudioPersistenceNotFound("scoped resource was not found")
         return await self._create_scoped(
@@ -408,18 +440,27 @@ class AudioPostgresRepository:
     ) -> Mapping[str, Any]:
         async with self._session_factory.begin() as session:
             replay = await self._claim_idempotency(
-                session, scope, "select_lip_sync_version", idempotency_key, request_fingerprint,
-                "lip_sync_version", lip_sync_versions,
+                session,
+                scope,
+                "select_lip_sync_version",
+                idempotency_key,
+                request_fingerprint,
+                "lip_sync_version",
+                lip_sync_versions,
             )
             if replay is not None:
                 return replay
             target = (
-                await session.execute(
-                    select(lip_sync_versions)
-                    .where(*scope.criteria(lip_sync_versions), lip_sync_versions.c.id == version_id)
-                    .with_for_update()
+                (
+                    await session.execute(
+                        select(lip_sync_versions)
+                        .where(*scope.criteria(lip_sync_versions), lip_sync_versions.c.id == version_id)
+                        .with_for_update()
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if target is None:
                 raise AudioPersistenceNotFound("scoped resource was not found")
             if target["version"] != expected_version:
@@ -431,14 +472,24 @@ class AudioPostgresRepository:
                 .where(
                     *scope.criteria(lip_sync_versions),
                     lip_sync_versions.c.input_video_key == target["input_video_key"],
-                    lip_sync_versions.c.id != version_id, lip_sync_versions.c.is_selected.is_(True),
+                    lip_sync_versions.c.id != version_id,
+                    lip_sync_versions.c.is_selected.is_(True),
                 )
                 .values(is_selected=False, selected_by=None, selected_at=None, version=lip_sync_versions.c.version + 1)
             )
             result = await session.execute(
                 update(lip_sync_versions)
-                .where(*scope.criteria(lip_sync_versions), lip_sync_versions.c.id == version_id, lip_sync_versions.c.version == expected_version)
-                .values(is_selected=True, selected_by=actor_id, selected_at=func.now(), version=lip_sync_versions.c.version + 1)
+                .where(
+                    *scope.criteria(lip_sync_versions),
+                    lip_sync_versions.c.id == version_id,
+                    lip_sync_versions.c.version == expected_version,
+                )
+                .values(
+                    is_selected=True,
+                    selected_by=actor_id,
+                    selected_at=func.now(),
+                    version=lip_sync_versions.c.version + 1,
+                )
                 .returning(*lip_sync_versions.c)
             )
             row = result.mappings().one_or_none()
@@ -453,7 +504,16 @@ class AudioPostgresRepository:
                 )
                 .values(resource_id=version_id, response_metadata={"resource_id": version_id})
             )
-            await self._audit(session, scope, request_id, "select_lip_sync_version", actor_id, "lip_sync_version", version_id, "succeeded")
+            await self._audit(
+                session,
+                scope,
+                request_id,
+                "select_lip_sync_version",
+                actor_id,
+                "lip_sync_version",
+                version_id,
+                "succeeded",
+            )
             return dict(cast(Mapping[str, Any], row))
 
     async def create_audio_track(
@@ -534,9 +594,7 @@ class AudioPostgresRepository:
                 .offset(offset)
                 .limit(limit)
             )
-            total = await session.scalar(
-                select(func.count()).select_from(generation_tasks).where(*criteria)
-            )
+            total = await session.scalar(select(func.count()).select_from(generation_tasks).where(*criteria))
         return tuple(dict(row) for row in rows.mappings().all()), int(total or 0)
 
     async def list_audit_events(
@@ -700,6 +758,8 @@ class AudioPostgresRepository:
         currency: str,
         pricing_version: str,
         timeout_at: datetime | None = None,
+        budget_target: BudgetTarget | None = None,
+        shared_scope_authorized: bool = False,
     ) -> Mapping[str, Any]:
         deadline = timeout_at or datetime.now(UTC) + timedelta(hours=6)
         if (
@@ -726,6 +786,7 @@ class AudioPostgresRepository:
         }
         normalized_currency = currency.strip().upper()
         async with self._session_factory.begin() as session:
+            locked = await self._lock_budget_project(session, scope)
             replay = await self._claim_idempotency(
                 session,
                 scope,
@@ -744,6 +805,34 @@ class AudioPostgresRepository:
                 raise AudioBillingError("AUDIO_BILLING_CURRENCY_MISMATCH")
             if account.available_minor < estimated_minor:
                 raise AudioBillingError("AUDIO_INSUFFICIENT_CREDITS")
+            if self._budget_guard is not None and locked is not None:
+                try:
+                    bound = await self._budget_guard.resource_target(
+                        session, locked, module="audio", source_kind=resource_type, source_reference=resource_id
+                    )
+                    if bound is not None:
+                        if budget_target is not None and (
+                            bound.kind != budget_target.kind or bound.episode_id != budget_target.episode_id
+                        ):
+                            raise AudioBillingError("BUDGET_RESOURCE_SCOPE_CONFLICT")
+                        budget_target = bound
+                    elif (
+                        budget_target is not None
+                        and budget_target.kind == "project_shared"
+                        and not shared_scope_authorized
+                    ):
+                        raise AudioBillingError("BUDGET_SHARED_SCOPE_FORBIDDEN")
+                    await self._budget_guard.check_reservation(
+                        session,
+                        locked,
+                        module="audio",
+                        task_id=task_id,
+                        currency=normalized_currency,
+                        estimated_minor=estimated_minor,
+                        target=budget_target,
+                    )
+                except BudgetError as error:
+                    raise AudioBillingError(error.code) from error
             result = await session.execute(insert(generation_tasks).values(**values).returning(*generation_tasks.c))
             row = dict(result.mappings().one())
             now = cast(datetime, row["created_at"])
@@ -808,6 +897,7 @@ class AudioPostgresRepository:
                             ("pending", "queued", "running", "retrying", "cancelling", "failed")
                         ),
                         audio_billing_holds.c.status == "active",
+                        generation_tasks.c.failure_metadata["submission_unknown"].as_boolean().is_not(True),
                         generation_tasks.c.timeout_at <= at,
                     )
                     .order_by(generation_tasks.c.timeout_at, generation_tasks.c.id)
@@ -815,6 +905,46 @@ class AudioPostgresRepository:
                 )
             ).mappings()
             return tuple(dict(row) for row in rows)
+
+    async def claim_provider_submission(
+        self, scope: AudioScope, *, task_id: str, expected_version: int
+    ) -> Mapping[str, Any] | None:
+        """Claim one external submission; interrupted claims require verification, never TTL resubmission."""
+        async with self._session_factory.begin() as session:
+            result = await session.execute(
+                update(generation_tasks)
+                .where(
+                    *scope.criteria(generation_tasks),
+                    generation_tasks.c.id == task_id,
+                    generation_tasks.c.version == expected_version,
+                    generation_tasks.c.status.in_(("pending", "retrying")),
+                )
+                .values(
+                    status="running",
+                    version=generation_tasks.c.version + 1,
+                    attempt_count=generation_tasks.c.attempt_count + 1,
+                    failure_metadata={
+                        "code": "AUDIO_PROVIDER_SUBMISSION_UNKNOWN",
+                        "submission_unknown": True,
+                        "retryable": False,
+                    },
+                )
+                .returning(*generation_tasks.c)
+            )
+            row = result.mappings().one_or_none()
+            if row is None:
+                return None
+            await self._audit(
+                session,
+                scope,
+                f"submission:{task_id}:{row['version']}",
+                "claim_provider_submission",
+                str(row["created_by"]),
+                "generation_task",
+                task_id,
+                "succeeded",
+            )
+            return dict(row)
 
     async def transition_task(
         self,
@@ -856,7 +986,11 @@ class AudioPostgresRepository:
         async with self._session_factory.begin() as session:
             result = await session.execute(
                 update(generation_tasks)
-                .where(*scope.criteria(generation_tasks), generation_tasks.c.id == task_id, generation_tasks.c.version == expected_version)
+                .where(
+                    *scope.criteria(generation_tasks),
+                    generation_tasks.c.id == task_id,
+                    generation_tasks.c.version == expected_version,
+                )
                 .values(**values)
                 .returning(*generation_tasks.c)
             )
@@ -887,7 +1021,16 @@ class AudioPostgresRepository:
                     currency=None,
                     release=True,
                 )
-            await self._audit(session, scope, request_id, "transition_generation_task", actor_id, "generation_task", task_id, "succeeded")
+            await self._audit(
+                session,
+                scope,
+                request_id,
+                "transition_generation_task",
+                actor_id,
+                "generation_task",
+                task_id,
+                "succeeded",
+            )
             return dict(cast(Mapping[str, Any], row))
 
     async def begin_task_cancellation(
@@ -925,14 +1068,18 @@ class AudioPostgresRepository:
             )
             if inserted.scalar_one_or_none() is None:
                 existing = (
-                    await session.execute(
-                        select(idempotency_records).where(
-                            *scope.criteria(idempotency_records),
-                            idempotency_records.c.operation == operation,
-                            idempotency_records.c.idempotency_key == idempotency_key,
+                    (
+                        await session.execute(
+                            select(idempotency_records).where(
+                                *scope.criteria(idempotency_records),
+                                idempotency_records.c.operation == operation,
+                                idempotency_records.c.idempotency_key == idempotency_key,
+                            )
                         )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
                 if existing["request_fingerprint"] != request_fingerprint:
                     raise IdempotencyConflict("idempotency key was reused with different request content")
                 if existing["resource_id"] is None:
@@ -995,14 +1142,18 @@ class AudioPostgresRepository:
         """Return a prior cancellation result without changing task state."""
         async with self._session_factory() as session:
             existing = (
-                await session.execute(
-                    select(idempotency_records).where(
-                        *scope.criteria(idempotency_records),
-                        idempotency_records.c.operation == "cancel_generation_task",
-                        idempotency_records.c.idempotency_key == idempotency_key,
+                (
+                    await session.execute(
+                        select(idempotency_records).where(
+                            *scope.criteria(idempotency_records),
+                            idempotency_records.c.operation == "cancel_generation_task",
+                            idempotency_records.c.idempotency_key == idempotency_key,
+                        )
                     )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if existing is None:
                 return None
             if existing["request_fingerprint"] != request_fingerprint:
@@ -1097,25 +1248,34 @@ class AudioPostgresRepository:
         require_remaining_attempt: bool,
     ) -> tuple[Mapping[str, Any], bool]:
         async with self._session_factory.begin() as session:
+            if require_remaining_attempt:
+                await self._lock_budget_project(session, scope)
             inserted = await session.execute(
                 pg_insert(idempotency_records)
                 .values(
-                    **scope.values(), operation=operation, idempotency_key=idempotency_key,
-                    request_fingerprint=request_fingerprint, resource_type="generation_task",
+                    **scope.values(),
+                    operation=operation,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    resource_type="generation_task",
                 )
                 .on_conflict_do_nothing()
                 .returning(idempotency_records.c.idempotency_key)
             )
             if inserted.scalar_one_or_none() is None:
                 existing = (
-                    await session.execute(
-                        select(idempotency_records).where(
-                            *scope.criteria(idempotency_records),
-                            idempotency_records.c.operation == operation,
-                            idempotency_records.c.idempotency_key == idempotency_key,
+                    (
+                        await session.execute(
+                            select(idempotency_records).where(
+                                *scope.criteria(idempotency_records),
+                                idempotency_records.c.operation == operation,
+                                idempotency_records.c.idempotency_key == idempotency_key,
+                            )
                         )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
                 if existing["request_fingerprint"] != request_fingerprint:
                     raise IdempotencyConflict("idempotency key was reused with different request content")
                 if existing["resource_id"] is None:
@@ -1136,19 +1296,29 @@ class AudioPostgresRepository:
             if clear_finished_at:
                 values["finished_at"] = None
             where = [
-                *scope.criteria(generation_tasks), generation_tasks.c.id == task_id,
-                generation_tasks.c.version == expected_version, generation_tasks.c.status.in_(expected_statuses),
+                *scope.criteria(generation_tasks),
+                generation_tasks.c.id == task_id,
+                generation_tasks.c.version == expected_version,
+                generation_tasks.c.status.in_(expected_statuses),
             ]
             if require_remaining_attempt:
                 where.append(generation_tasks.c.attempt_count < generation_tasks.c.max_attempts)
-            result = await session.execute(update(generation_tasks).where(*where).values(**values).returning(*generation_tasks.c))
+            result = await session.execute(
+                update(generation_tasks).where(*where).values(**values).returning(*generation_tasks.c)
+            )
             row = result.mappings().one_or_none()
             if row is None:
                 current = (
-                    await session.execute(
-                        select(generation_tasks).where(*scope.criteria(generation_tasks), generation_tasks.c.id == task_id)
+                    (
+                        await session.execute(
+                            select(generation_tasks).where(
+                                *scope.criteria(generation_tasks), generation_tasks.c.id == task_id
+                            )
+                        )
                     )
-                ).mappings().one_or_none()
+                    .mappings()
+                    .one_or_none()
+                )
                 if current is None:
                     raise AudioPersistenceNotFound("scoped resource was not found")
                 if current["version"] != expected_version:
@@ -1164,9 +1334,7 @@ class AudioPostgresRepository:
                 .values(resource_id=task_id, response_metadata={"resource_id": task_id})
             )
             if operation == "retry_generation_task":
-                await self._reactivate_task_billing(
-                    session, scope, task_id=task_id, event_id=request_id
-                )
+                await self._reactivate_task_billing(session, scope, task_id=task_id, event_id=request_id)
             elif operation == "record_generation_task_fallback":
                 await self._close_task_billing(
                     session,
@@ -1212,7 +1380,16 @@ class AudioPostgresRepository:
             row = result.mappings().one_or_none()
             if row is None:
                 await self._raise_missing_or_version_conflict(session, generation_tasks, scope, task_id)
-            await self._audit(session, scope, request_id, "claim_generation_task_lease", actor_id, "generation_task", task_id, "succeeded")
+            await self._audit(
+                session,
+                scope,
+                request_id,
+                "claim_generation_task_lease",
+                actor_id,
+                "generation_task",
+                task_id,
+                "succeeded",
+            )
             return dict(cast(Mapping[str, Any], row))
 
     async def _get_scoped(self, table: Any, scope: AudioScope, object_id: str) -> Mapping[str, Any]:
@@ -1255,9 +1432,7 @@ class AudioPostgresRepository:
             if video is None:
                 raise AudioPersistenceNotFound("scoped video asset was not found")
 
-    async def _assert_task_resource(
-        self, scope: AudioScope, resource_type: str, resource_id: str
-    ) -> None:
+    async def _assert_task_resource(self, scope: AudioScope, resource_type: str, resource_id: str) -> None:
         table = {
             "audio_track": audio_tracks,
             "subtitle_track": subtitle_tracks,
@@ -1266,20 +1441,14 @@ class AudioPostgresRepository:
         if table is None:
             raise AudioPersistenceNotFound("unsupported scoped task resource")
         async with self._session_factory() as session:
-            exists = await session.scalar(
-                select(table.c.id).where(
-                    *scope.criteria(table), table.c.id == resource_id
-                )
-            )
+            exists = await session.scalar(select(table.c.id).where(*scope.criteria(table), table.c.id == resource_id))
         if exists is None:
             raise AudioPersistenceNotFound("scoped task resource was not found")
 
     async def _list_scoped(
         self, table: Any, scope: AudioScope, *, offset: int, limit: int
     ) -> tuple[tuple[Mapping[str, Any], ...], int]:
-        return await self._list_with_criteria(
-            table, list(scope.criteria(table)), offset=offset, limit=limit
-        )
+        return await self._list_with_criteria(table, list(scope.criteria(table)), offset=offset, limit=limit)
 
     async def _list_with_criteria(
         self, table: Any, criteria: list[Any], *, offset: int, limit: int
@@ -1311,7 +1480,19 @@ class AudioPostgresRepository:
             )
         return tuple(dict(row) for row in rows.mappings().all()), int(total or 0)
 
-    async def _create_scoped(self, *, table: Any, scope: AudioScope, values: Mapping[str, Any], operation: str, resource_type: str, actor_id: str, request_id: str, idempotency_key: str, request_fingerprint: str) -> Mapping[str, Any]:
+    async def _create_scoped(
+        self,
+        *,
+        table: Any,
+        scope: AudioScope,
+        values: Mapping[str, Any],
+        operation: str,
+        resource_type: str,
+        actor_id: str,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> Mapping[str, Any]:
         async with self._session_factory.begin() as session:
             replay = await self._claim_idempotency(
                 session, scope, operation, idempotency_key, request_fingerprint, resource_type, table
@@ -1322,13 +1503,39 @@ class AudioPostgresRepository:
             row = dict(result.mappings().one())
             await session.execute(
                 update(idempotency_records)
-                .where(*scope.criteria(idempotency_records), idempotency_records.c.operation == operation, idempotency_records.c.idempotency_key == idempotency_key)
+                .where(
+                    *scope.criteria(idempotency_records),
+                    idempotency_records.c.operation == operation,
+                    idempotency_records.c.idempotency_key == idempotency_key,
+                )
                 .values(resource_id=row["id"], response_metadata={"resource_id": str(row["id"])})
             )
             await self._audit(session, scope, request_id, operation, actor_id, resource_type, row["id"], "succeeded")
             return row
 
-    async def _append_version(self, *, aggregate: Any, versions: Any, scope: AudioScope, track_id: str, version_id: str, expected_version: int, payload_column: str, payload: Mapping[str, Any], actor_id: str, request_id: str, idempotency_key: str, request_fingerprint: str, operation: str, resource_type: str, object_key: str | None, object_sha256: str | None, object_size_bytes: int | None, mime_type: str | None, source_task_id: str | None) -> Mapping[str, Any]:
+    async def _append_version(
+        self,
+        *,
+        aggregate: Any,
+        versions: Any,
+        scope: AudioScope,
+        track_id: str,
+        version_id: str,
+        expected_version: int,
+        payload_column: str,
+        payload: Mapping[str, Any],
+        actor_id: str,
+        request_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        operation: str,
+        resource_type: str,
+        object_key: str | None,
+        object_sha256: str | None,
+        object_size_bytes: int | None,
+        mime_type: str | None,
+        source_task_id: str | None,
+    ) -> Mapping[str, Any]:
         async with self._session_factory.begin() as session:
             replay = await self._claim_idempotency(
                 session, scope, operation, idempotency_key, request_fingerprint, resource_type, versions
@@ -1365,7 +1572,11 @@ class AudioPostgresRepository:
             row = dict(result.mappings().one())
             await session.execute(
                 update(idempotency_records)
-                .where(*scope.criteria(idempotency_records), idempotency_records.c.operation == operation, idempotency_records.c.idempotency_key == idempotency_key)
+                .where(
+                    *scope.criteria(idempotency_records),
+                    idempotency_records.c.operation == operation,
+                    idempotency_records.c.idempotency_key == idempotency_key,
+                )
                 .values(resource_id=version_id, response_metadata={"resource_id": version_id, "revision": revision})
             )
             await self._audit(session, scope, request_id, operation, actor_id, resource_type, version_id, "succeeded")
@@ -1381,13 +1592,34 @@ class AudioPostgresRepository:
         resource_type: str,
         result_table: Any,
     ) -> Mapping[str, Any] | None:
-        statement = pg_insert(idempotency_records).values(
-            **scope.values(), operation=operation, idempotency_key=idempotency_key, request_fingerprint=request_fingerprint, resource_type=resource_type
-        ).on_conflict_do_nothing().returning(idempotency_records.c.idempotency_key)
+        statement = (
+            pg_insert(idempotency_records)
+            .values(
+                **scope.values(),
+                operation=operation,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+                resource_type=resource_type,
+            )
+            .on_conflict_do_nothing()
+            .returning(idempotency_records.c.idempotency_key)
+        )
         inserted = (await session.execute(statement)).scalar_one_or_none()
         if inserted is not None:
             return None
-        existing = (await session.execute(select(idempotency_records).where(*scope.criteria(idempotency_records), idempotency_records.c.operation == operation, idempotency_records.c.idempotency_key == idempotency_key))).mappings().one()
+        existing = (
+            (
+                await session.execute(
+                    select(idempotency_records).where(
+                        *scope.criteria(idempotency_records),
+                        idempotency_records.c.operation == operation,
+                        idempotency_records.c.idempotency_key == idempotency_key,
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
         if existing["request_fingerprint"] != request_fingerprint:
             raise IdempotencyConflict("idempotency key was reused with different request content")
         resource_id = existing["resource_id"]
@@ -1401,7 +1633,9 @@ class AudioPostgresRepository:
             raise AudioPersistenceConflict("idempotent result is no longer available")
         return dict(row)
 
-    async def _raise_missing_or_version_conflict(self, session: AsyncSession, table: Any, scope: AudioScope, object_id: str) -> None:
+    async def _raise_missing_or_version_conflict(
+        self, session: AsyncSession, table: Any, scope: AudioScope, object_id: str
+    ) -> None:
         exists = await session.scalar(select(table.c.id).where(*scope.criteria(table), table.c.id == object_id))
         if exists is None:
             raise AudioPersistenceNotFound("scoped resource was not found")
@@ -1419,12 +1653,16 @@ class AudioPostgresRepository:
         release: bool,
     ) -> None:
         hold = (
-            await session.execute(
-                select(audio_billing_holds)
-                .where(*scope.criteria(audio_billing_holds), audio_billing_holds.c.task_id == task_id)
-                .with_for_update()
+            (
+                await session.execute(
+                    select(audio_billing_holds)
+                    .where(*scope.criteria(audio_billing_holds), audio_billing_holds.c.task_id == task_id)
+                    .with_for_update()
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         account = await session.get(GenerationBillingAccountRow, scope.workspace_id, with_for_update=True)
         if hold is None or account is None:
             raise AudioBillingError("AUDIO_BILLING_HOLD_MISSING")
@@ -1489,12 +1727,16 @@ class AudioPostgresRepository:
         event_id: str,
     ) -> None:
         hold = (
-            await session.execute(
-                select(audio_billing_holds)
-                .where(*scope.criteria(audio_billing_holds), audio_billing_holds.c.task_id == task_id)
-                .with_for_update()
+            (
+                await session.execute(
+                    select(audio_billing_holds)
+                    .where(*scope.criteria(audio_billing_holds), audio_billing_holds.c.task_id == task_id)
+                    .with_for_update()
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if hold is None:
             raise AudioBillingError("AUDIO_BILLING_HOLD_MISSING")
         if hold["status"] == "active":
@@ -1507,6 +1749,21 @@ class AudioPostgresRepository:
             raise AudioBillingError("AUDIO_BILLING_ACCOUNT_MISSING")
         if account.currency != hold["currency"] or account.available_minor < estimated:
             raise AudioBillingError("AUDIO_INSUFFICIENT_CREDITS")
+        if self._budget_guard is not None:
+            locked = await self._lock_budget_project(session, scope)
+            assert locked is not None
+            try:
+                await self._budget_guard.check_reservation(
+                    session,
+                    locked,
+                    module="audio",
+                    task_id=task_id,
+                    currency=str(hold["currency"]),
+                    estimated_minor=estimated,
+                    target=None,
+                )
+            except BudgetError as error:
+                raise AudioBillingError(error.code) from error
         account.available_minor -= estimated
         account.held_minor += estimated
         account.version += 1
@@ -1538,10 +1795,51 @@ class AudioPostgresRepository:
             )
         )
 
-    async def _audit(self, session: AsyncSession, scope: AudioScope, request_id: str, operation: str, actor_id: str, object_type: str, object_id: str, result: str) -> None:
+    async def _lock_budget_project(self, session: AsyncSession, scope: AudioScope):
+        if self._budget_guard is None:
+            return None
+        try:
+            return await self._budget_guard.lock_scope(
+                session, tenant_id=scope.tenant_id, workspace_id=scope.workspace_id, project_id=scope.project_id
+            )
+        except BudgetError as error:
+            raise AudioBillingError(error.code) from error
+
+    async def resource_budget_target(self, scope: AudioScope, *, resource_type: str, resource_id: str):
+        await self._assert_task_resource(scope, resource_type, resource_id)
+        if self._budget_guard is None:
+            return None
+        async with self._session_factory() as session:
+            try:
+                locked = await self._budget_guard.lock_scope(
+                    session, tenant_id=scope.tenant_id, workspace_id=scope.workspace_id, project_id=scope.project_id
+                )
+                return await self._budget_guard.resource_target(
+                    session, locked, module="audio", source_kind=resource_type, source_reference=resource_id
+                )
+            except BudgetError as error:
+                raise AudioBillingError(error.code) from error
+
+    async def _audit(
+        self,
+        session: AsyncSession,
+        scope: AudioScope,
+        request_id: str,
+        operation: str,
+        actor_id: str,
+        object_type: str,
+        object_id: str,
+        result: str,
+    ) -> None:
         await session.execute(
             insert(audit_events).values(
-                id=_uuid7(), **scope.values(), request_id=request_id, operation=operation, actor_id=actor_id,
-                object_type=object_type, object_id=object_id, result=result,
+                id=_uuid7(),
+                **scope.values(),
+                request_id=request_id,
+                operation=operation,
+                actor_id=actor_id,
+                object_type=object_type,
+                object_id=object_id,
+                result=result,
             )
         )

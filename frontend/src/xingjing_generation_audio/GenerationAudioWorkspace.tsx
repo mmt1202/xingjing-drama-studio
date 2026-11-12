@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthenticatedVideo } from "@/components/shared/AuthenticatedVideo";
-import { generationAudioApi, XingjingApiError } from "./api";
+import { BudgetScopePicker, type BudgetScope } from "@/xingjing_budget/BudgetScopePicker";
+import { useAudioBudgetTranslation } from "./budget-i18n";
+import { createGenerationAudioApi, XingjingApiError } from "./api";
+import { useAuthStore } from "@/stores/auth-store";
+import { AuthSessionError, getSessionEpoch, getTokenForSession } from "@/utils/auth";
+import { paidAudioRecoveryKey, readPaidAudioOperation, rememberPaidAudioOperation, type PaidAudioOperation, type PaidAudioPayload } from "./paid-request-recovery";
 import {
   createIdempotencyKey,
   type AudioTrack,
@@ -13,7 +18,7 @@ import {
   type TrackVersion,
 } from "./contracts";
 
-type ApiClient = typeof generationAudioApi;
+type ApiClient = Omit<ReturnType<typeof createGenerationAudioApi>, "budgetBinding"> & Partial<Pick<ReturnType<typeof createGenerationAudioApi>, "budgetBinding">>;
 export type AudioPageId =
   "CR-007" | "CR-008" | "CR-056" | "CR-057" | "CR-058" | "CR-059" | "CR-105";
 export interface GenerationAudioWorkspaceProps {
@@ -118,19 +123,28 @@ function newId() {
 function errorText(error: unknown) {
   if (error instanceof XingjingApiError)
     return `${error.detail.message}${error.detail.requestId ? `（请求 ${error.detail.requestId}）` : ""}`;
+  if (error instanceof AuthSessionError) return error.message;
   return "音频服务暂时不可用，请稍后重试。";
 }
 function timestamp(value?: string) {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
-export function GenerationAudioWorkspace({
+export function GenerationAudioWorkspace(props: GenerationAudioWorkspaceProps) {
+  const epoch = useAuthStore((state) => state.sessionEpoch);
+  const api = useMemo(() => props.api ?? createGenerationAudioApi({ getAccessToken: () => getTokenForSession(epoch) }), [props.api, epoch]);
+  return <GenerationAudioWorkspaceContent key={JSON.stringify([epoch, props.workspaceId, props.projectId])} {...props} api={api} sessionEpoch={epoch} />;
+}
+
+function GenerationAudioWorkspaceContent({
   workspaceId,
   projectId,
   projectName,
-  api = generationAudioApi,
+  api,
+  sessionEpoch,
   pageId = "CR-007",
-}: GenerationAudioWorkspaceProps) {
+}: GenerationAudioWorkspaceProps & { api: ApiClient; sessionEpoch: string }) {
+  const { t: budgetText } = useAudioBudgetTranslation();
   const page = PAGE_CONFIG[pageId];
   const [state, setState] = useState<LoadState>("loading");
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
@@ -176,6 +190,24 @@ export function GenerationAudioWorkspace({
   const [taskId, setTaskId] = useState("");
   const [taskResourceType, setTaskResourceType] = useState("audio_track");
   const [taskResourceId, setTaskResourceId] = useState("");
+  const [budgetScope, setBudgetScope] = useState<BudgetScope>();
+  const [budgetReady, setBudgetReady] = useState(false);
+  const [bindingReload, setBindingReload] = useState(0);
+  const [binding, setBinding] = useState<{ key: string; bound?: BudgetScope | null; loading?: boolean; error?: boolean }>();
+  const bindingKey = JSON.stringify([workspaceId, projectId, taskResourceType.trim(), taskResourceId.trim()]);
+  const currentBinding = binding?.key === bindingKey ? binding : undefined;
+  const allocationReady = !api.budgetBinding || Boolean(currentBinding && !currentBinding.loading && !currentBinding.error && (currentBinding.bound || (budgetReady && budgetScope)));
+  useEffect(() => {
+    if (!api.budgetBinding || !taskResourceId.trim() || !taskResourceType.trim()) return;
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => {
+      setBudgetScope(undefined); setBudgetReady(false); setBinding({ key: bindingKey, loading: true });
+      void api.budgetBinding!(projectId, taskResourceType.trim(), taskResourceId.trim(), abort.signal).then((response) => {
+        if (!abort.signal.aborted) { setBinding({ key: bindingKey, bound: response.data.budgetScope }); setBudgetScope(response.data.budgetScope ?? undefined); }
+      }).catch(() => { if (!abort.signal.aborted) setBinding({ key: bindingKey, error: true }); });
+    }, 250);
+    return () => { window.clearTimeout(timer); abort.abort(); };
+  }, [api, bindingKey, bindingReload, projectId, taskResourceType, taskResourceId]);
   const [cancelTaskId, setCancelTaskId] = useState("");
   const [cancelVersion, setCancelVersion] = useState("");
   const [cancelReason, setCancelReason] = useState("用户请求取消");
@@ -189,6 +221,13 @@ export function GenerationAudioWorkspace({
   const [lipOutputKey, setLipOutputKey] = useState("");
   const [lipSourceTaskId, setLipSourceTaskId] = useState("");
   const pendingKeys = useRef(new Map<string, string>());
+  const recoveryKey = paidAudioRecoveryKey(sessionEpoch, workspaceId, projectId);
+  const [paidOperation, setPaidOperation] = useState(() => readPaidAudioOperation(recoveryKey));
+  const paidOperationRef = useRef(paidOperation);
+  const [paidBusy, setPaidBusy] = useState(false);
+  const paidInFlight = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const visibleTasks = page.taskKinds
     ? mediaTasks.filter((task) => page.taskKinds?.has(task.task_kind))
     : mediaTasks;
@@ -264,6 +303,7 @@ export function GenerationAudioWorkspace({
 
   const runOnce = useCallback(
     async (operation: string, execute: (key: string) => Promise<unknown>) => {
+      if (paidOperationRef.current) return;
       if (pendingKeys.current.has(operation)) return;
       const key = createIdempotencyKey(projectId, operation, newId());
       pendingKeys.current.set(operation, key);
@@ -282,6 +322,30 @@ export function GenerationAudioWorkspace({
     },
     [load, projectId],
   );
+
+  async function executePaid(original: PaidAudioOperation) {
+    if (paidInFlight.current || getSessionEpoch() !== sessionEpoch) return;
+    if (!rememberPaidAudioOperation(recoveryKey, original)) { setMessage(budgetText("recoveryUnavailable")); return; }
+    paidOperationRef.current = original; setPaidOperation(original);
+    paidInFlight.current = true; setPaidBusy(true); setMessage("");
+    const current = () => mounted.current && getSessionEpoch() === sessionEpoch;
+    const clear = () => { paidOperationRef.current = undefined; setPaidOperation(undefined); rememberPaidAudioOperation(recoveryKey, undefined); };
+    try {
+      getTokenForSession(sessionEpoch);
+      await api.audioAction(projectId, original.payload, original.key, original.version);
+      if (!current()) return;
+      clear(); await load();
+    } catch (error) {
+      if (!current()) return;
+      setMessage(errorText(error));
+      if (error instanceof XingjingApiError && error.detail.status >= 400 && error.detail.status < 500
+        && ![401, 408].includes(error.detail.status)) clear();
+    } finally { paidInFlight.current = false; if (current()) setPaidBusy(false); }
+  }
+  function submitPaid(payload: PaidAudioPayload, version?: number) {
+    if (paidOperationRef.current || paidInFlight.current) return;
+    void executePaid({ key: createIdempotencyKey(projectId, payload.action, newId()), payload, ...(version === undefined ? {} : { version }) });
+  }
 
   const choose = (next: SelectedTrack) => {
     setSelected(next);
@@ -364,19 +428,16 @@ export function GenerationAudioWorkspace({
     }
   };
   const requestTask = () =>
-    void runOnce(`create-media-task:${taskId}`, (key) =>
-      api.audioAction(
-        projectId,
-        {
-          action: "create_media_task",
-          taskId: taskId.trim(),
-          taskKind,
-          resourceType: taskResourceType.trim(),
-          resourceId: taskResourceId.trim(),
-          maxAttempts: 2,
-        },
-        key,
-      ),
+    allocationReady && submitPaid(
+      {
+        action: "create_media_task",
+        taskId: taskId.trim(),
+        taskKind,
+        resourceType: taskResourceType.trim(),
+        resourceId: taskResourceId.trim(),
+        maxAttempts: 2,
+        ...(budgetScope ? { budgetScope } : {}),
+      },
     );
   const cancelTask = () =>
     void runOnce(`cancel-media-task:${cancelTaskId}`, (key) =>
@@ -392,16 +453,12 @@ export function GenerationAudioWorkspace({
       ),
     );
   const retryTask = (task: MediaTask) =>
-    void runOnce(`retry-media-task:${task.id}`, (key) =>
-      api.audioAction(
-        projectId,
-        {
-          action: "retry_media_task",
-          taskId: task.id,
-        },
-        key,
-        task.version,
-      ),
+    submitPaid(
+      {
+        action: "retry_media_task",
+        taskId: task.id,
+      },
+      task.version,
     );
   const recordFallback = (task: MediaTask) =>
     void runOnce(`record-media-fallback:${task.id}`, (key) =>
@@ -576,6 +633,13 @@ export function GenerationAudioWorkspace({
           {message}
         </p>
       ) : null}
+
+      {paidOperation ? <aside role="status" className="my-4 rounded border border-amber-700 bg-amber-950 p-4 text-sm text-amber-100">
+        <p>{budgetText(paidBusy ? "requestChecking" : "requestUncertain")}</p>
+        <p className="mt-2 break-all font-mono text-xs">{budgetText("requestIdentity", { taskId: paidOperation.payload.taskId, key: paidOperation.key })}</p>
+        <button type="button" className="mt-3 rounded border border-amber-500/40 px-3 py-2" disabled={paidBusy} onClick={() => void executePaid(paidOperation)}>{budgetText("retryOriginal")}</button>
+      </aside> : null}
+      <fieldset disabled={Boolean(paidOperation) || paidBusy} className="contents">
 
       <section
         className={`mt-6 grid gap-4 lg:grid-cols-2 ${page.sections.has("create") ? "" : "hidden"}`}
@@ -1075,7 +1139,7 @@ export function GenerationAudioWorkspace({
             if (
               taskId.trim() &&
               taskResourceType.trim() &&
-              taskResourceId.trim()
+              taskResourceId.trim() && allocationReady
             )
               requestTask();
           }}
@@ -1128,7 +1192,13 @@ export function GenerationAudioWorkspace({
               required
             />
           </label>
-          <button className="mt-4" type="submit">
+          {api.budgetBinding ? <div className="mt-4">
+            {currentBinding?.bound ? <p role="status" className="text-sm text-slate-300">{budgetText(currentBinding.bound.kind === "episode" ? "boundEpisode" : "boundShared", { episode: currentBinding.bound.kind === "episode" ? currentBinding.bound.episodeId : undefined })}</p>
+              : <BudgetScopePicker key={bindingKey} projectId={projectId} workspaceId={workspaceId} value={budgetScope} onChange={setBudgetScope} onReady={setBudgetReady} disabled={currentBinding?.loading || Boolean(currentBinding?.error)} />}
+            {taskResourceId.trim() && (!currentBinding || currentBinding.loading) ? <p role="status" className="mt-2 text-sm text-slate-400">{budgetText("bindingLoading")}</p> : null}
+            {currentBinding?.error ? <div role="alert" className="mt-2 text-sm text-amber-200"><p>{budgetText("bindingFailed")}</p><button type="button" onClick={() => setBindingReload((value) => value + 1)}>{budgetText("retry")}</button></div> : null}
+          </div> : null}
+          <button className="mt-4" type="submit" disabled={!allocationReady}>
             提交媒体任务
           </button>
         </form>
@@ -1290,14 +1360,14 @@ export function GenerationAudioWorkspace({
                       <button
                         type="button"
                         onClick={() => recordFallback(task)}
-                        disabled={!fallbackReason.trim()}
+                        disabled={!fallbackReason.trim() || task.failure_metadata?.submission_unknown === true}
                       >
                         保留原版本
                       </button>
                     </div>
                   ) : null}
                 </div>
-                {task.failure_metadata ? (
+                {task.failure_metadata?.submission_unknown === true ? <p role="status" className="mt-2 text-sm leading-6 text-amber-300">{budgetText("unknown")}</p> : task.failure_metadata ? (
                   <p className="mt-2 text-sm text-amber-300">
                     失败信息：{JSON.stringify(task.failure_metadata)}
                   </p>
@@ -1336,6 +1406,7 @@ export function GenerationAudioWorkspace({
           </div>
         </div>
       </section>
+      </fieldset>
     </main>
   );
 }

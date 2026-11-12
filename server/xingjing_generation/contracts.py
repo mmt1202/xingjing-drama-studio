@@ -78,6 +78,18 @@ class ResolvedGenerationInput(BaseModel):
     size_bytes: Annotated[int, Field(gt=0)]
 
 
+class GenerationBudgetScope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["episode", "project_shared"]
+    episode_id: Annotated[int, Field(gt=0, strict=True)] | None = None
+
+    @model_validator(mode="after")
+    def valid_episode(self) -> GenerationBudgetScope:
+        if (self.kind == "episode") != (self.episode_id is not None):
+            raise ValueError("BUDGET_ATTRIBUTION_INVALID")
+        return self
+
+
 class GenerationRequest(BaseModel):
     """Provider 无关且可持久化的媒体生成请求。"""
 
@@ -92,6 +104,7 @@ class GenerationRequest(BaseModel):
     input_asset_ids: tuple[Identifier, ...] = ()
     input_asset_references: tuple[GenerationAssetReference, ...] = ()
     resolved_input_assets: tuple[ResolvedGenerationInput, ...] = ()
+    budget_scope: GenerationBudgetScope | None = None
     requested_provider_id: Identifier | None = None
     requested_model_id: Identifier | None = None
 
@@ -112,7 +125,7 @@ class GenerationRequest(BaseModel):
     @model_serializer(mode="wrap")
     def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         result = handler(self)
-        for key in ("input_asset_references", "resolved_input_assets"):
+        for key in ("input_asset_references", "resolved_input_assets", "budget_scope"):
             if not result.get(key):
                 result.pop(key, None)
         return result

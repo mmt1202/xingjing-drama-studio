@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from server.xingjing_audio.timeline import SubtitleCue, SubtitleTimeline
 from server.xingjing_audio_persistence.models import generation_tasks
 from server.xingjing_audio_persistence.repository import AudioPersistenceConflict, AudioPostgresRepository, AudioScope
+from server.xingjing_budget import BudgetAdmissionService, BudgetTarget
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
     TrustedWorkspaceContext,
@@ -36,7 +37,7 @@ from server.xingjing_identity_context import (
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import AudioArtifactStorageError, LocalAudioObjectStorage, StoredObject
-from .provider_gateway import HttpAudioMediaProvider, MediaSubmission
+from .provider_gateway import AudioProviderGatewayError, HttpAudioMediaProvider, MediaSubmission
 
 TrustedContextResolver = Callable[[Request], Awaitable[TrustedWorkspaceContext]]
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -132,6 +133,14 @@ class AudioRuntime:
 
     async def get_subtitle_track(self, scope: AudioScope, track_id: str) -> Mapping[str, Any]:
         return await self._repository_or_raise().get_subtitle_track(scope, track_id)
+
+    async def resource_budget_scope(self, scope: AudioScope, *, resource_type: str, resource_id: str):
+        target = await self._repository_or_raise().resource_budget_target(
+            scope, resource_type=resource_type, resource_id=resource_id
+        )
+        if target is None:
+            return None
+        return {"kind": target.kind, **({"episodeId": target.episode_id} if target.kind == "episode" else {})}
 
     async def list_tracks(
         self,
@@ -249,7 +258,12 @@ class AudioRuntime:
             request_id=context.request_id,
             idempotency_key=idempotency_key,
             request_fingerprint=_fingerprint(
-                "create_lip_sync_version", version_id, audio_version_id, subtitle_version_id, input_video_key, calibration
+                "create_lip_sync_version",
+                version_id,
+                audio_version_id,
+                subtitle_version_id,
+                input_video_key,
+                calibration,
             ),
         )
 
@@ -425,7 +439,9 @@ class AudioRuntime:
             actor_id=context.actor_id,
             request_id=context.request_id,
             idempotency_key=idempotency_key,
-            request_fingerprint=_fingerprint("append_audio_version", track_id, expected_version, validated_payload, stored),
+            request_fingerprint=_fingerprint(
+                "append_audio_version", track_id, expected_version, validated_payload, stored
+            ),
             object_key=stored.key,
             object_sha256=stored.sha256,
             object_size_bytes=stored.size_bytes,
@@ -457,7 +473,9 @@ class AudioRuntime:
             actor_id=context.actor_id,
             request_id=context.request_id,
             idempotency_key=idempotency_key,
-            request_fingerprint=_fingerprint("append_subtitle_version", track_id, expected_version, validated_cues, stored),
+            request_fingerprint=_fingerprint(
+                "append_subtitle_version", track_id, expected_version, validated_cues, stored
+            ),
             object_key=stored.key if stored else None,
             object_sha256=stored.sha256 if stored else None,
             object_size_bytes=stored.size_bytes if stored else None,
@@ -476,6 +494,7 @@ class AudioRuntime:
         resource_id: str,
         idempotency_key: str,
         max_attempts: int = 2,
+        budget_scope: Mapping[str, object] | None = None,
     ) -> Mapping[str, Any]:
         provider = self._provider_or_raise()
         repository = self._repository_or_raise()
@@ -483,7 +502,14 @@ class AudioRuntime:
         if billing is None:
             raise AudioRuntimeUnavailable("AUDIO_BILLING_NOT_CONFIGURED")
         estimated_minor = billing.estimate(task_kind)
-        fingerprint = _fingerprint("create_media_task", task_id, task_kind, resource_type, resource_id, max_attempts)
+        target = _budget_target(budget_scope, resource_type=resource_type, resource_id=resource_id)
+        fingerprint = (
+            _fingerprint("create_media_task", task_id, task_kind, resource_type, resource_id, max_attempts)
+            if budget_scope is None
+            else _fingerprint(
+                "create_media_task", task_id, task_kind, resource_type, resource_id, max_attempts, dict(budget_scope)
+            )
+        )
         task = await repository.create_generation_task(
             scope=scope,
             task_id=task_id,
@@ -499,14 +525,23 @@ class AudioRuntime:
             currency=billing.currency,
             pricing_version=billing.pricing_version,
             timeout_at=datetime.now(UTC) + timedelta(seconds=self._task_timeout_seconds),
+            budget_target=target,
+            shared_scope_authorized=bool({"project.manage", "billing.budget.manage"} & context.permissions),
         )
         if task["status"] != "pending":
             return task
+        claimed = await repository.claim_provider_submission(
+            scope, task_id=str(task["id"]), expected_version=int(task["version"])
+        )
+        if claimed is None:
+            return await self._get_task(scope, str(task["id"]))
+        task = claimed
         try:
             submission = await provider.submit(scope=scope, task=task)
             if not submission.provider_name or not submission.provider_task_id:
                 raise AudioRuntimeUnavailable("AUDIO_PROVIDER_INVALID_SUBMISSION")
         except Exception as error:
+            unknown = not (isinstance(error, AudioProviderGatewayError) and error.definitive)
             await repository.transition_task(
                 scope=scope,
                 task_id=str(task["id"]),
@@ -514,12 +549,18 @@ class AudioRuntime:
                 status="failed",
                 actor_id=context.actor_id,
                 request_id=context.request_id,
-                failure_metadata={"code": "AUDIO_PROVIDER_SUBMISSION_FAILED"},
+                failure_metadata={
+                    "code": "AUDIO_PROVIDER_SUBMISSION_UNKNOWN" if unknown else "AUDIO_PROVIDER_SUBMISSION_FAILED",
+                    "submission_unknown": unknown,
+                    "retryable": not unknown,
+                },
                 attempt_count=1,
                 finished_at=datetime.now(UTC),
                 billing_event_id=context.request_id,
-                release_billing=True,
+                release_billing=not unknown,
             )
+            if unknown:
+                raise AudioRuntimeUnavailable("AUDIO_PROVIDER_SUBMISSION_UNKNOWN") from error
             if isinstance(error, AudioRuntimeUnavailable):
                 raise
             raise AudioRuntimeUnavailable("AUDIO_PROVIDER_SUBMISSION_FAILED") from error
@@ -533,6 +574,7 @@ class AudioRuntime:
             provider_name=submission.provider_name,
             provider_task_id=submission.provider_task_id,
             attempt_count=1,
+            failure_metadata={},
         )
 
     async def retry_media_task(
@@ -561,12 +603,19 @@ class AudioRuntime:
         )
         if replayed:
             return retrying
-        next_attempt = int(retrying["attempt_count"]) + 1
+        claimed = await repository.claim_provider_submission(
+            scope, task_id=task_id, expected_version=int(retrying["version"])
+        )
+        if claimed is None:
+            return await self._get_task(scope, task_id)
+        retrying = claimed
+        next_attempt = int(retrying["attempt_count"])
         try:
             submission = await self._provider_or_raise().submit(scope=scope, task=retrying)
             if not submission.provider_name or not submission.provider_task_id:
                 raise AudioRuntimeUnavailable("AUDIO_PROVIDER_INVALID_SUBMISSION")
         except Exception as error:
+            unknown = not (isinstance(error, AudioProviderGatewayError) and error.definitive)
             await repository.transition_task(
                 scope=scope,
                 task_id=task_id,
@@ -574,12 +623,20 @@ class AudioRuntime:
                 status="failed",
                 actor_id=context.actor_id,
                 request_id=context.request_id,
-                failure_metadata={"code": "AUDIO_PROVIDER_RETRY_SUBMISSION_FAILED"},
+                failure_metadata={
+                    "code": "AUDIO_PROVIDER_SUBMISSION_UNKNOWN"
+                    if unknown
+                    else "AUDIO_PROVIDER_RETRY_SUBMISSION_FAILED",
+                    "submission_unknown": unknown,
+                    "retryable": not unknown,
+                },
                 attempt_count=next_attempt,
                 finished_at=datetime.now(UTC),
                 billing_event_id=context.request_id,
-                release_billing=True,
+                release_billing=not unknown,
             )
+            if unknown:
+                raise AudioRuntimeUnavailable("AUDIO_PROVIDER_SUBMISSION_UNKNOWN") from error
             if isinstance(error, AudioRuntimeUnavailable):
                 raise
             raise AudioRuntimeUnavailable("AUDIO_PROVIDER_RETRY_SUBMISSION_FAILED") from error
@@ -593,6 +650,7 @@ class AudioRuntime:
             provider_name=submission.provider_name,
             provider_task_id=submission.provider_task_id,
             attempt_count=next_attempt,
+            failure_metadata={},
         )
 
     async def record_media_fallback(
@@ -607,6 +665,8 @@ class AudioRuntime:
     ) -> Mapping[str, Any]:
         if not reason.strip():
             raise ValueError("AUDIO_FALLBACK_REASON_REQUIRED")
+        if _submission_unknown(await self._get_task(scope, task_id)):
+            raise AudioRuntimeUnavailable("AUDIO_PROVIDER_SUBMISSION_UNKNOWN")
         recorded, _ = await self._repository_or_raise().record_task_fallback(
             scope=scope,
             task_id=task_id,
@@ -636,6 +696,8 @@ class AudioRuntime:
         if replay is not None:
             return replay
         task = await self._get_task(scope, task_id)
+        if _submission_unknown(task):
+            raise AudioRuntimeUnavailable("AUDIO_PROVIDER_SUBMISSION_UNKNOWN")
         if int(task["version"]) != expected_version:
             raise ValueError("AUDIO_TASK_VERSION_CONFLICT")
         status = str(task["status"])
@@ -868,13 +930,15 @@ class AudioRuntime:
                 )
             except AudioArtifactStorageError as error:
                 raise ValueError(str(error)) from error
-            outputs.append({
-                "outputId": output_id,
-                "objectKey": stored.key,
-                "sha256": stored.sha256,
-                "sizeBytes": stored.size_bytes,
-                "mimeType": stored.mime_type,
-            })
+            outputs.append(
+                {
+                    "outputId": output_id,
+                    "objectKey": stored.key,
+                    "sha256": stored.sha256,
+                    "sizeBytes": stored.size_bytes,
+                    "mimeType": stored.mime_type,
+                }
+            )
         return {"providerEventId": event_id, "outputs": outputs}
 
     @staticmethod
@@ -977,11 +1041,16 @@ def create_production_audio_runtime(
     artifact_root = os.environ.get("XINGJING_M07_ARTIFACT_ROOT", "").strip()
     provider_project_root = os.environ.get("XINGJING_M07_PROVIDER_PROJECT_ROOT", "").strip()
     return AudioRuntime(
-        repository=AudioPostgresRepository(factory),
+        repository=AudioPostgresRepository(factory, budget_guard=BudgetAdmissionService()),
         session_factory=factory,
         context_resolver=context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway()),
         provider=configured_provider,
-        object_storage=object_storage or (LocalAudioObjectStorage(artifact_root, provider_project_root=provider_project_root) if artifact_root else None),
+        object_storage=object_storage
+        or (
+            LocalAudioObjectStorage(artifact_root, provider_project_root=provider_project_root)
+            if artifact_root
+            else None
+        ),
         provider_callback_secret=callback_secret or None,
         billing_policy=_billing_policy_from_environment(),
         engine=engine,
@@ -1079,7 +1148,12 @@ def _validate_audio_payload(track_kind: str, payload: Mapping[str, Any]) -> Mapp
     field = "clips" if track_kind in {"dialogue", "voiceover"} else "segments"
     rows = payload.get(field)
     duration_ms = payload.get("durationMs")
-    if isinstance(duration_ms, bool) or not isinstance(duration_ms, int) or duration_ms <= 0 or not isinstance(rows, list):
+    if (
+        isinstance(duration_ms, bool)
+        or not isinstance(duration_ms, int)
+        or duration_ms <= 0
+        or not isinstance(rows, list)
+    ):
         raise ValueError("INVALID_AUDIO_TIMELINE")
     normalized: list[dict[str, object]] = []
     previous_end = 0
@@ -1132,6 +1206,32 @@ def _validate_audio_payload(track_kind: str, payload: Mapping[str, Any]) -> Mapp
     ):
         raise ValueError("INVALID_AUDIO_LOUDNESS")
     return {"durationMs": duration_ms, field: normalized, "loudnessLufs": float(loudness_lufs)}
+
+
+def _budget_target(value: Mapping[str, object] | None, *, resource_type: str, resource_id: str) -> BudgetTarget | None:
+    if value is None:
+        return None
+    kind = value.get("kind")
+    if kind == "episode":
+        episode = value.get("episodeId")
+        if (
+            set(value) != {"kind", "episodeId"}
+            or not isinstance(episode, int)
+            or isinstance(episode, bool)
+            or episode < 1
+        ):
+            raise ValueError("BUDGET_SCOPE_INVALID")
+        return BudgetTarget(kind="episode", episode_id=episode, source_kind=resource_type, source_reference=resource_id)
+    if kind == "project_shared" and set(value) == {"kind"}:
+        return BudgetTarget(
+            kind="project_shared", episode_id=None, source_kind=resource_type, source_reference=resource_id
+        )
+    raise ValueError("BUDGET_SCOPE_INVALID")
+
+
+def _submission_unknown(task: Mapping[str, Any]) -> bool:
+    failure = task.get("failure_metadata")
+    return isinstance(failure, Mapping) and failure.get("submission_unknown") is True
 
 
 def _fingerprint(operation: str, *values: object) -> str:

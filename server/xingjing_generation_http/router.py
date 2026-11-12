@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.responses import Response
 
 from lib.i18n import get_translator
+from server.xingjing_budget import BudgetError
 from server.xingjing_generation import GenerationRequest
 from server.xingjing_generation_persistence import GenerationBillingError, TaskScopeNotFound, VersionConflict
 from server.xingjing_generation_runtime.runtime import GenerationRuntime, GenerationRuntimeUnavailable
@@ -38,6 +39,9 @@ class GenerationContractRoute(APIRoute):
                 return _error(request, error.code, error.status_code, error.details)
             except GenerationRuntimeUnavailable as error:
                 return _error(request, error.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            except BudgetError as error:
+                response_status = 503 if error.code.endswith("UNAVAILABLE") else error.status_code
+                return _error(request, error.code, response_status)
             except TaskScopeNotFound:
                 return _error(request, "GENERATION_TASK_NOT_FOUND", status.HTTP_404_NOT_FOUND)
             except VersionConflict:
@@ -86,7 +90,7 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
     async def generation_models(request: Request):
         project_id = _project_query(request)
         context = await runtime.context_for(request, project_id, "generation.view")
-        return _success(context.request_id, {"model": asdict(await runtime.read_model_availability())})
+        return _success(context.request_id, {"model": asdict(await runtime.read_model_availability(context=context))})
 
     @router.get("/generation-model-usage")
     async def generation_model_usage(request: Request):
@@ -425,7 +429,12 @@ def _error(request: Request, code: str, status_code: int, details: Mapping[str, 
         "GENERATION_INPUT_ROLES_UNSUPPORTED",
         "GENERATION_PROVIDER_INPUT_CONTRACT_UNAVAILABLE",
     }
-    message = {"message": get_translator(request)(code.lower())} if code in translated else {}
+    message = (
+        {"message": get_translator(request)(code.lower())}
+        if code in translated
+        or code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_", "GENERATION_NATIVE_"))
+        else {}
+    )
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, **message, "details": dict(details or {})}, "meta": {"requestId": request_id}},

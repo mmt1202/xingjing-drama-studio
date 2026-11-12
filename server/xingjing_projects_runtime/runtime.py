@@ -24,12 +24,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from lib.episode_editor import EpisodeEditError
 from lib.i18n import get_translator
 from lib.project_manager import get_project_manager
+from server.xingjing_budget import BudgetError
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
 from server.xingjing_model_control.runtime import ModelDefinitionRow
 from server.xingjing_platform_persistence import OptimisticConflict, PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import Project, ProjectRow
 from server.xingjing_team_persistence.repository import MemberRow
 
+from .budget import apply_project_budget, register_budget_routes
 from .control import register_control_routes
 from .control_actions import transition
 from .episodes import register_episode_routes
@@ -86,6 +88,7 @@ class ProjectsRuntime:
                 ).all()
             return {
                 "data": {
+                    "permissions": sorted(context.permissions),
                     "members": [{"id": member.member_id, "name": member.email} for member in members],
                     "models": [
                         {"key": model.registry_key, "name": model.display_name, "mediaTypes": model.media_types}
@@ -180,7 +183,7 @@ class ProjectsRuntime:
                     if expected is None:
                         return _error(context.request_id, "VERSION_REQUIRED", status.HTTP_428_PRECONDITION_REQUIRED)
                     project = await self._mutate(context, project_id, action, payload, expected, key)
-            except EpisodeEditError:
+            except (EpisodeEditError, BudgetError):
                 raise
             except SetupInvalid as error:
                 return _error(context.request_id, "PROJECT_SETUP_INVALID", 422, {"fields": error.fields})
@@ -196,6 +199,7 @@ class ProjectsRuntime:
             return {"data": _project(project), "meta": {"requestId": context.request_id}}
 
         register_episode_routes(self, router)
+        register_budget_routes(self, router)
         register_control_routes(self, router)
         register_home_routes(self, router)
         from server.xingjing_analytics.router import register_analytics_routes
@@ -284,6 +288,10 @@ class ProjectsRuntime:
             )
             if project.creation_digest != digest:
                 raise ValueError("IDEMPOTENCY_CONFLICT")
+            if setup:
+                await apply_project_budget(
+                    uow.session, context, project.id, limit_minor=setup.budget_minor, previous_limit=None
+                )
             manager = get_project_manager()
             if not draft:
                 await initialize_source(uow.session, context, project.id, name, setup)
@@ -332,6 +340,13 @@ class ProjectsRuntime:
             if action not in {"saveDraft", "activate"}:
                 raise ValueError("UNSUPPORTED_PROJECT_ACTION")
             await self._validate_setup_references(context, setup)
+            await apply_project_budget(
+                uow.session,
+                context,
+                project_id,
+                limit_minor=setup.budget_minor,
+                previous_limit=current.configuration.get("budgetMinor"),
+            )
             project = await uow.projects.configure(
                 project_id,
                 expected_version=expected,
@@ -437,8 +452,18 @@ class _ProjectsRoute(APIRoute):
                 return await original(request)
             except _RuntimeUnavailable as error:
                 return _error(request_id(request), str(error), status.HTTP_503_SERVICE_UNAVAILABLE)
+            except BudgetError as error:
+                code = error.code
+                response_status = 503 if code.endswith("UNAVAILABLE") else error.status_code
+                return _error(request_id(request), code, response_status, message=get_translator(request)(code.lower()))
             except EpisodeEditError as error:
-                return _error(request_id(request), str(error), error.status)
+                code = str(error)
+                return _error(
+                    request_id(request),
+                    code,
+                    error.status,
+                    message=get_translator(request)(code.lower()) if code.startswith("BUDGET_") else None,
+                )
             except (OSError, ValueError):
                 return _error(request_id(request), "PROJECT_RUNTIME_UNAVAILABLE", 503)
             except _PermissionDenied as error:
@@ -465,7 +490,13 @@ class _ProjectsRoute(APIRoute):
             if isinstance(response, JSONResponse) and response.status_code >= 400:
                 payload = json.loads(bytes(response.body))
                 if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
-                    payload["error"]["message"] = get_translator(request)("project.request_failed")
+                    code = str(payload["error"].get("code", ""))
+                    key = (
+                        code.lower()
+                        if code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_"))
+                        else "project.request_failed"
+                    )
+                    payload["error"]["message"] = get_translator(request)(key)
                     return JSONResponse(payload, status_code=response.status_code)
             return response
 
@@ -570,13 +601,20 @@ def _iso(value: datetime) -> str:
     return value.isoformat()
 
 
-def _error(request_id: str, code: str, status_code: int, details: Mapping[str, object] | None = None) -> JSONResponse:
+def _error(
+    request_id: str,
+    code: str,
+    status_code: int,
+    details: Mapping[str, object] | None = None,
+    *,
+    message: str | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={
             "error": {
                 "code": code,
-                "message": code,
+                "message": message or code,
                 "retryable": status_code >= 500,
                 "details": dict(details or {}),
             },

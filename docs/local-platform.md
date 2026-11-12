@@ -111,3 +111,28 @@ Docker Desktop 若显示 `dockerInference` 启动错误，先正常退出并重�
 接收端还必须以 `Idempotency-Key: generation:{taskId}` 原子保留提交结果，同一个任务键重复到达时返回原 `jobId`，不能重新调用或计费；键对应输入发生变化时必须拒绝。只有完成真实网关联调后，才可将 `XINGJING_M06_PROVIDER_INPUT_CONTRACT` 设置为 `verified-media/v1`。默认不启用；不要仅为了隐藏错误开启。无媒体输入的文生任务保留原通道，资产首张参考图可通过文生生成，采用后形成可用于派生与分镜的新资产版本。
 
 旧任务仍可查询，已有输出保持可用；缺少精确输入证据的旧任务不会自动按最新资产恢复提交，需要重新选择可验证的输入后创建新任务。网络结果未知的恢复继续使用原任务键、原输入和原计费记录。该协议与本地隔离验证不能代替实际接收网关及模型服务的验收。
+
+### 原生 OpenAI 图片通道（按部署明确启用）
+
+原生图片执行复用已有 OpenAI 图片后端，支持文生图和以精确已入库图片为参考的编辑、融合与角色派生。它不使用上节的外部 M06 网关，因此无需设置 `XINGJING_M06_PROVIDER_INPUT_CONTRACT`。视频、局部重绘和超分仍不属于该通道。默认关闭；本地隔离验证没有执行真实付费生成，启用配置也不代表供应商已经验收。
+
+启用前先备份并执行 `uv run alembic upgrade head`，其中 `f4c9cc34000e` 创建预算准入、原生执行记录和路由释放记录，并增加成功出图单价字段。Python 的 `DATABASE_URL`、`XINGJING_GENERATION_DATABASE_URL` 与 `XINGJING_MODEL_DATABASE_URL` 必须使用相同的异步 SQLAlchemy URL。原生任务、模型路由、账本和已有加密 `provider_credential` 记录由同一数据库承载；不同 URL 会返回 `GENERATION_NATIVE_SHARED_DATABASE_REQUIRED`，不会跨库猜测同一个凭据编号。
+
+由有权限的管理员在既有供应商配置中保存真实 OpenAI 凭据，并在模型运营配置中登记真实型号、`image` 媒体类型、对应能力、参数约束和精确的 `secret://provider-credential/<ID>`。该 ID 必须对应已存在、启用且供应商为 `openai` 的加密凭据；原生执行不支持 `env://`，不会自动使用另一条当前启用凭据。发布新的报价版本时，勾选固定成功出图单价，填写 `successfulOutputMinor`，要求为非负整数且不大于 `estimatedMinor`。金额使用报价货币的最小单位，例如 CNY 的 75 表示 ¥0.75；供应商返回的美元成本或 token 用量不用于用户账单换算。未设置成功单价的旧报价仍可读取，但不能启用原生计费执行。
+
+在可信部署环境中按实际工作区和凭据设置授权，例如：
+
+```dotenv
+XINGJING_M06_NATIVE_IMAGE_ENABLED=true
+XINGJING_M06_NATIVE_CREDENTIAL_GRANTS={"actual-workspace-id":["secret://provider-credential/123"]}
+XINGJING_M06_ARTIFACT_ROOT=D:/aivideo/xingjing-platform/.xingjing-data/generation-artifacts
+XINGJING_M06_NATIVE_IMAGE_ROOT=D:/aivideo/xingjing-platform/.xingjing-data/native-images
+```
+
+示例 ID 必须替换，授权映射不包含 API Key，不支持通配符。凭据授权由部署运维维护，普通生成请求不能提交密钥、凭据引用或扩大授权；缺少授权、凭据停用或凭据在排队后发生变更会明确拒绝，并返回不含密钥和凭据引用的原因。`XINGJING_M06_NATIVE_IMAGE_ROOT` 省略时使用产物根目录同级的 `native-images`，应保持为服务可写的持久目录，不能使用临时验收目录。配置由应用启动时读取，需要受控重新加载服务后生效。
+
+提交时会在同一事务中建立任务、冻结金额、保存原生队列记录和原始操作者审计；worker 领取后再次验证输入字节与凭据版本，再持久化开始发送的状态。成功获得文件后先保存可恢复的结果记录，再入库产物并按任务创建时的报价版本结算一次，释放预估金额与成功单价的差额。本地入库失败只重试本地发布，不重新请求图片服务。预算归属和额度仍通过统一预算准入校验，不由原生 worker 自行放宽。
+
+OpenAI SDK 的自动重试和外围生成重试均在该通道关闭。尚未发出的准备失败可以确认释放冻结金额；请求发出后连接中断、进程退出或超时不能证明供应商没有执行，此时标为 `unknown`，保留冻结金额及并发占用，不按 TTL 自动重发或释放。关闭原生开关停止领取新的付费执行，已有 `result_ready` 文件仍可继续本地发布。已开始的同步图片请求不能声称支持远程取消。任务详情中的原生执行 ID 是本地身份，`upstreamRequestId` 是实际上游请求追踪号，两者都不伪装成可轮询的供应商 job ID。
+
+当前尚未实现管理员核验供应商证据并处理 `unknown` 的受控恢复入口。出现该状态时，需保留任务与上游请求信息交由运维核对，不能通过重新点击、重置任务、删除账本或开启自动重试来消除。这个限制意味着尚不能宣称未知结果已经具备完整运营恢复能力。

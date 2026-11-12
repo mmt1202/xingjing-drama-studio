@@ -38,7 +38,7 @@ class ProjectSetup(BaseModel):
     candidate_count: int = Field(default=1, ge=1, le=12)
     subtitle_languages: list[Literal["zh", "en", "vi"]] = Field(default_factory=lambda: ["zh"])
     review_language: Literal["zh", "en", "vi"] = "zh"
-    budget_minor: int | None = Field(default=None, ge=1, le=100_000_000_000)
+    budget_minor: int | None = Field(default=None, ge=0, le=100_000_000_000)
     schedule_days: int | None = Field(default=None, ge=1, le=3650)
     team_seats: int = Field(default=1, ge=1, le=1000)
     review_seats: int = Field(default=1, ge=1, le=1000)

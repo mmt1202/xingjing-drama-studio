@@ -1,6 +1,7 @@
 import { getSessionEpoch } from "@/utils/auth";
 import type { GenerationSubmission } from "./contracts";
 import type { SelectedGenerationInput } from "./GenerationInputPicker";
+import type { BudgetScope } from "@/xingjing_budget/contracts";
 
 export interface SubmissionOperation { key: string; payload: GenerationSubmission }
 export interface SubmissionRecovery {
@@ -8,6 +9,7 @@ export interface SubmissionRecovery {
   inputs: readonly SelectedGenerationInput[];
   parameters: string;
   modelChoice: string;
+  budgetScope?: BudgetScope;
   operation?: SubmissionOperation;
   created?: string;
 }
@@ -33,6 +35,8 @@ export function readSubmissionRecovery(key: string, capability: string, media: s
       || typeof value.modelChoice !== "string" || value.modelChoice.length > 2000
       || !Array.isArray(value.inputs) || value.inputs.length > 12 || !value.inputs.every(input)
       || (value.created !== undefined && !identifier(value.created))) return undefined;
+    if (value.budgetScope !== undefined && (!record(value.budgetScope)
+      || (value.budgetScope.kind !== "project_shared" && (value.budgetScope.kind !== "episode" || typeof value.budgetScope.episodeId !== "number" || !Number.isSafeInteger(value.budgetScope.episodeId) || value.budgetScope.episodeId < 1)))) return undefined;
     if (value.operation !== undefined) {
       const op = value.operation;
       if (!record(op) || !identifier(op.key) || !record(op.payload) || op.payload.capability !== capability || op.payload.media_type !== media
@@ -46,7 +50,7 @@ export function readSubmissionRecovery(key: string, capability: string, media: s
 /** Persist request identity before submission; restoring never sends a request automatically. */
 export function rememberSubmission(key: string, value: SubmissionRecovery): boolean {
   try {
-    if (!value.operation && !value.created && !value.prompt && !value.inputs.length && value.parameters === "{}" && !value.modelChoice) {
+    if (!value.operation && !value.created && !value.prompt && !value.inputs.length && value.parameters === "{}" && !value.modelChoice && !value.budgetScope) {
       sessionStorage.removeItem(key);
     } else {
       const serialized = JSON.stringify(value);

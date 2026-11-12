@@ -16,6 +16,7 @@ from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import AuditRow, ProjectRow
 from server.xingjing_team_persistence.repository import MemberRow
 
+from .budget import apply_project_budget
 from .control import production_facts
 from .episode_sources import authorize, sources
 
@@ -51,7 +52,7 @@ class OverviewEdit(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     ownerId: str = Field(min_length=1, max_length=64)
     targetPlatform: str = Field(pattern="^(douyin|kuaishou|wechat|bilibili|web)$")
-    budgetMinor: int | None = Field(default=None, ge=1, le=100_000_000_000)
+    budgetMinor: int | None = Field(default=None, ge=0, le=100_000_000_000)
     scheduleDays: int | None = Field(default=None, ge=1, le=3650)
     teamSeats: int = Field(ge=1, le=1000)
     reviewSeats: int = Field(ge=1, le=1000)
@@ -84,7 +85,11 @@ async def update_overview(
 ):
     from .runtime import _project
 
-    if "budgetMinor" in edit.model_fields_set and "billing.view" not in context.permissions:
+    if (
+        "budgetMinor" in edit.model_fields_set
+        and edit.budgetMinor != row.configuration.get("budgetMinor")
+        and "billing.budget.manage" not in context.permissions
+    ):
         raise EpisodeEditError("PERMISSION_DENIED", 403)
     if row.production_status == "completed" and edit.targetPlatform != row.target_platform:
         raise EpisodeEditError("INVALID_STATE_TRANSITION", 409)
@@ -100,6 +105,14 @@ async def update_overview(
         if member is None:
             raise EpisodeEditError("PROJECT_OWNER_UNAVAILABLE", 422)
     changes = edit.model_dump(exclude_unset=True)
+    if "budgetMinor" in changes:
+        await apply_project_budget(
+            uow.session,
+            context,
+            row.id,
+            limit_minor=edit.budgetMinor,
+            previous_limit=row.configuration.get("budgetMinor"),
+        )
     before = {
         "name": row.name,
         "ownerId": row.owner_id,

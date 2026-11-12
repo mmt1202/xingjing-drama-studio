@@ -261,6 +261,8 @@ def save_episodes(
     actor: str,
     replay_only: bool = False,
     source_texts: dict[str, str] | None = None,
+    persist_budget: bool = True,
+    budget_precondition: str | None = None,
 ) -> dict[str, Any]:
     root = manager.get_project_path(project_id)
     snapshot = manager.load_project(project_id)
@@ -285,6 +287,8 @@ def save_episodes(
             actor=actor,
             replay_only=replay_only,
             source_texts=source_texts,
+            persist_budget=persist_budget,
+            budget_precondition=budget_precondition,
         )
 
 
@@ -298,6 +302,8 @@ def _save_episodes_locked(
     actor: str,
     replay_only: bool,
     source_texts: dict[str, str] | None,
+    persist_budget: bool = True,
+    budget_precondition: str | None = None,
 ) -> dict[str, Any]:
     """Commit the ledger and derived text under its existing project lock.
 
@@ -348,7 +354,7 @@ def _save_episodes_locked(
                 "title": edit.title.strip(),
                 "hook": edit.hook,
                 "target_duration_seconds": edit.targetDuration,
-                "budget_minor": edit.budgetMinor,
+                "budget_minor": edit.budgetMinor if persist_budget else old.get("budget_minor"),
                 "outline": {
                     **(old.get("outline") or {}),
                     "story_beats": edit.storyBeats,
@@ -392,6 +398,7 @@ def _save_episodes_locked(
             rel, end = max(covered)
             project["planning_cursor"] = {"source_file": rel, "offset": end}
         receipt = {
+            **({"budgetPrecondition": budget_precondition} if budget_precondition is not None else {}),
             "key": key,
             "digest": digest,
             "actor": actor,

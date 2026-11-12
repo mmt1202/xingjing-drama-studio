@@ -19,6 +19,7 @@ from server.services.cost_estimation import CostEstimationService
 from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
+from .budget import apply_episode_budgets, enrich_episode_budgets
 from .episode_production import (
     prepare_production_batch,
     production_catalog,
@@ -47,7 +48,18 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
                 read_episodes, get_project_manager(), project_id, source_texts=collection.texts
             )
             data["sources"] = collection.options
-            return await enrich_working_scripts(session, context, project_id, data)
+            data = await enrich_working_scripts(session, context, project_id, data)
+            row = await session.scalar(
+                select(ProjectRow).where(
+                    ProjectRow.id == project_id,
+                    ProjectRow.tenant_id == context.tenant_id,
+                    ProjectRow.workspace_id == context.workspace_id,
+                    ProjectRow.deleted_at.is_(None),
+                )
+            )
+            if row is None:
+                raise EpisodeEditError("PROJECT_NOT_FOUND", 404)
+            return await enrich_episode_budgets(session, context, row, data)
 
     @router.get("/projects/{project_id}/episodes/source")
     async def source(request: Request, project_id: str, sourceId: str):
@@ -196,6 +208,8 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
         if not key or len(key) > 128:
             raise EpisodeEditError("IDEMPOTENCY_KEY_REQUIRED", 400)
         body = await _body(request)
+        if "applyBudgetLimits" in body and not isinstance(body["applyBudgetLimits"], bool):
+            raise EpisodeEditError("BUDGET_POLICY_INVALID", 400)
         raw = body.get("items")
         if not isinstance(raw, list) or len(raw) > 500:
             raise EpisodeEditError("EPISODE_SET_INVALID")
@@ -241,11 +255,25 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             collection = await sources(uow.session, context, project_id)
             manager = get_project_manager()
             project = await asyncio.to_thread(manager.load_project, project_id)
-            if not any(receipt["key"] == key for receipt in project.get("episode_edit_receipts", [])):
+            previous_receipt = next(
+                (receipt for receipt in project.get("episode_edit_receipts", []) if receipt["key"] == key), None
+            )
+            if previous_receipt is None:
                 current_snapshot = await asyncio.to_thread(
                     read_episodes, manager, project_id, source_texts=collection.texts
                 )
                 await validate_production_edits(uow.session, context, project_id, edits, current_snapshot)
+            budget_precondition = None
+            if claimed:
+                budget_precondition = await apply_episode_budgets(
+                    uow.session,
+                    context,
+                    row,
+                    edits,
+                    activate=body.get("applyBudgetLimits", False),
+                    recovering=previous_receipt is not None,
+                    required_revision=previous_receipt.get("budgetPrecondition") if previous_receipt else None,
+                )
             receipt = await asyncio.to_thread(
                 save_episodes,
                 manager,
@@ -256,6 +284,8 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
                 actor=context.actor_id,
                 replay_only=not claimed,
                 source_texts=collection.texts,
+                persist_budget=False,
+                budget_precondition=budget_precondition,
             )
             if claimed:
                 await uow.audit.append(

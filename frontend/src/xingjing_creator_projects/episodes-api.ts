@@ -43,6 +43,7 @@ export interface EpisodeDraft {
   production?: EpisodeProduction;
 }
 export interface Episode extends EpisodeDraft {
+  budgetConfirmed?: boolean;
   workingScript?: WorkingScript | null;
   locked: boolean;
   status: string;
@@ -56,7 +57,7 @@ export interface EpisodesSnapshot {
   revision: string;
   items: Episode[];
   sources: EpisodeSource[];
-  permissions?: { canReadSources: boolean; canCreateWorkingScript: boolean };
+  permissions?: { canReadSources: boolean; canCreateWorkingScript: boolean; canManageBudget?: boolean };
   contentMode: string;
   generationMode: string;
   plannedCount: number;
@@ -108,8 +109,13 @@ export function createEpisodesApi(getAccessToken: () => string | null) {
     production: (id: string) => request<ProductionCatalog>(id, "/production"),
     prepare: (id: string, revision: string, episodes: number[], action: "storyboards" | "packages", target: string) => request<ProductionCommand[]>(id, "/production/prepare", { method: "POST", headers: { "If-Match": `"${revision}"` }, body: JSON.stringify({ episodes, action, target }) }),
     execute: (id: string, command: ProductionCommand) => request<{ delivery?: { request_id: string; status: string }; shots?: unknown[] }>(id, "", { method: "POST", headers: { "Idempotency-Key": command.idempotencyKey }, body: JSON.stringify(command.payload) }, command.endpoint),
-    save: async (id: string, revision: string, items: Episode[]) => {
-      const body = JSON.stringify({ items: items.map(episodeDraft) });
+    save: async (id: string, revision: string, items: Episode[], options?: { budgetAccess?: boolean; applyBudgetLimits?: boolean }) => {
+      const values = items.map((item) => {
+        const draft = episodeDraft(item);
+        if (options?.budgetAccess === false) { const { budgetMinor: omitted, ...metadata } = draft; void omitted; return metadata; }
+        return draft;
+      });
+      const body = JSON.stringify({ items: values, ...(options?.applyBudgetLimits ? { applyBudgetLimits: true } : {}) });
       const operation = `${id}:${revision}:${body}`;
       const key = keys.get(operation) ?? crypto.randomUUID();
       keys.set(operation, key);

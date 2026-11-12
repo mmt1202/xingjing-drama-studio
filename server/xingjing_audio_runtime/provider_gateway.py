@@ -11,7 +11,11 @@ from server.xingjing_audio_persistence.repository import AudioScope
 
 
 class AudioProviderGatewayError(RuntimeError):
-    """A remote media provider did not accept or cancel a task."""
+    """A provider operation failed; only explicit rejection proves no submission was accepted."""
+
+    def __init__(self, code: str, *, definitive: bool = False) -> None:
+        self.definitive = definitive
+        super().__init__(code)
 
 
 class MediaSubmission:
@@ -55,7 +59,7 @@ class HttpAudioMediaProvider:
     async def submit(self, *, scope: AudioScope, task: Mapping[str, Any]) -> MediaSubmission:
         task_id = task.get("id")
         if not isinstance(task_id, str) or not task_id:
-            raise AudioProviderGatewayError("AUDIO_PROVIDER_TASK_ID_INVALID")
+            raise AudioProviderGatewayError("AUDIO_PROVIDER_TASK_ID_INVALID", definitive=True)
         payload = {
             "taskId": task_id,
             "tenantId": scope.tenant_id,
@@ -71,11 +75,20 @@ class HttpAudioMediaProvider:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
                 response = await client.post(
                     self._submit_url,
-                    headers={"Authorization": f"Bearer {self._bearer_token}", "Accept": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {self._bearer_token}",
+                        "Accept": "application/json",
+                        "Idempotency-Key": f"audio:{task_id}:{task.get('attempt_count', 1)}",
+                    },
                     json=payload,
                 )
                 response.raise_for_status()
                 body = response.json()
+        except httpx.HTTPStatusError as error:
+            raise AudioProviderGatewayError(
+                "AUDIO_PROVIDER_SUBMISSION_FAILED",
+                definitive=400 <= error.response.status_code < 500 and error.response.status_code != 408,
+            ) from error
         except (httpx.HTTPError, ValueError) as error:
             raise AudioProviderGatewayError("AUDIO_PROVIDER_SUBMISSION_FAILED") from error
         if not isinstance(body, dict):

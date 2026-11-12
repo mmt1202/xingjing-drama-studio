@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
@@ -58,6 +59,8 @@ from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import GeneratedArtifactStorageError, LocalGenerationArtifactStore
 from .input_assets import GenerationInputResolver, validate_input_media
+from .native_image.credentials import ExactImageCredentialResolver, NativeImageConfigurationError
+from .native_image.executor import NativeImageExecutor
 from .provider_callback import GenerationProviderCallbackService, ProviderGeneratedOutput
 from .provider_gateway import GenerationProviderGatewayError, HttpGenerationProviderGateway
 
@@ -82,6 +85,8 @@ class GenerationModelDefinition:
     media_types: tuple[str, ...]
     capabilities: tuple[str, ...]
     active: bool
+    successful_output_minor: int | None = None
+    billing_currency: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,8 @@ class GenerationModelAvailability:
     pricing_version: str | None
     models: tuple[GenerationModelDefinition, ...] = ()
     input_contract_available: bool = False
+    configuration_errors: tuple[str, ...] = ()
+    successful_output_minor: int | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,7 @@ class GenerationRuntime:
         provider_recovery_secret: str | None = None,
         model_catalog: tuple[GenerationModelDefinition, ...] = (),
         model_route_resolver: ModelRouteResolver | None = None,
+        native_images: NativeImageExecutor | None = None,
         unavailable_code: str | None = None,
         close: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -138,6 +146,7 @@ class GenerationRuntime:
         self._provider_recovery_secret = provider_recovery_secret
         self._model_catalog = model_catalog
         self._model_route_resolver = model_route_resolver
+        self._native_images = native_images
         self._timeout_sweeper: asyncio.Task[None] | None = None
         self.unavailable_code = unavailable_code
         self._close = close
@@ -240,7 +249,9 @@ class GenerationRuntime:
             and gateway.input_contract == "verified-media/v1",
         )
 
-    async def read_model_availability(self) -> GenerationModelAvailability:
+    async def read_model_availability(
+        self, context: TrustedWorkspaceContext | None = None
+    ) -> GenerationModelAvailability:
         base = self.model_availability()
         if self._model_route_resolver is None:
             return base
@@ -263,9 +274,45 @@ class GenerationRuntime:
                     media_types=media,
                     capabilities=tuple(cast(list[str], record["capabilities"])),
                     active=True,
+                    successful_output_minor=cast(dict[str, int | None], record.get("pricing", {})).get(
+                        "successfulOutputMinor"
+                    ),
+                    billing_currency=cast(dict[str, str], record.get("pricing", {})).get("currency"),
                 )
             )
         gateway = self._provider_gateway
+        native_ready, native_errors = (
+            await self._native_images.ready_catalog(context.workspace_id, records)
+            if self._native_images and context
+            else (set(), ())
+        )
+        if self._native_images and self._native_images.enabled:
+            native_pairs = {
+                (str(item["providerId"]), str(item["providerModelName"]))
+                for item in records
+                if item["registryKey"] in native_ready
+            }
+            definitions = [
+                replace(
+                    item,
+                    media_types=("image",),
+                    capabilities=tuple(
+                        cap
+                        for cap in item.capabilities
+                        if cap
+                        in {
+                            "image_generation",
+                            "image_edit",
+                            "reference_fusion",
+                            "character_turnaround",
+                            "character_expressions",
+                        }
+                    ),
+                )
+                if (item.provider_id, item.model_id) in native_pairs
+                else replace(item, active=bool(gateway and gateway.provider_id == item.provider_id))
+                for item in definitions
+            ]
         default = next(
             (
                 record
@@ -276,18 +323,27 @@ class GenerationRuntime:
             ),
             None,
         )
+        if default is None and native_ready:
+            default = next((record for record in records if record["registryKey"] in native_ready), None)
         pricing = cast(dict[str, object], default["pricing"]) if default else {}
         return replace(
             base,
             models=tuple(definitions),
             submission_available=bool(
-                gateway
+                native_ready
+                or gateway
                 and self._billing_policy
                 and any(item.provider_id == gateway.provider_id for item in definitions)
             ),
             billing_currency=str(pricing["currency"]) if pricing else None,
             estimated_cost_minor=int(cast(int, pricing["estimatedMinor"])) if pricing else None,
             pricing_version=str(pricing["pricingVersion"]) if pricing else None,
+            provider_id=str(default["providerId"]) if default else base.provider_id,
+            model_id=str(default["providerModelName"]) if default else base.model_id,
+            callback_available=base.callback_available or bool(native_ready),
+            input_contract_available=base.input_contract_available or bool(native_ready),
+            configuration_errors=native_errors,
+            successful_output_minor=cast(int | None, pricing.get("successfulOutputMinor")),
         )
 
     async def get_task(self, context: TrustedWorkspaceContext, project_id: str, task_id: str) -> GenerationTask:
@@ -337,7 +393,10 @@ class GenerationRuntime:
 
     async def task_progress(self, context: TrustedWorkspaceContext, project_id: str, task_id: str) -> dict[str, object]:
         await self.get_task(context, project_id, task_id)
-        return await self._repository_or_raise().task_progress(context.workspace_id, project_id, task_id)
+        progress = await self._repository_or_raise().task_progress(context.workspace_id, project_id, task_id)
+        if self._native_images:
+            progress["nativeExecution"] = await self._native_images.state(context.workspace_id, project_id, task_id)
+        return progress
 
     async def generated_candidate_sets(
         self,
@@ -413,6 +472,8 @@ class GenerationRuntime:
         if current.version != expected_version:
             raise ValueError("GENERATION_TASK_VERSION_CONFLICT")
         if current.status is TaskStatus.RUNNING:
+            if self._native_images and await self._native_images.state(context.workspace_id, project_id, task_id):
+                raise GenerationRuntimeUnavailable("GENERATION_NATIVE_CANCELLATION_UNAVAILABLE")
             gateway = self._provider_or_raise()
             if not current.provider_job_id:
                 raise GenerationRuntimeUnavailable("GENERATION_PROVIDER_JOB_ID_MISSING")
@@ -473,6 +534,8 @@ class GenerationRuntime:
             expected_version=current.version,
             event_id=f"cancel:{updated.task_id}:{updated.version}",
         )
+        if self._native_images:
+            await self._native_images.cancelled(updated)
         await self._repository_or_raise().append_audit(
             ImmutableAuditRecord(
                 audit_id=str(uuid4()),
@@ -551,15 +614,12 @@ class GenerationRuntime:
             if replay != existing.request:
                 raise ValueError("IDEMPOTENCY_KEY_REUSED")
             return existing
-        gateway = self._provider_or_raise()
-        billing = self._billing_policy_or_raise()
+        gateway = self._provider_gateway
+        native_enabled = bool(self._native_images and self._native_images.enabled)
+        if gateway is None and not native_enabled:
+            self._provider_or_raise()
         request = await self._project_model_default(context, project_id, request)
         request = await self._resolve_input_assets(context, project_id, request)
-        if request.input_asset_ids:
-            try:
-                gateway.validate_input_contract(request)
-            except GenerationProviderGatewayError as error:
-                raise GenerationRuntimeUnavailable(str(error)) from error
         if self._model_route_resolver is None:
             raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
         try:
@@ -570,12 +630,17 @@ class GenerationRuntime:
                 media_type=request.media_type.value,
                 requested_provider_id=request.requested_provider_id,
                 requested_model_id=request.requested_model_id,
-                parameters=request.parameters,
+                parameters=_route_parameters(request),
                 acquire=True,
             )
         except LookupError as error:
             raise ValueError(str(error)) from error
-        if route.provider_id != gateway.provider_id:
+        native = (
+            self._native_images
+            if native_enabled and self._native_images and self._native_images.supports(route)
+            else None
+        )
+        if native is None and (gateway is None or route.provider_id != gateway.provider_id):
             await self._model_route_resolver.release(
                 provider_id=route.provider_id, model_id=route.model_id, succeeded=False
             )
@@ -583,6 +648,20 @@ class GenerationRuntime:
         request = request.model_copy(
             update={"requested_provider_id": route.provider_id, "requested_model_id": route.model_id}
         )
+        submission_preparer = None
+        try:
+            if native:
+                submission_preparer = await native.admission(context, request, route)
+            else:
+                self._billing_policy_or_raise()
+                assert gateway is not None
+                if request.input_asset_ids:
+                    gateway.validate_input_contract(request)
+        except (NativeImageConfigurationError, GenerationProviderGatewayError, GenerationRuntimeUnavailable) as error:
+            await self._model_route_resolver.release(
+                provider_id=route.provider_id, model_id=route.model_id, succeeded=False
+            )
+            raise GenerationRuntimeUnavailable(str(error)) from error
         now = datetime.now(UTC)
         candidate = GenerationTask.create(
             task_id=str(uuid4()),
@@ -597,7 +676,9 @@ class GenerationRuntime:
                 estimated_minor=route.estimated_minor,
                 currency=route.currency,
                 pricing_version=route.pricing_version,
-                max_active_tasks=billing.max_active_tasks,
+                max_active_tasks=self._billing_policy.max_active_tasks if self._billing_policy else 20,
+                budget_permissions=context.permissions,
+                submission_preparer=submission_preparer,
             )
         except Exception:
             await self._model_route_resolver.release(
@@ -609,6 +690,9 @@ class GenerationRuntime:
                 provider_id=route.provider_id, model_id=route.model_id, succeeded=True
             )
             return created
+        if native:
+            return created
+        assert gateway is not None
         try:
             submission = await gateway.submit(request, task_id=created.task_id, attempt=1, deadline=created.timeout_at)
         except GenerationProviderGatewayError as error:
@@ -970,6 +1054,8 @@ class GenerationRuntime:
         return result.task
 
     async def start(self) -> None:
+        if self._native_images:
+            await self._native_images.start()
         if self.unavailable_code is None and self._timeout_sweeper is None:
             self._timeout_sweeper = asyncio.create_task(self._timeout_sweeper_loop())
 
@@ -989,6 +1075,10 @@ class GenerationRuntime:
         completed = 0
         provider_jobs: list[str] = []
         for current in tasks:
+            if self._native_images and await self._native_images.state(
+                current.request.workspace_id, current.request.project_id, current.task_id
+            ):
+                continue
             expired = expire_task(current, at=expired_at)
             try:
                 await self._repository_or_raise().save_with_billing_release(
@@ -1033,6 +1123,8 @@ class GenerationRuntime:
         return completed
 
     async def close(self) -> None:
+        if self._native_images:
+            await self._native_images.close()
         if self._timeout_sweeper is not None:
             self._timeout_sweeper.cancel()
             with suppress(asyncio.CancelledError):
@@ -1331,8 +1423,38 @@ def create_production_generation_runtime(
     if provider_recovery_secret and len(provider_recovery_secret) < 32:
         return _unavailable_runtime("XINGJING_M06_PROVIDER_RECOVERY_SECRET_MINIMUM_32_REQUIRED")
     billing_policy = _billing_policy_from_environment()
+    from server.xingjing_budget import BudgetAdmissionService
+
+    repository = SqlAlchemyGenerationTaskRepository(factory, budget_guard=BudgetAdmissionService())
+    routes = ModelRouteResolver(model_factory)
+    native_images = None
+    if artifact_store is not None:
+        native_enabled = os.environ.get("XINGJING_M06_NATIVE_IMAGE_ENABLED", "").strip().lower() == "true"
+        if native_enabled:
+            from lib.db.engine import get_database_url
+
+            if model_url != url or get_database_url() != url:
+                return _unavailable_runtime("GENERATION_NATIVE_SHARED_DATABASE_REQUIRED")
+        try:
+            grants = ExactImageCredentialResolver.parse_grants(
+                os.environ.get("XINGJING_M06_NATIVE_CREDENTIAL_GRANTS", "") if native_enabled else "{}"
+            )
+        except NativeImageConfigurationError as error:
+            return _unavailable_runtime(str(error))
+        native_images = NativeImageExecutor(
+            factory,
+            repository,
+            ExactImageCredentialResolver(factory, grants),
+            artifact_store,
+            Path(
+                os.environ.get("XINGJING_M06_NATIVE_IMAGE_ROOT", "").strip()
+                or str(Path(artifact_root).parent / "native-images")
+            ),
+            routes,
+            enabled=native_enabled,
+        )
     return GenerationRuntime(
-        repository=SqlAlchemyGenerationTaskRepository(factory),
+        repository=repository,
         session_factory=factory,
         context_resolver=context_resolver or TrustedWorkspaceContextResolver(PlatformSessionGateway()),
         provider_gateway=provider_gateway,
@@ -1342,7 +1464,8 @@ def create_production_generation_runtime(
         billing_policy=billing_policy,
         billing_callback_secret=billing_callback_secret or None,
         provider_recovery_secret=provider_recovery_secret or None,
-        model_route_resolver=ModelRouteResolver(model_factory),
+        model_route_resolver=routes,
+        native_images=native_images,
         close=close_engines,
     )
 
@@ -1354,6 +1477,25 @@ def _unavailable_runtime(code: str) -> GenerationRuntime:
         context_resolver=None,
         unavailable_code=code,
     )
+
+
+def _route_parameters(request: GenerationRequest) -> dict[str, object]:
+    orchestration = {
+        "asset_id",
+        "source_version_id",
+        "source_content_sha256",
+        "asset_operation",
+        "cover_plan_id",
+        "storyboard_id",
+        "storyboard_version",
+        "shot_id",
+        "prompt_template_id",
+        "prompt_model_adapter_version",
+        "retry_of_task_id",
+    }
+    if request.media_type.value == "image":
+        orchestration.add("duration_ms")
+    return {key: value for key, value in request.parameters.items() if key not in orchestration}
 
 
 def _provider_from_environment(

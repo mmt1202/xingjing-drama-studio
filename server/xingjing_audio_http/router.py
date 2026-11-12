@@ -24,6 +24,7 @@ from server.xingjing_audio_persistence.repository import (
     VersionConflict,
 )
 from server.xingjing_audio_runtime import AudioRuntime, AudioRuntimeUnavailable
+from server.xingjing_budget import BudgetError
 
 
 class AudioHttpError(RuntimeError):
@@ -44,6 +45,9 @@ class AudioContractRoute(APIRoute):
                 return _error(request, error.code, error.status_code)
             except AudioRuntimeUnavailable as error:
                 return _error(request, error.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            except BudgetError as error:
+                response_status = 503 if error.code.endswith("UNAVAILABLE") else error.status_code
+                return _error(request, error.code, response_status)
             except PermissionError:
                 return _error(request, "PERMISSION_DENIED", status.HTTP_403_FORBIDDEN)
             except LookupError:
@@ -54,7 +58,14 @@ class AudioContractRoute(APIRoute):
                 return _error(request, "AUDIO_VERSION_OR_IDEMPOTENCY_CONFLICT", status.HTTP_409_CONFLICT)
             except AudioBillingError as error:
                 code = str(error) or "AUDIO_BILLING_REJECTED"
-                status_code = status.HTTP_402_PAYMENT_REQUIRED if code == "AUDIO_INSUFFICIENT_CREDITS" else status.HTTP_409_CONFLICT
+                if code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_")):
+                    response_status = 503 if code.endswith("UNAVAILABLE") else BudgetError(code).status_code
+                    return _error(request, code, response_status)
+                status_code = (
+                    status.HTTP_402_PAYMENT_REQUIRED
+                    if code == "AUDIO_INSUFFICIENT_CREDITS"
+                    else status.HTTP_409_CONFLICT
+                )
                 return _error(request, code, status_code)
             except HTTPException as error:
                 detail = error.detail if isinstance(error.detail, Mapping) else {}
@@ -70,10 +81,26 @@ class AudioContractRoute(APIRoute):
 def create_audio_router(runtime: AudioRuntime) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["xingjing-audio"], route_class=AudioContractRoute)
 
+    @router.get("/projects/{project_id}/audio/budget-binding")
+    async def resource_budget_binding(request: Request, project_id: str) -> JSONResponse:
+        scope, context = await runtime.scope_for(request, project_id, "audio.view")
+        resource_type = request.query_params.get("resourceType", "")
+        resource_id = request.query_params.get("resourceId", "").strip()
+        if (
+            resource_type not in {"audio_track", "subtitle_track", "lip_sync_version"}
+            or not resource_id
+            or len(resource_id) > 128
+        ):
+            raise ValueError("BUDGET_SCOPE_INVALID")
+        target = await runtime.resource_budget_scope(scope, resource_type=resource_type, resource_id=resource_id)
+        return _success(context.request_id, {"budgetScope": target})
+
     @router.get("/projects/{project_id}/audio-tracks")
     async def list_audio_tracks(request: Request, project_id: str) -> JSONResponse:
         scope, context = await runtime.scope_for(request, project_id, "audio.view")
-        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
         limit = _integer(request.query_params.get("limit"), default=50, minimum=1, maximum=100, code="INVALID_LIMIT")
         audio_tracks, subtitle_tracks, total = await runtime.list_tracks(
             scope,
@@ -93,14 +120,26 @@ def create_audio_router(runtime: AudioRuntime) -> APIRouter:
     @router.get("/projects/{project_id}/audio-tasks")
     async def list_audio_tasks(request: Request, project_id: str) -> JSONResponse:
         scope, context = await runtime.scope_for(request, project_id, "audio.view")
-        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
         limit = _integer(request.query_params.get("limit"), default=50, minimum=1, maximum=100, code="INVALID_LIMIT")
         tasks, total = await runtime.list_media_tasks(
             scope,
             status=_enum_query(
                 request,
                 "status",
-                {"pending", "queued", "running", "cancelling", "retrying", "succeeded", "failed", "cancelled", "timed_out"},
+                {
+                    "pending",
+                    "queued",
+                    "running",
+                    "cancelling",
+                    "retrying",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "timed_out",
+                },
             ),
             task_kind=_enum_query(request, "taskKind", {"audio", "subtitle", "lip_sync", "mix"}),
             query=_query_text(request, "q"),
@@ -112,7 +151,9 @@ def create_audio_router(runtime: AudioRuntime) -> APIRouter:
     @router.get("/projects/{project_id}/audio-audit-events")
     async def list_audio_audit_events(request: Request, project_id: str) -> JSONResponse:
         scope, context = await runtime.scope_for(request, project_id, "audio.view")
-        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
         limit = _integer(request.query_params.get("limit"), default=50, minimum=1, maximum=100, code="INVALID_LIMIT")
         events, total = await runtime.list_audit_events(
             scope,
@@ -128,7 +169,9 @@ def create_audio_router(runtime: AudioRuntime) -> APIRouter:
     @router.get("/projects/{project_id}/lip-sync-versions")
     async def list_lip_sync_versions(request: Request, project_id: str) -> JSONResponse:
         scope, context = await runtime.scope_for(request, project_id, "audio.view")
-        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
         limit = _integer(request.query_params.get("limit"), default=50, minimum=1, maximum=100, code="INVALID_LIMIT")
         versions, total = await runtime.list_lip_sync_versions(scope, offset=offset, limit=limit)
         return _success(context.request_id, {"versions": jsonable_encoder(versions)}, total=total)
@@ -148,7 +191,9 @@ def create_audio_router(runtime: AudioRuntime) -> APIRouter:
     @router.get("/projects/{project_id}/{track_kind}-tracks/{track_id}/versions")
     async def list_track_versions(request: Request, project_id: str, track_kind: str, track_id: str) -> JSONResponse:
         scope, context = await runtime.scope_for(request, project_id, "audio.view")
-        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET")
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
         limit = _integer(request.query_params.get("limit"), default=50, minimum=1, maximum=100, code="INVALID_LIMIT")
         versions, total = await runtime.list_track_versions(
             scope, track_kind=track_kind, track_id=track_id, offset=offset, limit=limit
@@ -196,7 +241,12 @@ async def _dispatch_action(
     action = _text(body, "action")
     if action == "create_audio_track":
         return await runtime.create_audio_track(
-            scope, context, track_id=_text(body, "trackId"), track_kind=_text(body, "trackKind"), title=_text(body, "title"), idempotency_key=idempotency_key
+            scope,
+            context,
+            track_id=_text(body, "trackId"),
+            track_kind=_text(body, "trackKind"),
+            title=_text(body, "title"),
+            idempotency_key=idempotency_key,
         )
     if action == "create_subtitle_track":
         return await runtime.create_subtitle_track(
@@ -285,7 +335,10 @@ async def _dispatch_action(
             task_kind=_text(body, "taskKind"),
             resource_type=_text(body, "resourceType"),
             resource_id=_text(body, "resourceId"),
-            max_attempts=_integer_value(body.get("maxAttempts"), default=2, minimum=1, maximum=10, code="INVALID_MAX_ATTEMPTS"),
+            max_attempts=_integer_value(
+                body.get("maxAttempts"), default=2, minimum=1, maximum=10, code="INVALID_MAX_ATTEMPTS"
+            ),
+            budget_scope=_optional_budget_scope(body),
             idempotency_key=idempotency_key,
         )
     if action == "retry_media_task":
@@ -332,6 +385,15 @@ def _text(body: Mapping[str, object], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise AudioHttpError(f"{name.upper()}_REQUIRED")
     return value.strip()
+
+
+def _optional_budget_scope(body: Mapping[str, object]) -> Mapping[str, object] | None:
+    value = body.get("budgetScope")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError("BUDGET_SCOPE_INVALID")
+    return value
 
 
 def _optional_text(body: Mapping[str, object], name: str) -> str | None:
@@ -405,5 +467,16 @@ def _success(request_id: str, data: Mapping[str, object], *, total: int | None =
 
 
 def _error(request: Request, code: str, status_code: int) -> JSONResponse:
+    from lib.i18n import get_translator
+
     request_id = (request.headers.get("X-Request-Id") or "unknown").strip() or "unknown"
-    return JSONResponse(status_code=status_code, content={"error": {"code": code, "details": {}}, "meta": {"requestId": request_id}})
+    message = (
+        {"message": get_translator(request)(code.lower())}
+        if code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_"))
+        or code == "AUDIO_PROVIDER_SUBMISSION_UNKNOWN"
+        else {}
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, **message, "details": {}}, "meta": {"requestId": request_id}},
+    )

@@ -1,4 +1,7 @@
 import type { ApiEnvelope, ApiFailure, AudioActionResult, AudioTasksData, AudioTracksData, LipSyncVersionsData, TrackVersionsData } from "./contracts";
+import type { BudgetScope } from "@/xingjing_budget/BudgetScopePicker";
+import i18n from "@/i18n";
+import { createAuthenticatedFetcher } from "@/utils/auth";
 
 export class XingjingApiError extends Error {
   constructor(public detail: ApiFailure) { super(detail.message); }
@@ -43,7 +46,8 @@ function failureMessage(code: string) {
   return messages[code] ?? code;
 }
 
-export function createGenerationAudioApi({ fetcher, getAccessToken }: GenerationAudioApiOptions = {}) {
+export function createGenerationAudioApi({ fetcher: providedFetcher, getAccessToken }: GenerationAudioApiOptions = {}) {
+  const fetcher = createAuthenticatedFetcher({ fetcher: providedFetcher });
   function listPath(path: string, options: AudioListOptions = {}) {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(options)) {
@@ -57,21 +61,23 @@ export function createGenerationAudioApi({ fetcher, getAccessToken }: Generation
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
     if (init.body) headers.set("Content-Type", "application/json");
+    headers.set("Accept-Language", i18n.resolvedLanguage ?? i18n.language ?? "zh");
     if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
     if (options.version !== undefined) headers.set("If-Match", String(options.version));
     const token = await getAccessToken?.();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const response = await (fetcher ?? fetch)(path, { ...init, headers, signal: options.signal, credentials: "include" });
-    const body = await response.json().catch(() => ({})) as { data?: T; meta?: { requestId?: string }; error?: { code?: string } };
+    const response = await fetcher(path, { ...init, headers, signal: options.signal, credentials: "include" });
+    const body = await response.json().catch(() => ({})) as { data?: T; meta?: { requestId?: string }; error?: { code?: string; message?: string } };
     if (!response.ok) {
       const code = body.error?.code ?? (response.status === 409 ? "AUDIO_VERSION_OR_IDEMPOTENCY_CONFLICT" : "REQUEST_FAILED");
-      throw new XingjingApiError({ status: response.status, code, message: failureMessage(code), requestId: body.meta?.requestId ?? response.headers.get("X-Request-Id") ?? undefined });
+      throw new XingjingApiError({ status: response.status, code, message: body.error?.message ?? failureMessage(code), requestId: body.meta?.requestId ?? response.headers.get("X-Request-Id") ?? undefined });
     }
     if (body.data === undefined) throw new XingjingApiError({ status: response.status, code: "INVALID_AUDIO_ENVELOPE", message: "服务返回了无效的音频数据协议。", requestId: body.meta?.requestId });
     return { data: body.data, meta: body.meta ?? {} };
   }
 
   return {
+    budgetBinding: (projectId: string, resourceType: string, resourceId: string, signal?: AbortSignal) => request<{ budgetScope: BudgetScope | null }>(`/api/v1/projects/${encodeURIComponent(projectId)}/audio/budget-binding?${new URLSearchParams({ resourceType, resourceId })}`, {}, { signal }),
     audioTracks: (projectId: string, options?: AudioListOptions, signal?: AbortSignal) => request<AudioTracksData>(listPath(`/api/v1/projects/${encodeURIComponent(projectId)}/audio-tracks`, options), {}, { signal }),
     audioTasks: (projectId: string, options?: AudioListOptions, signal?: AbortSignal) => request<AudioTasksData>(listPath(`/api/v1/projects/${encodeURIComponent(projectId)}/audio-tasks`, options), {}, { signal }),
     lipSyncVersions: (projectId: string, signal?: AbortSignal) => request<LipSyncVersionsData>(`/api/v1/projects/${encodeURIComponent(projectId)}/lip-sync-versions`, {}, { signal }),

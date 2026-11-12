@@ -238,7 +238,7 @@ class CoverRuntime:
         availability = None
         if "generation.view" in context.permissions:
             try:
-                availability = asdict(await self.generation.read_model_availability())
+                availability = asdict(await self.generation.read_model_availability(context=context))
             except GenerationRuntimeUnavailable:
                 pass
         return {**value, "generationAvailability": availability}
@@ -732,6 +732,7 @@ class CoverRuntime:
             if len(row.generation_task_ids) >= 30:
                 raise CoverFailure("COVER_GENERATION_LIMIT", 422)
             parameters = dict(payload["parameters"])
+            parameters.pop("cover_plan_id", None)
             if parameters.get("aspect_ratio", row.aspect_ratio) != row.aspect_ratio:
                 raise CoverFailure("COVER_GENERATION_ASPECT_MISMATCH", 422)
             parameters["aspect_ratio"] = row.aspect_ratio
@@ -771,6 +772,8 @@ class CoverRuntime:
         task = await repository.get_by_idempotency_scope(
             f"{context.workspace_id}:{submission_key}", project_id=project_id
         )
+        if task is None or "cover_plan_id" in task.request.parameters:
+            request = request.model_copy(update={"parameters": {**request.parameters, "cover_plan_id": plan_id}})
         if task is not None and (
             task.request.media_type != request.media_type
             or task.request.capability != request.capability

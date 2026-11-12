@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from string import hexdigits
@@ -24,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from server.xingjing_budget import BudgetAdmissionService
 from server.xingjing_generation.contracts import GenerationTask, TaskStatus
 
 
@@ -111,7 +113,11 @@ class GenerationBillingHoldRow(Base):
     __table_args__ = (
         ForeignKeyConstraint(
             ["workspace_id", "project_id", "task_id"],
-            ["xingjing_generation_tasks.workspace_id", "xingjing_generation_tasks.project_id", "xingjing_generation_tasks.task_id"],
+            [
+                "xingjing_generation_tasks.workspace_id",
+                "xingjing_generation_tasks.project_id",
+                "xingjing_generation_tasks.task_id",
+            ],
             ondelete="RESTRICT",
         ),
         CheckConstraint("estimated_minor > 0", name="ck_xj_generation_hold_estimated"),
@@ -154,7 +160,11 @@ class ProviderSubmissionOutboxRow(Base):
     __table_args__ = (
         ForeignKeyConstraint(
             ["workspace_id", "project_id", "task_id"],
-            ["xingjing_generation_tasks.workspace_id", "xingjing_generation_tasks.project_id", "xingjing_generation_tasks.task_id"],
+            [
+                "xingjing_generation_tasks.workspace_id",
+                "xingjing_generation_tasks.project_id",
+                "xingjing_generation_tasks.task_id",
+            ],
             ondelete="RESTRICT",
         ),
         CheckConstraint("status IN ('pending','accepted','failed')", name="ck_xj_generation_provider_outbox_status"),
@@ -176,7 +186,11 @@ class GenerationProgressRow(Base):
     __table_args__ = (
         ForeignKeyConstraint(
             ["workspace_id", "project_id", "task_id"],
-            ["xingjing_generation_tasks.workspace_id", "xingjing_generation_tasks.project_id", "xingjing_generation_tasks.task_id"],
+            [
+                "xingjing_generation_tasks.workspace_id",
+                "xingjing_generation_tasks.project_id",
+                "xingjing_generation_tasks.task_id",
+            ],
             ondelete="CASCADE",
         ),
         CheckConstraint("percent >= 0 AND percent <= 100", name="ck_xj_generation_progress_percent"),
@@ -307,7 +321,7 @@ class ProviderCallEvidence:
     project_id: str
     provider_id: str
     model_id: str
-    provider_job_id: str
+    provider_job_id: str | None
     attempt: int
     request_summary: dict[str, Any]
     response_summary: dict[str, Any]
@@ -371,7 +385,10 @@ class GeneratedAsset:
     created_at: datetime
 
     def __post_init__(self) -> None:
-        if not all(value.strip() for value in (self.asset_id, self.workspace_id, self.project_id, self.task_id, self.object_key)):
+        if not all(
+            value.strip()
+            for value in (self.asset_id, self.workspace_id, self.project_id, self.task_id, self.object_key)
+        ):
             raise ValueError("GENERATED_ASSET_IDENTITY_REQUIRED")
         if self.media_type not in {"image", "video"}:
             raise ValueError("INVALID_GENERATED_ASSET_MEDIA_TYPE")
@@ -442,8 +459,9 @@ SessionFactory = async_sessionmaker[AsyncSession]
 
 
 class SqlAlchemyGenerationTaskRepository:
-    def __init__(self, session_factory: SessionFactory) -> None:
+    def __init__(self, session_factory: SessionFactory, *, budget_guard: BudgetAdmissionService | None = None) -> None:
         self._session_factory = session_factory
+        self._budget_guard = budget_guard
 
     async def grant_credits(
         self,
@@ -462,8 +480,10 @@ class SqlAlchemyGenerationTaskRepository:
             replay = await session.get(GenerationBillingJournalRow, journal_id)
             if replay is not None:
                 if (
-                    replay.action != "grant" or replay.workspace_id != workspace_id
-                    or replay.amount_minor != amount_minor or replay.currency != currency.upper()
+                    replay.action != "grant"
+                    or replay.workspace_id != workspace_id
+                    or replay.amount_minor != amount_minor
+                    or replay.currency != currency.upper()
                     or replay.reference != reference
                 ):
                     raise GenerationBillingError("GENERATION_BILLING_IDEMPOTENCY_CONFLICT")
@@ -475,8 +495,13 @@ class SqlAlchemyGenerationTaskRepository:
             normalized_currency = currency.upper()
             if account is None:
                 account = GenerationBillingAccountRow(
-                    workspace_id=workspace_id, currency=normalized_currency, available_minor=0,
-                    held_minor=0, spent_minor=0, version=0, updated_at=at,
+                    workspace_id=workspace_id,
+                    currency=normalized_currency,
+                    available_minor=0,
+                    held_minor=0,
+                    spent_minor=0,
+                    version=0,
+                    updated_at=at,
                 )
                 session.add(account)
             elif account.currency != normalized_currency:
@@ -484,12 +509,22 @@ class SqlAlchemyGenerationTaskRepository:
             account.available_minor += amount_minor
             account.version += 1
             account.updated_at = at
-            session.add(GenerationBillingJournalRow(
-                event_id=journal_id, workspace_id=workspace_id, project_id="system", task_id=None,
-                action="grant", currency=normalized_currency, amount_minor=amount_minor,
-                postings=_balanced_postings(("workspace.available", amount_minor), ("platform.funding", -amount_minor)),
-                reference=reference, occurred_at=at,
-            ))
+            session.add(
+                GenerationBillingJournalRow(
+                    event_id=journal_id,
+                    workspace_id=workspace_id,
+                    project_id="system",
+                    task_id=None,
+                    action="grant",
+                    currency=normalized_currency,
+                    amount_minor=amount_minor,
+                    postings=_balanced_postings(
+                        ("workspace.available", amount_minor), ("platform.funding", -amount_minor)
+                    ),
+                    reference=reference,
+                    occurred_at=at,
+                )
+            )
             await session.flush()
             return _billing_account_payload(account)
 
@@ -501,6 +536,8 @@ class SqlAlchemyGenerationTaskRepository:
         currency: str,
         pricing_version: str,
         max_active_tasks: int = 20,
+        budget_permissions: frozenset[str] = frozenset(),
+        submission_preparer: Callable[[AsyncSession, GenerationTask], Awaitable[None]] | None = None,
     ) -> GenerationTask:
         if estimated_minor <= 0:
             raise GenerationBillingError("GENERATION_ESTIMATED_COST_INVALID")
@@ -518,6 +555,24 @@ class SqlAlchemyGenerationTaskRepository:
                     if value.request_fingerprint != task.request_fingerprint:
                         raise GenerationBillingError("GENERATION_IDEMPOTENCY_CONFLICT")
                     return value
+                budget_scope = None
+                if self._budget_guard is not None:
+                    budget_scope = await self._budget_guard.lock_scope(
+                        session, workspace_id=task.request.workspace_id, project_id=task.request.project_id
+                    )
+                    # Another command may have committed while this transaction waited for the project lock.
+                    existing = await session.scalar(
+                        select(TaskRow).where(
+                            TaskRow.workspace_id == task.request.workspace_id,
+                            TaskRow.project_id == task.request.project_id,
+                            TaskRow.idempotency_scope == task.idempotency_scope,
+                        )
+                    )
+                    if existing is not None:
+                        value = GenerationTask.model_validate(existing.snapshot)
+                        if value.request_fingerprint != task.request_fingerprint:
+                            raise GenerationBillingError("GENERATION_IDEMPOTENCY_CONFLICT")
+                        return value
                 account = await session.get(
                     GenerationBillingAccountRow, task.request.workspace_id, with_for_update=True
                 )
@@ -527,41 +582,95 @@ class SqlAlchemyGenerationTaskRepository:
                     raise GenerationBillingError("GENERATION_BILLING_CURRENCY_MISMATCH")
                 if account.available_minor < estimated_minor:
                     raise GenerationBillingError("GENERATION_INSUFFICIENT_CREDITS")
-                active_count = int(await session.scalar(
-                    select(func.count()).select_from(TaskRow).where(
-                        TaskRow.workspace_id == task.request.workspace_id,
-                        TaskRow.status.in_((
-                            TaskStatus.QUEUED.value, TaskStatus.RUNNING.value,
-                            TaskStatus.RETRYING.value, TaskStatus.CANCELLING.value,
-                        )),
+                active_count = int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(TaskRow)
+                        .where(
+                            TaskRow.workspace_id == task.request.workspace_id,
+                            TaskRow.status.in_(
+                                (
+                                    TaskStatus.QUEUED.value,
+                                    TaskStatus.RUNNING.value,
+                                    TaskStatus.RETRYING.value,
+                                    TaskStatus.CANCELLING.value,
+                                )
+                            ),
+                        )
                     )
-                ) or 0)
+                    or 0
+                )
                 if active_count >= max_active_tasks:
                     raise GenerationBillingError("GENERATION_WORKSPACE_CONCURRENCY_LIMIT")
+                if self._budget_guard is not None and budget_scope is not None:
+                    target = await self._budget_guard.resolve_generation_target(
+                        session, budget_scope, request=task.request, permissions=budget_permissions
+                    )
+                    await self._budget_guard.check_reservation(
+                        session,
+                        budget_scope,
+                        module="generation",
+                        task_id=task.task_id,
+                        currency=currency,
+                        estimated_minor=estimated_minor,
+                        target=target,
+                    )
                 session.add(_task_row(task))
+                # Persist the parent inside this transaction before inserting its dependent billing and outbox rows.
+                await session.flush()
                 account.available_minor -= estimated_minor
                 account.held_minor += estimated_minor
                 account.version += 1
                 account.updated_at = task.created_at
-                session.add(GenerationBillingHoldRow(
-                    workspace_id=task.request.workspace_id, project_id=task.request.project_id,
-                    task_id=task.task_id, currency=account.currency, estimated_minor=estimated_minor,
-                    actual_minor=0, released_minor=0, pricing_version=pricing_version,
-                    status="active", terminal_event_id=None, created_at=task.created_at, updated_at=task.created_at,
-                ))
-                session.add(GenerationBillingJournalRow(
-                    event_id=_journal_id("freeze", task.task_id), workspace_id=task.request.workspace_id,
-                    project_id=task.request.project_id, task_id=task.task_id, action="freeze",
-                    currency=account.currency, amount_minor=estimated_minor,
-                    postings=_balanced_postings(("workspace.available", -estimated_minor), ("workspace.held", estimated_minor)),
-                    reference=pricing_version, occurred_at=task.created_at,
-                ))
-                session.add(ProviderSubmissionOutboxRow(
-                    workspace_id=task.request.workspace_id, project_id=task.request.project_id,
-                    task_id=task.task_id, status="pending", attempts=0, provider_job_id=None,
-                    last_error=None, created_at=task.created_at, updated_at=task.created_at,
-                ))
+                session.add(
+                    GenerationBillingHoldRow(
+                        workspace_id=task.request.workspace_id,
+                        project_id=task.request.project_id,
+                        task_id=task.task_id,
+                        currency=account.currency,
+                        estimated_minor=estimated_minor,
+                        actual_minor=0,
+                        released_minor=0,
+                        pricing_version=pricing_version,
+                        status="active",
+                        terminal_event_id=None,
+                        created_at=task.created_at,
+                        updated_at=task.created_at,
+                    )
+                )
+                session.add(
+                    GenerationBillingJournalRow(
+                        event_id=_journal_id("freeze", task.task_id),
+                        workspace_id=task.request.workspace_id,
+                        project_id=task.request.project_id,
+                        task_id=task.task_id,
+                        action="freeze",
+                        currency=account.currency,
+                        amount_minor=estimated_minor,
+                        postings=_balanced_postings(
+                            ("workspace.available", -estimated_minor), ("workspace.held", estimated_minor)
+                        ),
+                        reference=pricing_version,
+                        occurred_at=task.created_at,
+                    )
+                )
+                session.add(
+                    ProviderSubmissionOutboxRow(
+                        workspace_id=task.request.workspace_id,
+                        project_id=task.request.project_id,
+                        task_id=task.task_id,
+                        status="pending",
+                        attempts=0,
+                        provider_job_id=None,
+                        last_error=None,
+                        created_at=task.created_at,
+                        updated_at=task.created_at,
+                    )
+                )
                 await session.flush()
+                if submission_preparer is not None:
+                    await submission_preparer(session, task)
+                    await session.flush()
                 return task
         except IntegrityError:
             existing = await self.get_by_idempotency_scope(task.idempotency_scope, project_id=task.request.project_id)
@@ -588,7 +697,11 @@ class SqlAlchemyGenerationTaskRepository:
             if hold is None or account is None:
                 raise GenerationBillingError("GENERATION_BILLING_HOLD_MISSING")
             if hold.status != "active":
-                if hold.status == "settled" and hold.terminal_event_id == event_id and hold.actual_minor == actual_minor:
+                if (
+                    hold.status == "settled"
+                    and hold.terminal_event_id == event_id
+                    and hold.actual_minor == actual_minor
+                ):
                     return _billing_hold_payload(hold)
                 raise GenerationBillingError("GENERATION_BILLING_TERMINAL_CONFLICT")
             if currency.upper() != hold.currency or actual_minor < 0 or actual_minor > hold.estimated_minor:
@@ -604,13 +717,24 @@ class SqlAlchemyGenerationTaskRepository:
             hold.status = "settled"
             hold.terminal_event_id = event_id
             hold.updated_at = at
-            session.add(GenerationBillingJournalRow(
-                event_id=_journal_id("settle", event_id), workspace_id=workspace_id, project_id=project_id,
-                task_id=task_id, action="settle", currency=hold.currency,
-                amount_minor=actual_minor,
-                postings=_balanced_postings(("workspace.held", -hold.estimated_minor), ("platform.revenue", actual_minor), ("workspace.available", released)),
-                reference=event_id, occurred_at=at,
-            ))
+            session.add(
+                GenerationBillingJournalRow(
+                    event_id=_journal_id("settle", event_id),
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    task_id=task_id,
+                    action="settle",
+                    currency=hold.currency,
+                    amount_minor=actual_minor,
+                    postings=_balanced_postings(
+                        ("workspace.held", -hold.estimated_minor),
+                        ("platform.revenue", actual_minor),
+                        ("workspace.available", released),
+                    ),
+                    reference=event_id,
+                    occurred_at=at,
+                )
+            )
             return _billing_hold_payload(hold)
 
     async def release_billing(
@@ -641,13 +765,22 @@ class SqlAlchemyGenerationTaskRepository:
             hold.status = "released"
             hold.terminal_event_id = event_id
             hold.updated_at = at
-            session.add(GenerationBillingJournalRow(
-                event_id=_journal_id("release", event_id), workspace_id=workspace_id, project_id=project_id,
-                task_id=task_id, action="release", currency=hold.currency,
-                amount_minor=hold.estimated_minor,
-                postings=_balanced_postings(("workspace.held", -hold.estimated_minor), ("workspace.available", hold.estimated_minor)),
-                reference=event_id, occurred_at=at,
-            ))
+            session.add(
+                GenerationBillingJournalRow(
+                    event_id=_journal_id("release", event_id),
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    task_id=task_id,
+                    action="release",
+                    currency=hold.currency,
+                    amount_minor=hold.estimated_minor,
+                    postings=_balanced_postings(
+                        ("workspace.held", -hold.estimated_minor), ("workspace.available", hold.estimated_minor)
+                    ),
+                    reference=event_id,
+                    occurred_at=at,
+                )
+            )
             return _billing_hold_payload(hold)
 
     async def create(self, task: GenerationTask) -> GenerationTask:
@@ -735,16 +868,20 @@ class SqlAlchemyGenerationTaskRepository:
             raise ValueError("INVALID_GENERATION_CANDIDATE_PAGE")
         async with self._session_factory() as session:
             rows = (
-                await session.execute(
-                    select(TaskRow)
-                    .where(
-                        TaskRow.workspace_id == workspace_id,
-                        TaskRow.project_id == project_id,
-                        TaskRow.status == TaskStatus.SUCCEEDED.value,
+                (
+                    await session.execute(
+                        select(TaskRow)
+                        .where(
+                            TaskRow.workspace_id == workspace_id,
+                            TaskRow.project_id == project_id,
+                            TaskRow.status == TaskStatus.SUCCEEDED.value,
+                        )
+                        .order_by(TaskRow.updated_at.desc(), TaskRow.task_id.desc())
                     )
-                    .order_by(TaskRow.updated_at.desc(), TaskRow.task_id.desc())
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             tasks = tuple(GenerationTask.model_validate(row.snapshot) for row in rows)
             filtered = tuple(
                 task
@@ -757,25 +894,33 @@ class SqlAlchemyGenerationTaskRepository:
             if not task_ids:
                 return (), len(filtered)
             asset_rows = (
-                await session.execute(
-                    select(GeneratedAssetRow)
-                    .where(
-                        GeneratedAssetRow.workspace_id == workspace_id,
-                        GeneratedAssetRow.project_id == project_id,
-                        GeneratedAssetRow.task_id.in_(task_ids),
+                (
+                    await session.execute(
+                        select(GeneratedAssetRow)
+                        .where(
+                            GeneratedAssetRow.workspace_id == workspace_id,
+                            GeneratedAssetRow.project_id == project_id,
+                            GeneratedAssetRow.task_id.in_(task_ids),
+                        )
+                        .order_by(GeneratedAssetRow.created_at, GeneratedAssetRow.asset_id)
                     )
-                    .order_by(GeneratedAssetRow.created_at, GeneratedAssetRow.asset_id)
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             selection_rows = (
-                await session.execute(
-                    select(GeneratedCandidateSelectionRow).where(
-                        GeneratedCandidateSelectionRow.workspace_id == workspace_id,
-                        GeneratedCandidateSelectionRow.project_id == project_id,
-                        GeneratedCandidateSelectionRow.task_id.in_(task_ids),
+                (
+                    await session.execute(
+                        select(GeneratedCandidateSelectionRow).where(
+                            GeneratedCandidateSelectionRow.workspace_id == workspace_id,
+                            GeneratedCandidateSelectionRow.project_id == project_id,
+                            GeneratedCandidateSelectionRow.task_id.in_(task_ids),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         assets_by_task: dict[str, list[GeneratedAsset]] = {task_id: [] for task_id in task_ids}
         for row in asset_rows:
             assets_by_task[row.task_id].append(_generated_asset(row))
@@ -796,25 +941,30 @@ class SqlAlchemyGenerationTaskRepository:
         """Aggregate only recorded task states and provider billing evidence."""
         async with self._session_factory() as session:
             task_rows = (
-                await session.execute(
-                    select(TaskRow)
-                    .where(TaskRow.workspace_id == workspace_id, TaskRow.project_id == project_id)
-                    .order_by(TaskRow.created_at.desc(), TaskRow.task_id.desc())
-                )
-            ).scalars().all()
-            cost_rows = (
-                await session.execute(
-                    select(CostEvidenceRow).where(
-                        CostEvidenceRow.workspace_id == workspace_id,
-                        CostEvidenceRow.project_id == project_id,
+                (
+                    await session.execute(
+                        select(TaskRow)
+                        .where(TaskRow.workspace_id == workspace_id, TaskRow.project_id == project_id)
+                        .order_by(TaskRow.created_at.desc(), TaskRow.task_id.desc())
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
+            cost_rows = (
+                (
+                    await session.execute(
+                        select(CostEvidenceRow).where(
+                            CostEvidenceRow.workspace_id == workspace_id,
+                            CostEvidenceRow.project_id == project_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
         tasks = tuple(GenerationTask.model_validate(row.snapshot) for row in task_rows)
-        task_keys = {
-            task.task_id: (task.resolved_provider_id, task.resolved_model_id)
-            for task in tasks
-        }
+        task_keys = {task.task_id: (task.resolved_provider_id, task.resolved_model_id) for task in tasks}
         aggregates: dict[tuple[str | None, str | None], _ModelUsageAccumulator] = {}
         for task in tasks:
             key = (task.resolved_provider_id, task.resolved_model_id)
@@ -835,15 +985,24 @@ class SqlAlchemyGenerationTaskRepository:
             currency = payload.get("currency")
             estimated = payload.get("estimated_minor")
             actual = payload.get("actual_minor")
-            if not isinstance(currency, str) or not isinstance(estimated, int) or isinstance(estimated, bool) or not isinstance(actual, int) or isinstance(actual, bool):
+            if (
+                not isinstance(currency, str)
+                or not isinstance(estimated, int)
+                or isinstance(estimated, bool)
+                or not isinstance(actual, int)
+                or isinstance(actual, bool)
+            ):
                 raise ValueError("GENERATION_COST_EVIDENCE_INVALID")
             current = item.costs.setdefault(currency, [0, 0])
             current[0] += estimated
             current[1] += actual
         return tuple(
             ModelUsageReport(
-                provider_id=key[0], model_id=key[1], task_count=value.task_count,
-                succeeded_count=value.succeeded_count, processing_count=value.processing_count,
+                provider_id=key[0],
+                model_id=key[1],
+                task_count=value.task_count,
+                succeeded_count=value.succeeded_count,
+                processing_count=value.processing_count,
                 failed_count=value.failed_count,
                 costs=tuple(
                     ModelUsageCost(currency=currency, estimated_minor=amounts[0], actual_minor=amounts[1])
@@ -942,9 +1101,7 @@ class SqlAlchemyGenerationTaskRepository:
                 )
 
     @staticmethod
-    async def _require_task_scope(
-        session: AsyncSession, workspace_id: str, project_id: str, task_id: str
-    ) -> TaskRow:
+    async def _require_task_scope(session: AsyncSession, workspace_id: str, project_id: str, task_id: str) -> TaskRow:
         row = (
             await session.execute(
                 select(TaskRow).where(
@@ -1085,9 +1242,15 @@ class SqlAlchemyGenerationTaskRepository:
 
         async with self._session_factory.begin() as s:
             current = await s.get(TaskRow, (task.request.workspace_id, task.request.project_id, task.task_id))
-            if current is None or current.version != expected_version or current.status in {
-                item.value for item in (TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED)
-            }:
+            if (
+                current is None
+                or current.version != expected_version
+                or current.status
+                in {
+                    item.value
+                    for item in (TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED)
+                }
+            ):
                 raise VersionConflict("任务版本冲突或已终态")
             for asset in assets:
                 self._validate_generated_asset_for_task(asset, task)
@@ -1118,7 +1281,15 @@ class SqlAlchemyGenerationTaskRepository:
                     TaskRow.task_id == task.task_id,
                     TaskRow.version == expected_version,
                     TaskRow.status.not_in(
-                        [item.value for item in (TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED)]
+                        [
+                            item.value
+                            for item in (
+                                TaskStatus.SUCCEEDED,
+                                TaskStatus.FAILED,
+                                TaskStatus.TIMEOUT,
+                                TaskStatus.CANCELLED,
+                            )
+                        ]
                     ),
                 )
                 .values(
@@ -1135,9 +1306,7 @@ class SqlAlchemyGenerationTaskRepository:
                 (task.request.workspace_id, task.request.project_id, task.task_id),
                 with_for_update=True,
             )
-            account = await s.get(
-                GenerationBillingAccountRow, task.request.workspace_id, with_for_update=True
-            )
+            account = await s.get(GenerationBillingAccountRow, task.request.workspace_id, with_for_update=True)
             if hold is None or account is None or hold.status != "active":
                 raise GenerationBillingError("GENERATION_BILLING_HOLD_MISSING")
             if (
@@ -1161,19 +1330,34 @@ class SqlAlchemyGenerationTaskRepository:
             hold.status = "settled"
             hold.terminal_event_id = billing_event_id
             hold.updated_at = task.updated_at
-            s.add(CostEvidenceRow(
-                evidence_id=cost.evidence_id, workspace_id=cost.workspace_id,
-                project_id=cost.project_id, task_id=cost.task_id,
-                payload={k: v for k, v in cost.__dict__.items() if k != "recorded_at"},
-                occurred_at=cost.recorded_at,
-            ))
-            s.add(GenerationBillingJournalRow(
-                event_id=_journal_id("settle", billing_event_id), workspace_id=task.request.workspace_id,
-                project_id=task.request.project_id, task_id=task.task_id, action="settle",
-                currency=hold.currency, amount_minor=cost.actual_minor,
-                postings=_balanced_postings(("workspace.held", -hold.estimated_minor), ("platform.revenue", cost.actual_minor), ("workspace.available", released)),
-                reference=billing_event_id, occurred_at=task.updated_at,
-            ))
+            s.add(
+                CostEvidenceRow(
+                    evidence_id=cost.evidence_id,
+                    workspace_id=cost.workspace_id,
+                    project_id=cost.project_id,
+                    task_id=cost.task_id,
+                    payload={k: v for k, v in cost.__dict__.items() if k != "recorded_at"},
+                    occurred_at=cost.recorded_at,
+                )
+            )
+            s.add(
+                GenerationBillingJournalRow(
+                    event_id=_journal_id("settle", billing_event_id),
+                    workspace_id=task.request.workspace_id,
+                    project_id=task.request.project_id,
+                    task_id=task.task_id,
+                    action="settle",
+                    currency=hold.currency,
+                    amount_minor=cost.actual_minor,
+                    postings=_balanced_postings(
+                        ("workspace.held", -hold.estimated_minor),
+                        ("platform.revenue", cost.actual_minor),
+                        ("workspace.available", released),
+                    ),
+                    reference=billing_event_id,
+                    occurred_at=task.updated_at,
+                )
+            )
             return task
 
     async def save_with_billing_release(
@@ -1195,12 +1379,22 @@ class SqlAlchemyGenerationTaskRepository:
                     TaskRow.task_id == task.task_id,
                     TaskRow.version == expected_version,
                     TaskRow.status.not_in(
-                        [item.value for item in (TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED)]
+                        [
+                            item.value
+                            for item in (
+                                TaskStatus.SUCCEEDED,
+                                TaskStatus.FAILED,
+                                TaskStatus.TIMEOUT,
+                                TaskStatus.CANCELLED,
+                            )
+                        ]
                     ),
                 )
                 .values(
-                    version=task.version, status=task.status.value,
-                    snapshot=task.model_dump(mode="json"), updated_at=task.updated_at,
+                    version=task.version,
+                    status=task.status.value,
+                    snapshot=task.model_dump(mode="json"),
+                    updated_at=task.updated_at,
                 )
             )
             if not updated.rowcount:  # pyright: ignore[reportAttributeAccessIssue]
@@ -1210,9 +1404,7 @@ class SqlAlchemyGenerationTaskRepository:
                 (task.request.workspace_id, task.request.project_id, task.task_id),
                 with_for_update=True,
             )
-            account = await session.get(
-                GenerationBillingAccountRow, task.request.workspace_id, with_for_update=True
-            )
+            account = await session.get(GenerationBillingAccountRow, task.request.workspace_id, with_for_update=True)
             if hold is None or account is None or hold.status != "active":
                 raise GenerationBillingError("GENERATION_BILLING_HOLD_MISSING")
             if cost is not None and (
@@ -1238,25 +1430,34 @@ class SqlAlchemyGenerationTaskRepository:
             hold.terminal_event_id = event_id
             hold.updated_at = task.updated_at
             if cost is not None:
-                session.add(CostEvidenceRow(
-                    evidence_id=cost.evidence_id, workspace_id=cost.workspace_id,
-                    project_id=cost.project_id, task_id=cost.task_id,
-                    payload={k: v for k, v in cost.__dict__.items() if k != "recorded_at"},
-                    occurred_at=cost.recorded_at,
-                ))
-            session.add(GenerationBillingJournalRow(
-                event_id=_journal_id("settle" if cost is not None else "release", event_id),
-                workspace_id=task.request.workspace_id,
-                project_id=task.request.project_id, task_id=task.task_id,
-                action="settle" if cost is not None else "release",
-                currency=hold.currency, amount_minor=actual_minor if cost is not None else hold.estimated_minor,
-                postings=_balanced_postings(
-                    ("workspace.held", -hold.estimated_minor),
-                    ("platform.revenue", actual_minor),
-                    ("workspace.available", released_minor),
-                ),
-                reference=event_id, occurred_at=task.updated_at,
-            ))
+                session.add(
+                    CostEvidenceRow(
+                        evidence_id=cost.evidence_id,
+                        workspace_id=cost.workspace_id,
+                        project_id=cost.project_id,
+                        task_id=cost.task_id,
+                        payload={k: v for k, v in cost.__dict__.items() if k != "recorded_at"},
+                        occurred_at=cost.recorded_at,
+                    )
+                )
+            session.add(
+                GenerationBillingJournalRow(
+                    event_id=_journal_id("settle" if cost is not None else "release", event_id),
+                    workspace_id=task.request.workspace_id,
+                    project_id=task.request.project_id,
+                    task_id=task.task_id,
+                    action="settle" if cost is not None else "release",
+                    currency=hold.currency,
+                    amount_minor=actual_minor if cost is not None else hold.estimated_minor,
+                    postings=_balanced_postings(
+                        ("workspace.held", -hold.estimated_minor),
+                        ("platform.revenue", actual_minor),
+                        ("workspace.available", released_minor),
+                    ),
+                    reference=event_id,
+                    occurred_at=task.updated_at,
+                )
+            )
             return task
 
     async def billing_for_task(self, workspace_id: str, project_id: str, task_id: str) -> dict[str, object] | None:
@@ -1265,8 +1466,16 @@ class SqlAlchemyGenerationTaskRepository:
             return None if hold is None else _billing_hold_payload(hold)
 
     async def record_progress(
-        self, *, workspace_id: str, project_id: str, task_id: str,
-        event_id: str, percent: int, message: str, eta_seconds: int | None, at: datetime,
+        self,
+        *,
+        workspace_id: str,
+        project_id: str,
+        task_id: str,
+        event_id: str,
+        percent: int,
+        message: str,
+        eta_seconds: int | None,
+        at: datetime,
     ) -> dict[str, object]:
         if not 0 <= percent <= 100 or not message.strip() or (eta_seconds is not None and eta_seconds < 0):
             raise ValueError("GENERATION_PROGRESS_INVALID")
@@ -1275,14 +1484,21 @@ class SqlAlchemyGenerationTaskRepository:
             existing = await session.get(GenerationProgressRow, event_id)
             if existing is None:
                 existing = GenerationProgressRow(
-                    event_id=event_id, workspace_id=workspace_id, project_id=project_id,
-                    task_id=task_id, percent=percent, message=message.strip(),
-                    eta_seconds=eta_seconds, occurred_at=at,
+                    event_id=event_id,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    task_id=task_id,
+                    percent=percent,
+                    message=message.strip(),
+                    eta_seconds=eta_seconds,
+                    occurred_at=at,
                 )
                 session.add(existing)
             elif (
-                existing.workspace_id != workspace_id or existing.project_id != project_id
-                or existing.task_id != task_id or existing.percent != percent
+                existing.workspace_id != workspace_id
+                or existing.project_id != project_id
+                or existing.task_id != task_id
+                or existing.percent != percent
             ):
                 raise ValueError("GENERATION_PROGRESS_EVENT_CONFLICT")
             return _progress_payload(existing)
@@ -1302,13 +1518,18 @@ class SqlAlchemyGenerationTaskRepository:
             )
             queue_position: int | None = None
             if task.status == TaskStatus.QUEUED.value:
-                queue_position = 1 + int(await session.scalar(
-                    select(func.count()).select_from(TaskRow).where(
-                        TaskRow.workspace_id == workspace_id,
-                        TaskRow.status == TaskStatus.QUEUED.value,
-                        TaskRow.created_at < task.created_at,
+                queue_position = 1 + int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(TaskRow)
+                        .where(
+                            TaskRow.workspace_id == workspace_id,
+                            TaskRow.status == TaskStatus.QUEUED.value,
+                            TaskRow.created_at < task.created_at,
+                        )
                     )
-                ) or 0)
+                    or 0
+                )
             return {
                 "queue_position": queue_position,
                 "latest": None if latest is None else _progress_payload(latest),
@@ -1335,8 +1556,10 @@ class SqlAlchemyGenerationTaskRepository:
                     TaskRow.status == TaskStatus.QUEUED.value,
                 )
                 .values(
-                    version=task.version, status=task.status.value,
-                    snapshot=task.model_dump(mode="json"), updated_at=task.updated_at,
+                    version=task.version,
+                    status=task.status.value,
+                    snapshot=task.model_dump(mode="json"),
+                    updated_at=task.updated_at,
                 )
             )
             if not updated.rowcount:  # pyright: ignore[reportAttributeAccessIssue]
@@ -1352,7 +1575,9 @@ class SqlAlchemyGenerationTaskRepository:
         self, workspace_id: str, project_id: str, task_id: str, *, error: str, at: datetime
     ) -> None:
         async with self._session_factory.begin() as session:
-            row = await session.get(ProviderSubmissionOutboxRow, (workspace_id, project_id, task_id), with_for_update=True)
+            row = await session.get(
+                ProviderSubmissionOutboxRow, (workspace_id, project_id, task_id), with_for_update=True
+            )
             if row is None:
                 raise TaskScopeNotFound()
             row.status = "failed"
@@ -1364,17 +1589,25 @@ class SqlAlchemyGenerationTaskRepository:
         if not 1 <= limit <= 1_000:
             raise ValueError("invalid provider submission recovery limit")
         async with self._session_factory() as session:
-            rows = (await session.execute(
-                select(TaskRow)
-                .join(ProviderSubmissionOutboxRow, (
-                    (ProviderSubmissionOutboxRow.workspace_id == TaskRow.workspace_id)
-                    & (ProviderSubmissionOutboxRow.project_id == TaskRow.project_id)
-                    & (ProviderSubmissionOutboxRow.task_id == TaskRow.task_id)
-                ))
-                .where(ProviderSubmissionOutboxRow.status.in_(("pending", "failed")), TaskRow.status == TaskStatus.QUEUED.value)
-                .order_by(ProviderSubmissionOutboxRow.updated_at, TaskRow.task_id)
-                .limit(limit)
-            )).scalars()
+            rows = (
+                await session.execute(
+                    select(TaskRow)
+                    .join(
+                        ProviderSubmissionOutboxRow,
+                        (
+                            (ProviderSubmissionOutboxRow.workspace_id == TaskRow.workspace_id)
+                            & (ProviderSubmissionOutboxRow.project_id == TaskRow.project_id)
+                            & (ProviderSubmissionOutboxRow.task_id == TaskRow.task_id)
+                        ),
+                    )
+                    .where(
+                        ProviderSubmissionOutboxRow.status.in_(("pending", "failed")),
+                        TaskRow.status == TaskStatus.QUEUED.value,
+                    )
+                    .order_by(ProviderSubmissionOutboxRow.updated_at, TaskRow.task_id)
+                    .limit(limit)
+                )
+            ).scalars()
             return tuple(GenerationTask.model_validate(row.snapshot) for row in rows)
 
     async def list_overdue_tasks(self, *, at: datetime, limit: int = 100) -> tuple[GenerationTask, ...]:
@@ -1419,9 +1652,7 @@ class SqlAlchemyGenerationTaskRepository:
             ).scalars()
             return tuple(_generated_asset(row) for row in rows)
 
-    async def get_generated_asset(
-        self, workspace_id: str, project_id: str, asset_id: str
-    ) -> GeneratedAsset | None:
+    async def get_generated_asset(self, workspace_id: str, project_id: str, asset_id: str) -> GeneratedAsset | None:
         async with self._session_factory() as s:
             row = (
                 await s.execute(

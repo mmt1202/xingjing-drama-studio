@@ -7,7 +7,10 @@ export interface GenerationInputReference {
   readonly asset_content_sha256?: string;
 }
 
+export type GenerationBudgetScope = { readonly kind: "episode"; readonly episode_id: number } | { readonly kind: "project_shared" };
+
 export interface GenerationRequest {
+  readonly budget_scope?: GenerationBudgetScope;
   readonly workspace_id: string;
   readonly project_id: string;
   readonly media_type: GenerationMediaType;
@@ -82,6 +85,8 @@ export interface GenerationCostEvidence {
 }
 
 export interface GenerationModelAvailability {
+  readonly successful_output_minor?: number | null;
+  readonly configuration_errors?: readonly string[];
   readonly provider_id: string | null;
   readonly model_id: string | null;
   readonly submission_available: boolean;
@@ -91,6 +96,8 @@ export interface GenerationModelAvailability {
   readonly estimated_cost_minor: number | null;
   readonly pricing_version: string | null;
   readonly models?: readonly {
+    readonly billing_currency?: string | null;
+    readonly successful_output_minor?: number | null;
     readonly provider_id: string;
     readonly model_id: string;
     readonly display_name: string;
@@ -144,6 +151,7 @@ export interface GenerationTaskDetail {
     readonly status: "active" | "settled" | "released";
   } | null;
   readonly progress: {
+    readonly nativeExecution?: { readonly executionId: string; readonly status: string; readonly upstreamRequestId: string | null; readonly errorCode: string | null } | null;
     readonly queue_position: number | null;
     readonly latest: {
       readonly event_id: string;
@@ -181,6 +189,7 @@ export type GenerationWorkbenchView =
   | "video-candidates" | "video-extend" | "video-retry" | "video-stabilize" | "video-upscale";
 
 export interface GenerationSubmission {
+  readonly budget_scope?: GenerationBudgetScope;
   readonly media_type: GenerationMediaType;
   readonly capability: string;
   readonly prompt: string;

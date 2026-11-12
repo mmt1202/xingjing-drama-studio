@@ -69,6 +69,13 @@ class PriceInput(OperatorInput):
     pricingVersion: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     estimatedMinor: int = Field(ge=1, le=2_147_483_647)
+    successfulOutputMinor: int | None = Field(default=None, ge=0, le=2_147_483_647)
+
+    @model_validator(mode="after")
+    def valid_success_price(self):
+        if self.successfulOutputMinor is not None and self.successfulOutputMinor > self.estimatedMinor:
+            raise ValueError("MODEL_SUCCESS_PRICE_EXCEEDS_RESERVATION")
+        return self
 
 
 class ActiveInput(OperatorInput):

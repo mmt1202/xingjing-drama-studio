@@ -80,6 +80,7 @@ def price_payload(row: ModelPricingRow) -> dict[str, object]:
         "pricingVersion": row.pricing_version,
         "currency": row.currency,
         "estimatedMinor": row.estimated_minor,
+        "successfulOutputMinor": row.successful_output_minor,
         "effectiveAt": _utc(row.effective_at).isoformat(),
         "retiredAt": _utc(row.retired_at).isoformat() if row.retired_at else None,
     }
@@ -477,6 +478,7 @@ async def execute_command(
                             pricing_version=payload.pricingVersion,
                             currency=payload.currency,
                             estimated_minor=payload.estimatedMinor,
+                            successful_output_minor=payload.successfulOutputMinor,
                             effective_at=now,
                         )
                     )

@@ -67,6 +67,7 @@ class ModelPricingRow(ModelControlBase):
     pricing_version: Mapped[str] = mapped_column(String(64), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     estimated_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    successful_output_minor: Mapped[int | None] = mapped_column(Integer)
     effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -88,6 +89,14 @@ class ModelRoutingPolicyRow(ModelControlBase):
     routing_options: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class ModelRouteReleaseRow(ModelControlBase):
+    __tablename__ = "xingjing_model_route_releases"
+    release_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    registry_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 
 class PromptTemplateRow(ModelControlBase):
@@ -131,6 +140,8 @@ class ModelRouteDecision:
     currency: str
     estimated_minor: int
     fallback_used: bool
+    credential_ref: str | None = None
+    successful_output_minor: int | None = None
 
 
 class ModelRouteResolver:
@@ -229,7 +240,37 @@ class ModelRouteResolver:
             selected[2].currency,
             selected[2].estimated_minor,
             fallback,
+            selected[0].credential_ref,
+            selected[2].successful_output_minor,
         )
+
+    async def release_once(
+        self, *, registry_key: str, release_key: str, succeeded: bool, evidence: ModelCallEvidenceRow | None = None
+    ) -> None:
+        async with self._sessions.begin() as session:
+            health = await session.get(ModelHealthRow, registry_key, with_for_update=True)
+            previous = await session.get(ModelRouteReleaseRow, release_key)
+            if previous is not None:
+                if previous.registry_key != registry_key or previous.succeeded != succeeded:
+                    raise ValueError("MODEL_ROUTE_RELEASE_CONFLICT")
+                return
+            session.add(ModelRouteReleaseRow(release_key=release_key, registry_key=registry_key, succeeded=succeeded))
+            if evidence is not None:
+                session.add(evidence)
+            if health is not None:
+                health.active_calls = max(0, health.active_calls - 1)
+                if succeeded:
+                    health.status, health.consecutive_failures, health.circuit_open_until = "healthy", 0, None
+                else:
+                    health.consecutive_failures += 1
+                    if health.consecutive_failures >= FAILURE_CEILING:
+                        health.status = "unhealthy"
+                        health.circuit_open_until = _now() + timedelta(
+                            seconds=min(900, 30 * 2 ** (health.consecutive_failures - FAILURE_CEILING))
+                        )
+                    else:
+                        health.status = "degraded"
+                health.checked_at = _now()
 
     async def release(self, *, provider_id: str, model_id: str, succeeded: bool) -> None:
         async with self._sessions() as session, session.begin():
@@ -321,7 +362,11 @@ class ModelControlRuntime:
                 )
             except (LookupError, ValueError) as error:
                 return _error(context.request_id, str(error), 409)
-            return _ok(asdict(decision), context.request_id)
+            payload = asdict(decision)
+            payload.pop("credential_ref", None)
+            if payload.get("successful_output_minor") is None:
+                payload.pop("successful_output_minor", None)
+            return _ok(payload, context.request_id)
 
         @router.post("/admin/model-control/actions", operation_id="admin_model_control_action")
         async def admin_action(request: Request):

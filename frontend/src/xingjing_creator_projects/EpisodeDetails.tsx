@@ -6,10 +6,11 @@ import { useEpisodeHandoffTranslation } from "./episode-handoff-i18n";
 export const episodeInput = "mt-1 w-full rounded-lg border border-[#363B49] bg-[#0C0E14] px-3 py-2 text-sm text-slate-100 outline-none focus:border-[#FF6B4A] disabled:opacity-60";
 export const episodeButton = "rounded-lg border border-[#363B49] px-3 py-2 text-sm transition hover:border-[#FF6B4A] focus-visible:outline-2 focus-visible:outline-[#FF6B4A] disabled:cursor-not-allowed disabled:opacity-40";
 
-export function EpisodeDetails({ episode, sources, disabled, update, readSource, canReadSources }: {
+export function EpisodeDetails({ episode, sources, disabled, update, readSource, canReadSources, canManageBudget = false }: {
   episode: Episode; sources: EpisodesSnapshot["sources"]; disabled: boolean; update: (patch: Partial<Episode>) => void;
   readSource: (sourceId: string, signal: AbortSignal) => Promise<EpisodeSourceText>;
   canReadSources: boolean;
+  canManageBudget?: boolean;
 }) {
   const { t } = useEpisodesTranslation();
   const { t: handoff } = useEpisodeHandoffTranslation();
@@ -35,7 +36,7 @@ export function EpisodeDetails({ episode, sources, disabled, update, readSource,
       <label className="block text-sm text-slate-300">{t("teaser")}<textarea className={episodeInput} rows={2} maxLength={4000} value={episode.nextEpisodeTeaser} onChange={(e) => update({ nextEpisodeTeaser: e.target.value })} /></label>
       <div className="grid grid-cols-2 gap-3">
         <label className="block text-sm text-slate-300">{t("duration")}<input className={episodeInput} type="number" min={1} max={3600} value={episode.targetDuration} onChange={(e) => update({ targetDuration: Number(e.target.value) })} /></label>
-        <label className="block text-sm text-slate-300">{t("budget")}<input className={episodeInput} type="number" min={0} max={10000000} step="0.01" value={episode.budgetMinor === null ? "" : episode.budgetMinor / 100} placeholder={t("unknown")} onChange={(e) => update({ budgetMinor: e.target.value === "" ? null : Math.round(Number(e.target.value) * 100) })} /></label>
+        <label className="block text-sm text-slate-300">{t("budget")}<input className={episodeInput} type="number" min={0} max={10000000} step="0.01" disabled={!canManageBudget} value={episode.budgetMinor === null ? "" : episode.budgetMinor / 100} placeholder={t("unknown")} onChange={(e) => update({ budgetMinor: e.target.value === "" ? null : Math.round(Number(e.target.value) * 100) })} /></label>
       </div>
       <fieldset disabled={episode.locked || !canReadSources} className="space-y-3 border-t border-[#2A2E3A] pt-4">
         <label className="block text-sm text-slate-300">{t("source")}<select className={episodeInput} value={range?.source_file ?? ""} onChange={(e) => update({ sourceRange: e.target.value ? { source_file: e.target.value, start: 0, end: 0 } : null })}>

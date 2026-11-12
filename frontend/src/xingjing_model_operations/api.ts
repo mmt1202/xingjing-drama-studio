@@ -4,7 +4,7 @@ export interface ModelDefinition {
   mediaTypes: string[]; capabilities: string[]; parameterSchema: Record<string, { type: string; enum?: Array<string | number | boolean> }>;
   credentialConfigured: boolean; maxConcurrency: number; active: boolean; version: number; updatedAt?: string;
 }
-export interface Price { id: string; pricingVersion: string; currency: string; estimatedMinor: number; effectiveAt: string; retiredAt: string | null }
+export interface Price { id: string; pricingVersion: string; currency: string; estimatedMinor: number; successfulOutputMinor?: number | null; effectiveAt: string; retiredAt: string | null }
 export interface ModelRecord extends ModelDefinition {
   health: { status: string; activeCalls: number; consecutiveFailures: number; latencyMs: number | null; circuitOpenUntil: string | null; checkedAt: string | null };
   pricing: Price | null; priceHistory?: Price[];

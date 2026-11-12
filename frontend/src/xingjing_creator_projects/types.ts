@@ -1,4 +1,4 @@
-export type Permission = "project.view" | "project.manage" | "script.view" | "script.manage";
+export type Permission = "project.view" | "project.manage" | "script.view" | "script.manage" | "billing.view" | "billing.budget.manage";
 
 export interface SessionContext {
   user: { id: string; name: string };
@@ -77,6 +77,7 @@ export interface ProjectSetup {
   rightsNote: string;
 }
 export interface ProjectSetupOptions {
+  permissions?: readonly string[];
   members: Array<{ id: string; name: string }>;
   models: Array<{ key: string; name: string; mediaTypes: string[] }>;
 }

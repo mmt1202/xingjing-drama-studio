@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from server.xingjing_budget import BudgetAdmissionService, BudgetError, BudgetTarget
 from server.xingjing_editing.contracts import AuditEvent, AuditOutcome, TimelineVersion, canonical_sha256
 from server.xingjing_editing.errors import (
     EditingBillingError,
@@ -269,14 +270,18 @@ class SqlAlchemyTimelineRepository(_TimelineReader):
             if episode_id is not None:
                 predicates.append(TimelineHeadRow.episode_id == episode_id)
             heads = (
-                await session.execute(
-                    select(TimelineHeadRow)
-                    .where(*predicates)
-                    .order_by(TimelineHeadRow.current_revision.desc(), TimelineHeadRow.timeline_id.asc())
-                    .offset(offset)
-                    .limit(limit)
+                (
+                    await session.execute(
+                        select(TimelineHeadRow)
+                        .where(*predicates)
+                        .order_by(TimelineHeadRow.current_revision.desc(), TimelineHeadRow.timeline_id.asc())
+                        .offset(offset)
+                        .limit(limit)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             timelines = [
                 await self._get_version(
                     session,
@@ -486,6 +491,15 @@ class SqlAlchemyTimelineRepository(_TimelineReader):
 class SqlAlchemyRenderRepository(_TimelineReader):
     """基于数据库唯一约束、CAS 和事务 outbox 的生产渲染仓储适配。"""
 
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        budget_guard: BudgetAdmissionService | None = None,
+    ) -> None:
+        super().__init__(session_factory)
+        self._budget_guard = budget_guard
+
     async def get_render_task_by_idempotency(
         self,
         *,
@@ -516,6 +530,17 @@ class SqlAlchemyRenderRepository(_TimelineReader):
             raise ValueError("渲染任务与幂等参数不一致")
         try:
             async with self._session_factory.begin() as session:
+                replay = await self._get_task_by_idempotency(
+                    session,
+                    tenant_id=task.tenant_id,
+                    workspace_id=task.workspace_id,
+                    idempotency_key=idempotency_key,
+                )
+                if replay is not None:
+                    if replay.request_fingerprint != request_fingerprint:
+                        raise IdempotencyConflict()
+                    return replay, False
+                await self._lock_budget_project(session, task)
                 replay = await self._get_task_by_idempotency(
                     session,
                     tenant_id=task.tenant_id,
@@ -782,6 +807,8 @@ class SqlAlchemyRenderRepository(_TimelineReader):
     async def save_render_task(self, task: RenderTask, *, expected_revision: int) -> RenderTask:
         try:
             async with self._session_factory.begin() as session:
+                if task.status is RenderStatus.RETRYING:
+                    await self._lock_budget_project(session, task)
                 current = await self._require_task(session, task=task)
                 if current.task_revision != expected_revision:
                     if current == task or self._is_replayed_task_transition(current, task):
@@ -992,12 +1019,17 @@ class SqlAlchemyRenderRepository(_TimelineReader):
         return None if row is None else FinalVideoVersion.model_validate(row.snapshot)
 
     async def _require_task(self, session: AsyncSession, *, task: RenderTask) -> RenderTask:
-        current = await self._get_task(
-            session,
-            tenant_id=task.tenant_id,
-            workspace_id=task.workspace_id,
-            task_id=task.task_id,
+        row = await session.scalar(
+            select(RenderTaskRow)
+            .where(
+                RenderTaskRow.tenant_id == task.tenant_id,
+                RenderTaskRow.workspace_id == task.workspace_id,
+                RenderTaskRow.task_id == task.task_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
+        current = self._task_from_row(row)
         if current is None:
             raise RuntimeError("渲染任务不存在或不属于当前租户工作区")
         return current
@@ -1101,11 +1133,48 @@ class SqlAlchemyRenderRepository(_TimelineReader):
         task: RenderTask,
         action: str,
     ) -> None:
+        hold = None if action == "freeze" else await self._require_billing_hold(session, task=task)
         account = await self._billing_account(session, workspace_id=task.workspace_id)
         if account.currency != task.billing_currency:
             raise EditingBillingError("EDITING_BILLING_CURRENCY_MISMATCH", "渲染计费币种与工作区账户不一致")
         if account.available_minor < task.billing_estimated_minor:
             raise InsufficientCredits()
+        if self._budget_guard is not None:
+            try:
+                locked = await self._budget_guard.lock_scope(
+                    session, tenant_id=task.tenant_id, workspace_id=task.workspace_id, project_id=task.project_id
+                )
+                target = None
+                if action == "freeze":
+                    timeline = await self._get_version(
+                        session,
+                        tenant_id=task.tenant_id,
+                        workspace_id=task.workspace_id,
+                        timeline_id=task.timeline_id,
+                        version_id=task.timeline_version_id,
+                    )
+                    if timeline is None or timeline.project_id != task.project_id:
+                        raise EditingBillingError("BUDGET_EPISODE_NOT_FOUND", "BUDGET_EPISODE_NOT_FOUND")
+                    episode = timeline.episode_id
+                    if not str(episode).isdigit() or int(episode) < 1:
+                        raise EditingBillingError("BUDGET_ATTRIBUTION_REQUIRED", "BUDGET_ATTRIBUTION_REQUIRED")
+                    target = BudgetTarget(
+                        kind="episode",
+                        episode_id=int(episode),
+                        source_kind="timeline_version",
+                        source_reference=task.timeline_version_id,
+                    )
+                await self._budget_guard.check_reservation(
+                    session,
+                    locked,
+                    module="editing",
+                    task_id=task.task_id,
+                    currency=task.billing_currency,
+                    estimated_minor=task.billing_estimated_minor,
+                    target=target,
+                )
+            except BudgetError as error:
+                raise EditingBillingError(error.code, str(error), status_code=409) from error
         account.available_minor -= task.billing_estimated_minor
         account.held_minor += task.billing_estimated_minor
         account.version += 1
@@ -1129,7 +1198,7 @@ class SqlAlchemyRenderRepository(_TimelineReader):
                 )
             )
         else:
-            hold = await self._require_billing_hold(session, task=task)
+            assert hold is not None
             hold.status = RenderBillingStatus.ACTIVE.value
             hold.actual_minor = 0
             hold.released_minor = 0
@@ -1155,6 +1224,15 @@ class SqlAlchemyRenderRepository(_TimelineReader):
                 occurred_at=task.updated_at,
             )
         )
+
+    async def _lock_budget_project(self, session: AsyncSession, task: RenderTask) -> None:
+        if self._budget_guard is not None:
+            try:
+                await self._budget_guard.lock_scope(
+                    session, tenant_id=task.tenant_id, workspace_id=task.workspace_id, project_id=task.project_id
+                )
+            except BudgetError as error:
+                raise EditingBillingError(error.code, str(error), status_code=409) from error
 
     @staticmethod
     async def _require_billing_hold(
@@ -1184,10 +1262,10 @@ class SqlAlchemyRenderRepository(_TimelineReader):
             )
             await self._freeze_billing(session, task=reactivated, action="refreeze")
             return reactivated
-        if (
-            current.billing_status is RenderBillingStatus.ACTIVE
-            and task.status in {RenderStatus.FAILED, RenderStatus.CANCELLED}
-        ):
+        if current.billing_status is RenderBillingStatus.ACTIVE and task.status in {
+            RenderStatus.FAILED,
+            RenderStatus.CANCELLED,
+        }:
             return await self._release_billing(session, current=current, task=task)
         return task
 
@@ -1200,9 +1278,7 @@ class SqlAlchemyRenderRepository(_TimelineReader):
     ) -> RenderTask:
         hold = await self._require_billing_hold(session, task=task)
         if hold.status == RenderBillingStatus.RELEASED.value:
-            return task.model_copy(
-                update={"billing_status": RenderBillingStatus.RELEASED, "billing_actual_minor": 0}
-            )
+            return task.model_copy(update={"billing_status": RenderBillingStatus.RELEASED, "billing_actual_minor": 0})
         if hold.status != RenderBillingStatus.ACTIVE.value:
             raise EditingBillingError("EDITING_BILLING_TERMINAL_CONFLICT", "渲染费用已经进入其他终态")
         account = await self._billing_account(session, workspace_id=task.workspace_id)
@@ -1213,7 +1289,9 @@ class SqlAlchemyRenderRepository(_TimelineReader):
         hold.status = RenderBillingStatus.RELEASED.value
         hold.actual_minor = 0
         hold.released_minor = hold.estimated_minor
-        hold.terminal_event_id = str(task.processed_callback_event_ids[-1]) if task.processed_callback_event_ids else None
+        hold.terminal_event_id = (
+            str(task.processed_callback_event_ids[-1]) if task.processed_callback_event_ids else None
+        )
         hold.updated_at = task.updated_at
         session.add(
             EditingRenderBillingJournalRow(
@@ -1235,9 +1313,7 @@ class SqlAlchemyRenderRepository(_TimelineReader):
                 occurred_at=task.updated_at,
             )
         )
-        return task.model_copy(
-            update={"billing_status": RenderBillingStatus.RELEASED, "billing_actual_minor": 0}
-        )
+        return task.model_copy(update={"billing_status": RenderBillingStatus.RELEASED, "billing_actual_minor": 0})
 
     async def _settle_billing(
         self,

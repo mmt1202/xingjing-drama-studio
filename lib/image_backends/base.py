@@ -104,6 +104,7 @@ class ImageGenerationResult:
     image_output_tokens: int | None = None
     text_input_tokens: int | None = None
     text_output_tokens: int | None = None
+    upstream_request_id: str | None = None
 
 
 class ImageBackend(Protocol):

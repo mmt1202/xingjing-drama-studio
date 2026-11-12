@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useProjectNavigationBlocker } from "@/xingjing_creator_projects/ProjectFlowShell";
 import { GenerationCenterApiError, type GenerationCenterApi } from "./api";
 import type { GenerationMediaType, GenerationModelAvailability, GenerationSubmission, GenerationTask, GenerationWorkspaceScope } from "./contracts";
+import { BudgetScopePicker, type BudgetScope } from "@/xingjing_budget/BudgetScopePicker";
 import { GenerationInputPicker, type SelectedGenerationInput } from "./GenerationInputPicker";
 import { useSubmissionTranslation } from "./submission-i18n";
 import { readSubmissionRecovery, rememberSubmission, submissionRecoveryKey, type SubmissionOperation } from "./submission-recovery";
@@ -22,6 +23,8 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   const [inputs, setInputs] = useState<readonly SelectedGenerationInput[]>(recovered?.inputs ?? []);
   const [parameters, setParameters] = useState(recovered?.parameters ?? "{}");
   const [modelChoice, setModelChoice] = useState(recovered?.modelChoice ?? "");
+  const [budgetScope, setBudgetScope] = useState<BudgetScope | undefined>(recovered?.budgetScope);
+  const [budgetReady, setBudgetReady] = useState(false);
   const [availability, setAvailability] = useState<GenerationModelAvailability>();
   const [checking, setChecking] = useState(true);
   const [modelError, setModelError] = useState(false);
@@ -35,11 +38,11 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   const operation = useRef<SubmissionOperation | undefined>(recovered?.operation);
   const inFlight = useRef(false);
   const mounted = useRef(false);
-  const dirty = Boolean(prompt || inputs.length || parameters !== "{}" || modelChoice);
+  const dirty = Boolean(prompt || inputs.length || parameters !== "{}" || modelChoice || budgetScope);
   const locked = busy || uncertain;
   useEffect(() => {
-    rememberSubmission(recoveryKey, { prompt, inputs, parameters, modelChoice, operation: operation.current, created });
-  }, [recoveryKey, prompt, inputs, parameters, modelChoice, uncertain, created]);
+    rememberSubmission(recoveryKey, { prompt, inputs, parameters, modelChoice, budgetScope, operation: operation.current, created });
+  }, [recoveryKey, prompt, inputs, parameters, modelChoice, budgetScope, uncertain, created]);
   useProjectNavigationBlocker(dirty || locked);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
@@ -59,6 +62,8 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   const models = availability?.models?.filter((model) => model.active && model.media_types.includes(config.media)
     && (model.capabilities.includes(capability) || model.capabilities.includes("generation"))) ?? [];
   const selectedModel = models.find((model) => JSON.stringify([model.provider_id, model.model_id]) === modelChoice);
+  const successfulOutputMinor = modelChoice ? selectedModel?.successful_output_minor : availability?.successful_output_minor;
+  const billingCurrency = modelChoice ? selectedModel?.billing_currency : availability?.billing_currency;
   const configured = Boolean(availability?.submission_available && availability.callback_available && !checking && !modelError);
   const supported = models.length > 0;
   const hasModel = !modelChoice || Boolean(selectedModel);
@@ -67,11 +72,11 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   const mediaType = ["video_extend", "video_stabilize", "video_upscale"].includes(capability) ? "video"
     : ["image_to_video", "first_last_video", "image_edit", "image_upscale", "reference_fusion", "inpaint"].includes(capability) ? "image" : undefined;
 
-  function reset() { setPrompt(""); setInputs([]); setParameters("{}"); setModelChoice(""); setDiscard(false); operation.current = undefined; }
+  function reset() { setPrompt(""); setInputs([]); setParameters("{}"); setModelChoice(""); setBudgetScope(undefined); setDiscard(false); operation.current = undefined; }
   function changed() { operation.current = undefined; setError(undefined); setCreated(undefined); setRefreshFailed(false); }
   async function execute(original: SubmissionOperation) {
     if (inFlight.current) return;
-    if (!rememberSubmission(recoveryKey, { prompt, inputs, parameters, modelChoice, operation: original })) {
+    if (!rememberSubmission(recoveryKey, { prompt, inputs, parameters, modelChoice, budgetScope, operation: original })) {
       setError(new Error(t("recoveryUnavailable"))); return;
     }
     inFlight.current = true; setBusy(true); setError(undefined);
@@ -90,7 +95,7 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   }
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (locked || !configured || !supported || !hasModel || !roleSupported || !inputReady) return;
+    if (locked || !configured || !supported || !hasModel || !roleSupported || !inputReady || !budgetReady) return;
     if (!prompt.trim()) { setError(new Error(t("promptRequired"))); return; }
     if (config.acceptsInput && !inputs.length) { setError(new Error(t("required"))); return; }
     if (capability === "first_last_video" && (inputs.length !== 2 || inputs.some((input) => input.mediaType !== "image"))) { setError(new Error(t("firstLast"))); return; }
@@ -99,6 +104,7 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
     catch { setError(new Error(t("invalidParameters"))); return; }
     const payload: GenerationSubmission = {
       media_type: config.media, capability, prompt: prompt.trim(), parameters: parsed,
+      ...(budgetScope ? { budget_scope: budgetScope.kind === "episode" ? { kind: "episode" as const, episode_id: budgetScope.episodeId } : { kind: "project_shared" as const } } : {}),
       input_asset_ids: inputs.map((item) => item.assetId), input_asset_references: inputs.flatMap((item) => item.reference ? [item.reference] : []),
       ...(selectedModel ? { requested_provider_id: selectedModel.provider_id, requested_model_id: selectedModel.model_id } : {}),
     };
@@ -116,9 +122,11 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
       {!roleSupported ? <p role="status" className="text-xs text-amber-200">{t("roleUnsupported")}</p> : null}
       <label className="block text-sm">{t("model")}<select className={field} value={modelChoice} disabled={locked || checking} onChange={(event) => { setModelChoice(event.target.value); changed(); }}><option value="">{t("automatic")}</option>{modelChoice && !selectedModel ? <option value={modelChoice} disabled>{t("noModel")}</option> : null}{models.map((model) => <option key={JSON.stringify([model.provider_id, model.model_id])} value={JSON.stringify([model.provider_id, model.model_id])}>{model.display_name} · {model.version}</option>)}</select></label>
       {modelChoice ? <p className="text-xs text-slate-400">{t("changedModel")}</p> : availability?.estimated_cost_minor != null && availability.billing_currency ? <p className="text-xs text-slate-400">{t("estimate", { currency: availability.billing_currency, amount: (availability.estimated_cost_minor / 100).toFixed(2) })}</p> : null}
+      <BudgetScopePicker projectId={scope.projectId} workspaceId={scope.workspaceId} value={budgetScope} disabled={locked} onReady={setBudgetReady} onChange={(value) => { setBudgetScope(value); changed(); }} />
+      {successfulOutputMinor != null && billingCurrency ? <p className="text-xs text-slate-400">{t("fixedCharge", { currency: billingCurrency, amount: (successfulOutputMinor / 100).toFixed(2) })}</p> : null}
       <details><summary className="cursor-pointer text-xs text-slate-400">{t("advanced")}</summary><label className="mt-3 block text-xs">{t("parameters")}<textarea className={field + " font-mono"} value={parameters} disabled={locked} maxLength={32000} onChange={(event) => { setParameters(event.target.value); changed(); }} /></label></details>
       {error || uncertain ? <div role="alert" className="rounded-lg border border-amber-400/20 p-3 text-sm text-amber-100"><p>{uncertain ? t("uncertain") : error instanceof Error ? error.message : t("failed")}</p>{error instanceof GenerationCenterApiError ? <p className="mt-2 break-all font-mono text-xs text-slate-400">{error.code}{error.requestId ? ` · ${error.requestId}` : ""}</p> : null}</div> : null}
-      {uncertain ? <div className="space-y-3"><button type="button" className={button} disabled={busy} onClick={() => { if (operation.current) void execute(operation.current); }}>{t("retry")}</button><p className="text-xs leading-6 text-slate-400">{t("acknowledgeHelp")}</p><button type="button" className={button} disabled={busy} onClick={() => { setUncertain(false); setError(undefined); operation.current = undefined; }}>{t("acknowledged")}</button></div> : <div className="flex flex-wrap gap-3"><button type="submit" className={button + " bg-violet-500/30"} disabled={busy || !configured || !supported || !hasModel || !roleSupported || !inputReady || !prompt.trim() || Boolean(config.acceptsInput && !inputs.length)}>{t(busy ? "submitting" : "submit")}</button>{dirty ? <button type="button" className={button} disabled={busy} onClick={() => setDiscard(true)}>{t("discard")}</button> : null}</div>}
+      {uncertain ? <div className="space-y-3"><button type="button" className={button} disabled={busy} onClick={() => { if (operation.current) void execute(operation.current); }}>{t("retry")}</button><p className="text-xs leading-6 text-slate-400">{t("acknowledgeHelp")}</p><button type="button" className={button} disabled={busy} onClick={() => { setUncertain(false); setError(undefined); operation.current = undefined; }}>{t("acknowledged")}</button></div> : <div className="flex flex-wrap gap-3"><button type="submit" className={button + " bg-violet-500/30"} disabled={busy || !configured || !supported || !hasModel || !roleSupported || !inputReady || !budgetReady || !prompt.trim() || Boolean(config.acceptsInput && !inputs.length)}>{t(busy ? "submitting" : "submit")}</button>{dirty ? <button type="button" className={button} disabled={busy} onClick={() => setDiscard(true)}>{t("discard")}</button> : null}</div>}
       {discard ? <div className="rounded-lg border border-white/10 p-3"><p className="text-sm">{t("discardConfirm")}</p><div className="mt-3 flex gap-3"><button type="button" className={button} disabled={locked} onClick={() => { reset(); setError(undefined); }}>{t("discardYes")}</button><button type="button" className={button} onClick={() => setDiscard(false)}>{t("keep")}</button></div></div> : null}
       {created ? <p role="status" className="break-all text-sm text-emerald-200">{t("submitted", { id: created })}{refreshFailed ? ` ${t("refreshFailed")}` : ""}</p> : null}
     </form>
