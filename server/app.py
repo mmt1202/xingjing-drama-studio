@@ -111,6 +111,7 @@ from server.xingjing_cover.router import create_cover_router
 from server.xingjing_editing_http import create_unavailable_editing_router
 from server.xingjing_editing_runtime import EditingRuntimeConfigurationError, create_production_editing_runtime
 from server.xingjing_generation_http import create_generation_router
+from server.xingjing_generation_recovery.router import create_recovery_router
 from server.xingjing_generation_runtime import create_production_generation_runtime
 from server.xingjing_marketplace_http import create_production_marketplace_runtime
 from server.xingjing_model_control import create_model_control_runtime
@@ -946,6 +947,7 @@ app.include_router(_open_platform_router)
 app.include_router(_marketplace_runtime.router())
 app.include_router(_content_runtime.router(), prefix="/api/v1", tags=["剧本内容与 AI 导演"])
 app.include_router(create_generation_router(_generation_runtime), prefix="/api/v1", tags=["图片与视频生成"])
+app.include_router(create_recovery_router(_generation_runtime), prefix="/api/v1", tags=["Generation recovery"])
 app.include_router(create_cover_router(_cover_runtime))
 app.include_router(create_version_router(_versions_runtime))
 app.include_router(create_audio_router(_audio_runtime))

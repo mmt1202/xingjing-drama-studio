@@ -159,7 +159,7 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
 
     @router.post("/business-objects/actions")
     def act(
-        payload: ActionPayload, trusted: TrustedWorkspaceContext = Depends(context),
+        request: Request, payload: ActionPayload, trusted: TrustedWorkspaceContext = Depends(context),
         idempotency_key: str = Header("", alias="Idempotency-Key"),
     ) -> dict[str, object]:
         if "admin.business.manage" not in trusted.permissions:
@@ -169,6 +169,16 @@ def _router(sessions: sessionmaker[Session], resolver: ContextResolver) -> APIRo
         if payload.action == "申请跨域访问":
             return _request_cross_scope_approval(sessions, trusted, payload, idempotency_key)
         resource, status = _action(payload.action)
+        if resource == "tasks":
+            from lib.i18n import get_translator
+
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "RECOVERY_WORKFLOW_REQUIRED",
+                    "message": get_translator(request)("recovery_workflow_required"),
+                },
+            )
         canonical_payload = json.dumps(payload.payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         fingerprint = hashlib.sha256(
             f"{resource}:{payload.objectId}:{payload.version}:{payload.action}:{payload.reason or ''}:{canonical_payload}".encode()
@@ -452,18 +462,7 @@ def _apply_authoritative_status(
             raise HTTPException(409, detail={"code": "VERSION_CONFLICT"})
         return "frozen"
     if resource == "tasks":
-        now = datetime.now(UTC)
-        evidence = {"requestedBy": actor_id, "reason": reason, "requestedAt": now.isoformat()}
-        result = cast(CursorResult[tuple[object, ...]], session.execute(text(
-            "UPDATE xingjing_generation_tasks SET snapshot=jsonb_set(snapshot,'{adminCompensation}',CAST(:evidence AS jsonb),true), "
-            "version=version+1, updated_at=:now WHERE task_id=:id AND workspace_id=:ws AND version=:version "
-            "AND status IN ('failed','cancelled','succeeded') AND EXISTS (SELECT 1 FROM xingjing_projects project "
-            "WHERE project.id=xingjing_generation_tasks.project_id AND project.workspace_id=:ws AND project.tenant_id=:tenant)"
-        ), {"evidence": json.dumps(evidence, ensure_ascii=False), "now": now, "id": object_id,
-            "tenant": tenant_id, "ws": workspace_id, "version": version}))
-        if result.rowcount != 1:
-            raise HTTPException(409, detail={"code": "TASK_NOT_TERMINAL_OR_VERSION_CONFLICT"})
-        return "compensation_requested"
+        raise HTTPException(409, detail={"code": "RECOVERY_WORKFLOW_REQUIRED"})
     if resource == "content":
         if not reason.strip():
             raise HTTPException(422, detail={"code": "GOVERNANCE_REASON_REQUIRED"})

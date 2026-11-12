@@ -6,6 +6,7 @@ import { getTokenForSession } from "@/utils/auth";
 
 import { GenerationSubmissionForm } from "./GenerationSubmissionForm";
 import { useSubmissionTranslation } from "./submission-i18n";
+import { useRecoveryTranslation } from "@/xingjing_generation_recovery/i18n";
 import { GenerationCenterApiError, createGenerationCenterApi, type GenerationCenterApi } from "./api";
 import { canCancelTask, canRetryTask, isProcessingTask, taskStatusText, type GenerationCandidateSet, type GenerationModelAvailability, type GenerationModelUsageReport, type GenerationTask, type GenerationTaskDetail, type GenerationTaskFilters, type GenerationWorkbenchView, type GenerationWorkspaceScope } from "./contracts";
 
@@ -109,6 +110,7 @@ function CandidateComparison({ scope, candidates, total, selecting, onSelectCand
 
 function DetailPanel({ detail, onClose, onSelectCandidate, selecting }: { readonly detail: GenerationTaskDetail | null; readonly onClose: () => void; readonly onSelectCandidate: (assetId: string) => void; readonly selecting: boolean }) {
   const { t: submissionText } = useSubmissionTranslation();
+  const { t: recoveryText } = useRecoveryTranslation();
   if (!detail) return <aside className="border border-white/10 bg-stone-950/50 p-5 text-sm text-stone-500">选择任务以读取服务端详情、产物 ID、校验摘要与更新时间。</aside>;
   const task = detail.task;
   return <aside className="border border-white/10 bg-stone-950/80 p-5">
@@ -122,7 +124,7 @@ function DetailPanel({ detail, onClose, onSelectCandidate, selecting }: { readon
       <div><dt className="text-xs text-stone-500">状态与时限</dt><dd className="mt-1 text-stone-300">{taskStatusText[task.status]} · 截止 {formatTime(task.timeout_at)}{detail.progress.queue_position ? ` · 队列第 ${detail.progress.queue_position} 位` : ""}</dd>{detail.progress.latest ? <div className="mt-2"><div className="h-1.5 overflow-hidden bg-white/10"><span className="block h-full bg-cyan-300" style={{ width: `${detail.progress.latest.percent}%` }} /></div><p className="mt-1 text-xs text-cyan-100">{detail.progress.latest.percent}% · {detail.progress.latest.message}{detail.progress.latest.eta_seconds !== null ? ` · 预计 ${detail.progress.latest.eta_seconds} 秒` : ""}</p></div> : null}</div>
       <div><dt className="text-xs text-stone-500">算力冻结与结算</dt><dd className="mt-1 text-stone-300">{detail.billing ? `${detail.billing.status} · 冻结 ${formatMoney(detail.billing.estimated_minor, detail.billing.currency)} · 实耗 ${formatMoney(detail.billing.actual_minor, detail.billing.currency)} · 退回 ${formatMoney(detail.billing.released_minor, detail.billing.currency)} · ${detail.billing.pricing_version}` : "未找到该任务的账务冻结记录。"}</dd></div>
       <div><dt className="text-xs text-stone-500">实际计量</dt><dd className="mt-1 text-stone-300">{detail.costEvidence.length ? detail.costEvidence.map((cost) => <p key={cost.evidence_id}>{cost.currency} · 预估 {formatMoney(cost.estimated_minor, cost.currency)} · 实际 {formatMoney(cost.actual_minor, cost.currency)} · {cost.pricing_version}</p>) : "Provider 尚未返回计量，不显示虚构成本。"}</dd></div>
-      {task.failure ? <div className="border border-rose-400/20 bg-rose-400/5 p-3"><dt className="text-xs text-rose-200">失败原因 · {task.failure.code}</dt><dd className="mt-1 text-sm text-rose-100">{task.failure.message}</dd></div> : null}
+      {task.failure ? <div className="border border-rose-400/20 bg-rose-400/5 p-3"><dt className="text-xs text-rose-200">失败原因 · {task.failure.code}</dt><dd className="mt-1 text-sm text-rose-100">{task.failure.code === "RECOVERY_CONFIRMED_FAILURE" ? recoveryText("confirmedFailure") : task.failure.message}</dd></div> : null}
       <div><dt className="text-xs text-stone-500">已确认产物</dt><dd className="mt-2 space-y-2">{detail.generatedAssets.length ? detail.generatedAssets.map((asset) => <div key={asset.asset_id} className="border border-white/10 bg-white/[0.03] p-2"><p className="font-mono text-[11px] text-stone-200">{asset.asset_id} · {asset.media_type} · {formatBytes(asset.size_bytes)}</p><p className="mt-1 break-all font-mono text-[10px] text-stone-500">SHA-256 {asset.content_sha256}</p><p className="mt-1 text-[11px] text-stone-400">{Object.keys(asset.metadata).length ? JSON.stringify(asset.metadata) : "无附加元数据"}</p><button type="button" disabled={selecting || detail.selectedCandidate?.selected_asset_id === asset.asset_id} onClick={() => onSelectCandidate(asset.asset_id)} className="mt-2 border border-cyan-200/30 px-2 py-1 text-[11px] text-cyan-100 disabled:opacity-50">{detail.selectedCandidate?.selected_asset_id === asset.asset_id ? "已选为候选" : "选为候选"}</button></div>) : <span className="text-stone-500">尚无服务端确认的产物</span>}</dd></div>
     </dl>
   </aside>;

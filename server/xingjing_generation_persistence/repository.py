@@ -1236,6 +1236,7 @@ class SqlAlchemyGenerationTaskRepository:
         assets: tuple[GeneratedAsset, ...],
         cost: CostEvidence | None = None,
         billing_event_id: str | None = None,
+        completion_preparer: Callable[[AsyncSession, GenerationTask], Awaitable[None]] | None = None,
     ) -> GenerationTask:
         """Atomically publish verified outputs and the matching succeeded task."""
         if task.status is not TaskStatus.SUCCEEDED or not task.output_asset_ids:
@@ -1308,6 +1309,8 @@ class SqlAlchemyGenerationTaskRepository:
             )
             if not updated.rowcount:  # pyright: ignore[reportAttributeAccessIssue]
                 raise VersionConflict("任务版本冲突或已终态")
+            if completion_preparer is not None:
+                await completion_preparer(s, task)
             hold = await s.get(
                 GenerationBillingHoldRow,
                 (task.request.workspace_id, task.request.project_id, task.task_id),
@@ -1374,6 +1377,7 @@ class SqlAlchemyGenerationTaskRepository:
         expected_version: int,
         event_id: str,
         cost: CostEvidence | None = None,
+        completion_preparer: Callable[[AsyncSession, GenerationTask], Awaitable[None]] | None = None,
     ) -> GenerationTask:
         if task.status not in {TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED}:
             raise GenerationBillingError("GENERATION_BILLING_RELEASE_STATUS_INVALID")
@@ -1408,6 +1412,8 @@ class SqlAlchemyGenerationTaskRepository:
                 raise VersionConflict("任务版本冲突或已终态")
             if self._release_guard is not None:
                 await self._release_guard(session, task)
+            if completion_preparer is not None:
+                await completion_preparer(session, task)
             hold = await session.get(
                 GenerationBillingHoldRow,
                 (task.request.workspace_id, task.request.project_id, task.task_id),

@@ -13,6 +13,8 @@ import { CreatorWorkspaceFrame } from "@/xingjing_creator_home/WorkspaceFrame";
 import { CreatorHomePage, WorkspaceTasks } from "@/xingjing_creator_home/CreatorHomePage";
 import { ModelOperationsPage } from "@/xingjing_model_operations/ModelOperationsPage";
 import { createModelOperationsApi } from "@/xingjing_model_operations/api";
+import { createRecoveryApi } from "@/xingjing_generation_recovery/api";
+import { GenerationRecoveryPage } from "@/xingjing_generation_recovery/GenerationRecoveryPage";
 import { CreatorAnalyticsPage } from "@/xingjing_analytics/CreatorAnalyticsPage";
 import { CoverWorkspace } from "@/xingjing_cover/CoverWorkspace";
 import { CoverReleaseLinks } from "@/xingjing_cover/CoverReleaseLinks";
@@ -453,11 +455,13 @@ export function AdminBusinessRoute({
   const { t } = usePaymentTranslation();
   const route = resolveAdminRoute(surface);
   const modelApi = useMemo(() => createModelOperationsApi(workspaceId, getTokenForSession(sessionEpoch) ?? ""), [workspaceId, sessionEpoch]);
+  const recoveryApi = useMemo(() => createRecoveryApi(workspaceId, getTokenForSession(sessionEpoch) ?? ""), [workspaceId, sessionEpoch]);
   const api = useMemo(
     () => createAdminApiClient({ sessionToken: getTokenForSession(sessionEpoch) ?? "", workspaceId }),
     [sessionEpoch, workspaceId],
   );
   if (route?.id === "AD-034" && new URLSearchParams(search).get("legacy") === "compensation") return <section className="xj-payments-page"><div className="xj-payments-notice"><p>{t("legacyCompensationHelp")}</p><button type="button" className={paymentButton} onClick={() => navigate(location)}>{t("backToRefunds")}</button></div><AdminPlatform routeId="AD-034" api={api} /></section>;
+  if (route?.id === "AD-047") return <GenerationRecoveryPage key={`${workspaceId}:${sessionEpoch}`} workspaceId={workspaceId} api={recoveryApi} />;
   return route?.id === "AD-026" || route?.id === "AD-034" ? <PaymentsWorkspace key={`${workspaceId}:${sessionEpoch}:${route.id}`} workspaceId={workspaceId} initialTab={route.id === "AD-034" ? "refunds" : "orders"} mode="admin" /> : route?.id === "AD-023" ? <ModelOperationsPage key={`${workspaceId}:${sessionEpoch}`} workspaceId={workspaceId} api={modelApi} /> : route?.id === "AD-002" ? (
     <OpenPlatform api={api} />
   ) : route ? (

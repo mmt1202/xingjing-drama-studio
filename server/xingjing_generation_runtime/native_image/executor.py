@@ -455,10 +455,10 @@ class NativeImageExecutor:
                 refs.append(ReferenceImage(str(path), f"input-{index + 1}"))
             image_request = self.image_request(task.request, work / "output.png", refs)
             async with self.sessions.begin() as session:
-                execution = await session.get(NativeImageExecutionRow, identity, with_for_update=True)
                 stored = await session.get(
                     TaskRow, (row.workspace_id, row.project_id, row.task_id), with_for_update=True
                 )
+                execution = await session.get(NativeImageExecutionRow, identity, with_for_update=True)
                 if (
                     execution is None
                     or execution.claim_token != token

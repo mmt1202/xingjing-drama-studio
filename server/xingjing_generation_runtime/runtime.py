@@ -19,7 +19,7 @@ from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from fastapi import Request
@@ -68,6 +68,9 @@ from .provider_gateway import GenerationProviderGatewayError, HttpGenerationProv
 TrustedContextResolver = Callable[[Request], Awaitable[TrustedWorkspaceContext]]
 SessionFactory = async_sessionmaker[AsyncSession]
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from server.xingjing_generation_recovery.service import GenerationRecoveryService
 
 
 class GenerationRuntimeUnavailable(RuntimeError):
@@ -133,6 +136,7 @@ class GenerationRuntime:
         model_route_resolver: ModelRouteResolver | None = None,
         route_admission: ModelRouteAdmission | None = None,
         native_images: NativeImageExecutor | None = None,
+        recovery: GenerationRecoveryService | None = None,
         unavailable_code: str | None = None,
         close: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
@@ -150,6 +154,7 @@ class GenerationRuntime:
         self._model_route_resolver = model_route_resolver
         self._route_admission = route_admission
         self._native_images = native_images
+        self.recovery = recovery
         self._timeout_sweeper: asyncio.Task[None] | None = None
         self.unavailable_code = unavailable_code
         self._close = close
@@ -157,6 +162,11 @@ class GenerationRuntime:
     @property
     def available(self) -> bool:
         return self.unavailable_code is None
+
+    async def trusted_context(self, request: Request) -> TrustedWorkspaceContext:
+        if self._context_resolver is None:
+            raise GenerationRuntimeUnavailable("GENERATION_RUNTIME_UNAVAILABLE")
+        return await self._context_resolver(request)
 
     async def context_for(self, request: Request, project_id: str, permission: str) -> TrustedWorkspaceContext:
         if self.unavailable_code or self._context_resolver is None:
@@ -1532,6 +1542,17 @@ def create_production_generation_runtime(
             routes,
             enabled=native_enabled,
         )
+    from server.xingjing_generation_recovery.service import GenerationRecoveryService
+
+    recovery = GenerationRecoveryService(
+        factory,
+        repository,
+        routes,
+        store=artifact_store,
+        provider_root=Path(provider_project_root) if provider_project_root else None,
+        native_root=native_images.root if native_images else None,
+        receipt_secret=callback_secret or None,
+    )
     return GenerationRuntime(
         repository=repository,
         session_factory=factory,
@@ -1546,6 +1567,7 @@ def create_production_generation_runtime(
         model_route_resolver=routes,
         route_admission=admission,
         native_images=native_images,
+        recovery=recovery,
         close=close_engines,
     )
 
