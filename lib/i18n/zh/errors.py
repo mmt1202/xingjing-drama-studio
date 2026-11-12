@@ -1,4 +1,13 @@
 MESSAGES = {
+    "source_mapping_invalid": "请选择有效的场景或段落，并核对取材范围。",
+    "source_mapping_not_found": "剧本或版本不存在，请刷新列表。",
+    "source_mapping_source_unavailable": "原文来源无法核对，请刷新并检查取材记录。",
+    "source_mapping_permission_denied": "当前账号没有确认原文映射的权限。",
+    "source_mapping_key_reused": "该请求编号已用于其他内容，请核对原请求。",
+    "source_mapping_version_changed": "剧本已更新。当前调整已保留，请核对新版本后重新确认。",
+    "source_mapping_frozen": "该剧本已经冻结，来源映射不可修改。",
+    "source_mapping_quote_mismatch": "直引文字与所选原文不一致，请重新选择或改为人工确认的改编取材。",
+    "source_mapping_version_summary": "人工确认原文映射",
     "source_plan_permission_denied": "当前账号没有原文查看和分集管理权限。",
     "source_plan_chapter_limit": "章节数量超过可处理范围，请按卷分别导入。",
     "source_plan_source_changed": "原文或原文范围已变化，请重新读取来源并生成候选方案；已有工作稿保留原来源。",

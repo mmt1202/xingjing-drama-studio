@@ -126,6 +126,8 @@ class ContentService:
                 version_number=script.current_version.number + 1,
                 change_summary=command.change_summary,
             )
+            if version.source_content == script.current_version.source_content:
+                version = replace(version, source_attributions=script.current_version.source_attributions)
             revised = replace(
                 script,
                 revision=script.revision + 1,
@@ -287,7 +289,13 @@ class ContentService:
             )
             if parsed.validation_errors:
                 raise ValueError("SCRIPT_AI_STRUCTURE_INVALID")
-            analyzed = replace(parsed, analysis=command.analysis)
+            analyzed = replace(
+                parsed,
+                analysis=command.analysis,
+                source_attributions=script.current_version.source_attributions
+                if parsed.source_content == script.current_version.source_content
+                else (),
+            )
             revised = replace(
                 script,
                 revision=script.revision + 1,

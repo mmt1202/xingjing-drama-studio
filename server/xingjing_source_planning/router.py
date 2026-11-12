@@ -17,6 +17,7 @@ from server.xingjing_projects_runtime.episode_sources import scoped, source_cont
 from server.xingjing_projects_runtime.episode_sources_models import EpisodeWorkingScriptRow
 
 from .contracts import ConfirmPlan, CreatePlan
+from .mapping import ConfirmMappings, ScriptMappingService
 from .service import SourcePlanningService
 
 if TYPE_CHECKING:
@@ -40,6 +41,37 @@ def register_source_planning_routes(runtime: ProjectsRuntime, router: APIRouter)
             return model.model_validate(await _body(request))
         except ValidationError as error:
             raise EpisodeEditError("SOURCE_PLAN_INVALID", 422) from error
+
+    @router.get("/projects/{project_id}/scripts/{script_id}/provenance-mapping")
+    async def read_mapping(request: Request, project_id: str, script_id: str):
+        context = await source_context(runtime, request, project_id)
+        try:
+            version = int(request.query_params.get("version", ""))
+            offset = int(request.query_params["offset"]) if "offset" in request.query_params else None
+        except ValueError as error:
+            raise EpisodeEditError("SOURCE_MAPPING_INVALID", 422) from error
+        result = await ScriptMappingService(service()).read(
+            context,
+            project_id,
+            script_id,
+            version_number=version,
+            offset=offset,
+            find=request.query_params.get("find", ""),
+        )
+        return {"data": result, "meta": {"requestId": context.request_id}}
+
+    @router.post("/projects/{project_id}/scripts/{script_id}/provenance-mapping")
+    async def confirm_mapping(request: Request, project_id: str, script_id: str):
+        context = await source_context(runtime, request, project_id)
+        result = await ScriptMappingService(service()).confirm(
+            context,
+            project_id,
+            script_id,
+            await command(request, ConfirmMappings),
+            key=request.headers.get("Idempotency-Key", ""),
+            locale=get_locale(request),
+        )
+        return {"data": result, "meta": {"requestId": context.request_id}}
 
     @router.get("/projects/{project_id}/episode-plans/source")
     async def catalog(request: Request, project_id: str):

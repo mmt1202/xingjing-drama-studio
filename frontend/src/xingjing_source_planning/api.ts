@@ -2,6 +2,7 @@ import i18n from "@/i18n";
 import { createAuthenticatedFetcher, getSessionEpoch, getTokenForSession } from "@/utils/auth";
 import { CreatorApiError } from "@/xingjing_creator_projects/api";
 import type { EpisodeSource } from "@/xingjing_creator_projects/episodes-api";
+import type { MappingCommand, MappingResult, MappingView } from "./mapping-types";
 
 export interface Chapter { id: string; ordinal: number; title: string | null; kind: "heading" | "preamble" | "body"; start: number; end: number }
 export interface SourceReference { sourceId: string; digest: string; start: number; end: number; snapshotId?: string; chapterIds?: string[]; mappingKind?: string; planId?: string }
@@ -35,6 +36,8 @@ export function createSourcePlanApi(workspaceId: string) {
     return body.data;
   }
   return {
+    mapping: (id: string, scriptId: string, version: number, offset?: number, find?: string, signal?: AbortSignal) => request<MappingView>(id, `scripts/${encodeURIComponent(scriptId)}/provenance-mapping?${new URLSearchParams({ version: String(version), ...(offset !== undefined ? { offset: String(offset) } : {}), ...(find ? { find } : {}) })}`, { signal }),
+    confirmMapping: (id: string, scriptId: string, payload: MappingCommand, key: string) => request<MappingResult>(id, `scripts/${encodeURIComponent(scriptId)}/provenance-mapping`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(payload) }),
     list: (id: string, signal?: AbortSignal) => request<PlanHistory>(id, "episode-plans", { signal }),
     catalog: (id: string, sourceId: string, signal?: AbortSignal) => request<Catalog>(id, "episode-plans/source?" + new URLSearchParams({ sourceId }).toString(), { signal }),
     get: (id: string, planId: string, signal?: AbortSignal) => request<Plan>(id, `episode-plans/${encodeURIComponent(planId)}`, { signal }),

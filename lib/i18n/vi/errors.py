@@ -1,4 +1,13 @@
 MESSAGES = {
+    "source_mapping_invalid": "Chọn cảnh hoặc đoạn hợp lệ và kiểm tra phạm vi nguồn.",
+    "source_mapping_not_found": "Không tìm thấy kịch bản hoặc phiên bản. Hãy tải lại danh sách.",
+    "source_mapping_source_unavailable": "Không thể xác minh nguồn. Hãy tải lại và kiểm tra xuất xứ.",
+    "source_mapping_permission_denied": "Bạn không có quyền xác nhận ánh xạ nguồn.",
+    "source_mapping_key_reused": "Mã yêu cầu đã dùng cho nội dung khác. Hãy kiểm tra yêu cầu gốc.",
+    "source_mapping_version_changed": "Kịch bản đã thay đổi. Chỉnh sửa được giữ lại; hãy kiểm tra phiên bản mới trước khi xác nhận.",
+    "source_mapping_frozen": "Kịch bản đã đóng băng. Không thể sửa ánh xạ nguồn.",
+    "source_mapping_quote_mismatch": "Trích dẫn không khớp với nguồn đã chọn. Chọn lại hoặc xác nhận là chuyển thể.",
+    "source_mapping_version_summary": "Ánh xạ nguồn được xác nhận thủ công",
     "source_plan_permission_denied": "Bạn không có quyền xem nguồn và quản lý tập.",
     "source_plan_chapter_limit": "Có quá nhiều chương. Hãy nhập từng quyển.",
     "source_plan_source_changed": "Nguồn hoặc phạm vi đã thay đổi. Hãy tải lại và tạo phương án mới; bản thảo cũ giữ nguồn gốc.",

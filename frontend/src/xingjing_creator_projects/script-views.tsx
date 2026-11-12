@@ -1,4 +1,4 @@
-import { SourceProvenancePanel } from "@/xingjing_source_planning/SourceProvenancePanel";
+import { ScriptSourceMapper } from "@/xingjing_source_planning/ScriptSourceMapper";
 import { useEffect, useRef, useState } from "react";
 import { CreatorApiError } from "./api";
 import { useScriptTranslation } from "./script-i18n";
@@ -8,7 +8,7 @@ import {
   characterCount, completeScript, contentOf, currentVersion, scriptButton, scriptField, scriptPanel, scriptPrimary,
   aiCharacterLimit, useScriptMutation, type ScriptFrameContext, type ScriptPageProps,
 } from "./script-workflow";
-import type { ScriptComparison, ScriptDocument, ScriptTextMapping } from "./types";
+import type { ScriptComparison, ScriptDocument } from "./types";
 
 export function MutationFeedback({ mutation, reload, allowRetry = true }: { mutation: ReturnType<typeof useScriptMutation>; reload: () => void; allowRetry?: boolean }) {
   const { t } = useScriptTranslation();
@@ -120,16 +120,9 @@ export function DirectorAssetsPage(props: ScriptPageProps) {
   return <ScriptPageFrame {...props} page="director-assets" blocked={false}>{(frame) => <section className={scriptPanel}><p className="text-sm leading-7 text-slate-400">{t("assetsHelp")}</p><AnalysisSummary script={frame.script!} /><NextStep frame={frame} step="episodes" label="openEpisodes" /><NextStep frame={frame} step="ai-director" label="openDirector" /></section>}</ScriptPageFrame>;
 }
 
-function MappingList({ mappings, text }: { mappings: ScriptTextMapping[]; text: string }) {
-  const { t } = useScriptTranslation(), characters = Array.from(text);
-  return mappings.length ? <div className="mt-3 max-h-96 space-y-3 overflow-auto">{mappings.map((mapping, index) => <article key={`${mapping.targetId}:${index}`} className="rounded-xl border border-white/10 p-3"><p className="break-all font-mono text-xs text-slate-500">{mapping.targetId} · [{mapping.sourceStart}, {mapping.sourceEnd})</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-300">{characters.slice(mapping.sourceStart, Math.min(mapping.sourceEnd, mapping.sourceStart + 280)).join("")}{mapping.sourceEnd - mapping.sourceStart > 280 ? "…" : ""}</p></article>)}</div> : <p className="mt-3 text-sm text-slate-500">{t("noMappings")}</p>;
-}
 export function SourceMappingPage(props: ScriptPageProps) {
-  const { t } = useScriptTranslation();
-  return <ScriptPageFrame {...props} page="source-mapping" blocked={false}>{(frame) => {
-    const script = frame.script!, version = currentVersion(script);
-    return <section className={scriptPanel}><p className="text-sm leading-7 text-slate-400">{t("mappingHelp")}</p><SourceProvenancePanel key={`${frame.context.workspace.id}:${script.id}`} workspaceId={frame.context.workspace.id} projectId={props.projectId} scriptId={script.id} /><h3 className="mt-5 text-sm font-medium">{t("versionPositions")}</h3><MappingList mappings={version?.scriptMappings ?? []} text={version?.sourceContent ?? ""} /><h3 className="mt-5 text-sm font-medium">{t("originalMappings")}</h3>{version?.sourceMappingCoordinateSystem === "original_source" ? <MappingList mappings={version.sourceMappings ?? []} text={script.sourceDocument.content} /> : <p className="mt-3 text-sm text-amber-200">{t("unmapped")}</p>}{version?.unmappedParagraphIds?.length ? <p className="mt-3 text-xs text-slate-500">{t("unmappedCount", { count: version.unmappedParagraphIds.length })}</p> : null}<NextStep frame={frame} step="source" label="openSource" /></section>;
-  }}</ScriptPageFrame>;
+  const [blocked, setBlocked] = useState(false);
+  return <ScriptPageFrame {...props} page="source-mapping" blocked={blocked}>{(frame) => <ScriptSourceMapper key={`${frame.context.workspace.id}:${frame.context.user.id}:${frame.script!.id}`} frame={frame} projectId={props.projectId} onBlocked={setBlocked} />}</ScriptPageFrame>;
 }
 
 export function ScriptVersionComparePage(props: ScriptPageProps) {

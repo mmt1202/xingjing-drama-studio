@@ -1,4 +1,13 @@
 MESSAGES = {
+    "source_mapping_invalid": "Select a valid scene or paragraph and check the source range.",
+    "source_mapping_not_found": "The script or version was not found. Refresh the list.",
+    "source_mapping_source_unavailable": "The source cannot be verified. Refresh and check its provenance.",
+    "source_mapping_permission_denied": "You do not have permission to confirm source mappings.",
+    "source_mapping_key_reused": "This request key was used for different content. Check the original request.",
+    "source_mapping_version_changed": "The script has changed. Your edits are retained; review the new version before confirming.",
+    "source_mapping_frozen": "This script is frozen. Its source mappings cannot be changed.",
+    "source_mapping_quote_mismatch": "The quote does not match the selected source. Select again or confirm it as an adaptation.",
+    "source_mapping_version_summary": "Source mappings confirmed manually",
     "source_plan_permission_denied": "You do not have source viewing and episode management permissions.",
     "source_plan_chapter_limit": "Too many chapters. Import separate volumes.",
     "source_plan_source_changed": "The source or its ranges changed. Reload it and create a new proposal; existing drafts retain their original source.",

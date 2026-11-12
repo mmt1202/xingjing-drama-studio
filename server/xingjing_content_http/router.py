@@ -489,6 +489,11 @@ def _version_payload(version: ScriptVersion, document: ScriptDocument, request: 
     return {
         "number": version.number,
         "sourceContent": version.source_content,
+        **(
+            {"sourceAttributions": [asdict(item) for item in version.source_attributions]}
+            if version.source_attributions
+            else {}
+        ),
         "scenes": [
             {
                 "sceneId": scene.scene_id,
@@ -572,6 +577,7 @@ def _compare_versions(document: ScriptDocument, baseline_number: int, candidate_
             "sourceContent",
             "scenes",
             "sourceMappings",
+            "sourceAttributions",
             "validationErrors",
             "changeSummary",
             "analysis",
@@ -593,6 +599,7 @@ def _version_value(version: ScriptVersion, name: str, document: ScriptDocument) 
         "sourceContent": version.source_content,
         "scenes": version.scenes,
         "sourceMappings": document.mapping_projection(version)["source_mappings"],
+        "sourceAttributions": version.source_attributions,
         "validationErrors": version.validation_errors,
         "changeSummary": version.change_summary,
         "analysis": version.analysis,

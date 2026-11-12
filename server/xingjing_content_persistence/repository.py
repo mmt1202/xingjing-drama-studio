@@ -35,6 +35,7 @@ from server.xingjing_content.models import (
     SourceMapping,
     StoryBeat,
     ValidationIssue,
+    attribution_from_dict,
     director_confirmation_from_dict,
     director_version_from_dict,
 )
@@ -84,6 +85,7 @@ class ScriptVersionRow(ContentPersistenceBase):
     change_summary: Mapped[str] = mapped_column(String(2048), nullable=False)
     validation_errors: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     analysis: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    source_attributions: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
 
 
 class ContentAiRequestRow(ContentPersistenceBase):
@@ -473,6 +475,16 @@ class SqlAlchemyContentRepository:
         self._persist_document(session, document, None)
         session.add(self._audit_row(document, None, idempotency_key))
 
+    def append_document_version(
+        self, session: Session, document: ScriptDocument, before: ScriptDocument, *, idempotency_key: str
+    ) -> None:
+        """Append immutable history and its audit in the caller's transaction."""
+        self._persist_document(session, document, before)
+        session.add(self._audit_row(document, before, idempotency_key))
+
+    def read_document(self, session: Session, row: ScriptRow) -> ScriptDocument:
+        return self._load_document(session, row)
+
     def transact(
         self,
         workspace_id: str,
@@ -718,6 +730,7 @@ class SqlAlchemyContentRepository:
     @staticmethod
     def _append_versions(session: Session, document: ScriptDocument, versions: tuple[ScriptVersion, ...]) -> None:
         for version in versions:
+            session.flush()
             session.add(
                 ScriptVersionRow(
                     workspace_id=document.workspace_id,
@@ -727,8 +740,11 @@ class SqlAlchemyContentRepository:
                     change_summary=version.change_summary,
                     validation_errors=[cast(dict[str, object], asdict(issue)) for issue in version.validation_errors],
                     analysis=cast(dict[str, object], asdict(version.analysis)),
+                    source_attributions=[asdict(item) for item in version.source_attributions],
                 )
             )
+            session.flush()
+            paragraph_rows = []
             for scene_sequence, scene in enumerate(version.scenes):
                 session.add(
                     ScriptSceneRow(
@@ -741,7 +757,7 @@ class SqlAlchemyContentRepository:
                     )
                 )
                 for paragraph_sequence, paragraph in enumerate(scene.paragraphs):
-                    session.add(
+                    paragraph_rows.append(
                         ScriptParagraphRow(
                             workspace_id=document.workspace_id,
                             script_id=document.script_id,
@@ -755,6 +771,8 @@ class SqlAlchemyContentRepository:
                             speaker=paragraph.speaker,
                         )
                     )
+            session.flush()
+            session.add_all(paragraph_rows)
             for mapping in version.source_mappings:
                 session.add(
                     SourceMappingRow(
@@ -841,6 +859,7 @@ class SqlAlchemyContentRepository:
             validation_errors=tuple(self._issue(issue) for issue in row.validation_errors),
             change_summary=row.change_summary,
             analysis=self._analysis(row.analysis),
+            source_attributions=tuple(attribution_from_dict(item) for item in row.source_attributions),
         )
 
     def _scene(self, session: Session, row: ScriptSceneRow) -> ScriptScene:
@@ -951,6 +970,11 @@ class SqlAlchemyContentRepository:
         elif len(before.versions) < len(document.versions):
             summary = document.current_version.change_summary
             action = "content.script.ai_analyzed" if summary == "AI 结构化解析" else "content.script.revised"
+            if (
+                before.current_version.source_content == document.current_version.source_content
+                and before.current_version.source_attributions != document.current_version.source_attributions
+            ):
+                action = "content.script.source_mapped"
         elif before.director_confirmations != document.director_confirmations:
             action = "content.director_profile.confirmed"
         elif before.director_versions != document.director_versions:

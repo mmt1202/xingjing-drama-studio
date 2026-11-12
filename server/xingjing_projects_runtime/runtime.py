@@ -495,7 +495,9 @@ class _ProjectsRoute(APIRoute):
                     code = str(payload["error"].get("code", ""))
                     key = (
                         code.lower()
-                        if code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_", "SOURCE_PLAN_"))
+                        if code.startswith(
+                            ("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_", "SOURCE_PLAN_", "SOURCE_MAPPING_")
+                        )
                         else "project.request_failed"
                     )
                     payload["error"]["message"] = get_translator(request)(key)

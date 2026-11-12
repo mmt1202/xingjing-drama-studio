@@ -53,6 +53,26 @@ class SourceMapping:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceAttribution:
+    target_id: str
+    target_digest: str
+    source_id: str
+    source_digest: str
+    snapshot_id: str | None
+    source_start: int
+    source_end: int
+    chapter_ids: tuple[str, ...]
+    kind: Literal["exact_quote", "manual_adaptation"]
+    note: str
+    confirmed_by: str
+    confirmed_at: str
+
+
+def attribution_from_dict(data: dict[str, Any]) -> SourceAttribution:
+    return SourceAttribution(**{**data, "chapter_ids": tuple(data["chapter_ids"])})
+
+
+@dataclass(frozen=True, slots=True)
 class CharacterInsight:
     name: str
     appearances: int
@@ -99,6 +119,7 @@ class ScriptVersion:
     validation_errors: tuple[ValidationIssue, ...]
     change_summary: str
     analysis: ContentAnalysis = field(default_factory=ContentAnalysis)
+    source_attributions: tuple[SourceAttribution, ...] = ()
 
     @property
     def source_preamble(self) -> str:
@@ -218,6 +239,11 @@ class ScriptDocument:
         mappings = [asdict(mapping) for mapping in version.source_mappings]
         return {
             "script_mappings": mappings,
+            **(
+                {"source_attributions": [asdict(item) for item in version.source_attributions]}
+                if version.source_attributions
+                else {}
+            ),
             "script_mapping_coordinate_system": "script_version",
             "source_mappings": mappings if exact_source else [],
             "source_mapping_coordinate_system": "original_source" if exact_source else "unmapped",
@@ -284,6 +310,9 @@ def script_from_dict(data: dict[str, object]) -> ScriptDocument:
                 ),
                 change_summary=_string(version_data["change_summary"]),
                 analysis=_analysis_from_dict(_dict(version_data.get("analysis", {}))),
+                source_attributions=tuple(
+                    attribution_from_dict(_dict(item)) for item in _list(version_data.get("source_attributions", []))
+                ),
             )
         )
     profile_data = _dict(data.get("director_profile", {}))
