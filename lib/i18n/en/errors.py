@@ -1,4 +1,9 @@
 MESSAGES = {
+    "model_configuration_changed": "The model configuration or price changed before submission. No task or funds were reserved. Refresh the model information and confirm again.",
+    "generation_model_shared_database_required": "Generation tasks and model configuration must use the same database. Ask an administrator to correct the deployment configuration.",
+    "generation_provider_outcome_unknown": "This request may already have been sent. Its result is unconfirmed, so funds and model capacity remain reserved. Reconcile the original request before generating again.",
+    "model_route_reservation_task_mismatch": "The task does not match its model reservation. Refresh the task and ask an administrator to reconcile it.",
+    "model_route_reservation_conflict": "The model reservation has changed. Refresh the task and reconcile the original request.",
     "budget_management_forbidden": "Changing budgets requires both billing read and budget management permissions. Other production details can still be saved separately.",
     "budget_policy_version_conflict": "The budget policy changed after the previous save. Reload the current budget before saving again; the old request cannot overwrite it.",
     "project_budget_exceeded": "This task would exceed the project budget. Wait for existing tasks to settle or ask a budget manager to adjust the cap.",

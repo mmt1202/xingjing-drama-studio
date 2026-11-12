@@ -71,7 +71,13 @@ class GenerationContractRoute(APIRoute):
                 code = str(error) or "INVALID_GENERATION_REQUEST"
                 http_status = (
                     status.HTTP_409_CONFLICT
-                    if code in {"GENERATION_TASK_VERSION_CONFLICT", "GENERATION_TASK_NOT_CANCELLABLE"}
+                    if code
+                    in {
+                        "GENERATION_TASK_VERSION_CONFLICT",
+                        "GENERATION_TASK_NOT_CANCELLABLE",
+                        "GENERATION_PROVIDER_OUTCOME_UNKNOWN",
+                        "MODEL_CONFIGURATION_CHANGED",
+                    }
                     else status.HTTP_400_BAD_REQUEST
                 )
                 return _error(request, code, http_status)
@@ -428,6 +434,11 @@ def _error(request: Request, code: str, status_code: int, details: Mapping[str, 
         "GENERATION_INPUT_TOO_LARGE",
         "GENERATION_INPUT_ROLES_UNSUPPORTED",
         "GENERATION_PROVIDER_INPUT_CONTRACT_UNAVAILABLE",
+        "GENERATION_MODEL_SHARED_DATABASE_REQUIRED",
+        "GENERATION_PROVIDER_OUTCOME_UNKNOWN",
+        "MODEL_CONFIGURATION_CHANGED",
+        "MODEL_ROUTE_RESERVATION_TASK_MISMATCH",
+        "MODEL_ROUTE_RESERVATION_CONFLICT",
     }
     message = (
         {"message": get_translator(request)(code.lower())}

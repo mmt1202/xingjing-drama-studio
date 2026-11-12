@@ -55,6 +55,7 @@ from server.xingjing_identity_context import (
     TrustedWorkspaceContextResolver,
 )
 from server.xingjing_model_control import ModelRouteResolver
+from server.xingjing_model_control.reservations import ModelRouteAdmission
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import GeneratedArtifactStorageError, LocalGenerationArtifactStore
@@ -130,6 +131,7 @@ class GenerationRuntime:
         provider_recovery_secret: str | None = None,
         model_catalog: tuple[GenerationModelDefinition, ...] = (),
         model_route_resolver: ModelRouteResolver | None = None,
+        route_admission: ModelRouteAdmission | None = None,
         native_images: NativeImageExecutor | None = None,
         unavailable_code: str | None = None,
         close: Callable[[], Awaitable[None]] | None = None,
@@ -146,6 +148,7 @@ class GenerationRuntime:
         self._provider_recovery_secret = provider_recovery_secret
         self._model_catalog = model_catalog
         self._model_route_resolver = model_route_resolver
+        self._route_admission = route_admission
         self._native_images = native_images
         self._timeout_sweeper: asyncio.Task[None] | None = None
         self.unavailable_code = unavailable_code
@@ -392,10 +395,26 @@ class GenerationRuntime:
         return await self._repository_or_raise().billing_for_task(context.workspace_id, project_id, task_id)
 
     async def task_progress(self, context: TrustedWorkspaceContext, project_id: str, task_id: str) -> dict[str, object]:
-        await self.get_task(context, project_id, task_id)
+        task = await self.get_task(context, project_id, task_id)
         progress = await self._repository_or_raise().task_progress(context.workspace_id, project_id, task_id)
         if self._native_images:
             progress["nativeExecution"] = await self._native_images.state(context.workspace_id, project_id, task_id)
+        if self._route_admission:
+            reservation = await self._route_admission.task_reservation(task)
+            if reservation is not None:
+                progress["modelReservation"] = {
+                    "reserved": reservation.released_at is None,
+                    "submissionUnconfirmed": bool(
+                        reservation.dispatch_started_at is not None
+                        and (
+                            (task.status is TaskStatus.QUEUED and not task.provider_job_id)
+                            or (task.status is TaskStatus.RUNNING and datetime.now(UTC) >= task.timeout_at)
+                        )
+                    ),
+                    "submittedAt": reservation.dispatch_started_at.isoformat()
+                    if reservation.dispatch_started_at
+                    else None,
+                }
         return progress
 
     async def generated_candidate_sets(
@@ -471,6 +490,10 @@ class GenerationRuntime:
         current = await self.get_task(context, project_id, task_id)
         if current.version != expected_version:
             raise ValueError("GENERATION_TASK_VERSION_CONFLICT")
+        if current.status is TaskStatus.QUEUED and self._route_admission:
+            reservation = await self._route_admission.task_reservation(current)
+            if reservation is not None and reservation.dispatch_started_at is not None:
+                raise ValueError("GENERATION_PROVIDER_OUTCOME_UNKNOWN")
         if current.status is TaskStatus.RUNNING:
             if self._native_images and await self._native_images.state(context.workspace_id, project_id, task_id):
                 raise GenerationRuntimeUnavailable("GENERATION_NATIVE_CANCELLATION_UNAVAILABLE")
@@ -504,12 +527,7 @@ class GenerationRuntime:
                 expected_version=cancelling.version,
                 event_id=f"cancel:{cancelled.task_id}:{cancelled.version}",
             )
-            if self._model_route_resolver is not None:
-                await self._model_route_resolver.release(
-                    provider_id=cancelled.resolved_provider_id or gateway.provider_id,
-                    model_id=cancelled.resolved_model_id or gateway.default_model_id,
-                    succeeded=True,
-                )
+            await self._release_task_route(cancelled, succeeded=True)
             await self._repository_or_raise().append_audit(
                 ImmutableAuditRecord(
                     audit_id=str(uuid4()),
@@ -536,6 +554,8 @@ class GenerationRuntime:
         )
         if self._native_images:
             await self._native_images.cancelled(updated)
+        if self._route_admission:
+            await self._route_admission.release(updated, succeeded=True)
         await self._repository_or_raise().append_audit(
             ImmutableAuditRecord(
                 audit_id=str(uuid4()),
@@ -631,7 +651,7 @@ class GenerationRuntime:
                 requested_provider_id=request.requested_provider_id,
                 requested_model_id=request.requested_model_id,
                 parameters=_route_parameters(request),
-                acquire=True,
+                acquire=self._route_admission is None,
             )
         except LookupError as error:
             raise ValueError(str(error)) from error
@@ -641,9 +661,10 @@ class GenerationRuntime:
             else None
         )
         if native is None and (gateway is None or route.provider_id != gateway.provider_id):
-            await self._model_route_resolver.release(
-                provider_id=route.provider_id, model_id=route.model_id, succeeded=False
-            )
+            if self._route_admission is None:
+                await self._model_route_resolver.release(
+                    provider_id=route.provider_id, model_id=route.model_id, succeeded=False
+                )
             raise GenerationRuntimeUnavailable("MODEL_PROVIDER_ADAPTER_UNAVAILABLE")
         request = request.model_copy(
             update={"requested_provider_id": route.provider_id, "requested_model_id": route.model_id}
@@ -658,10 +679,42 @@ class GenerationRuntime:
                 if request.input_asset_ids:
                     gateway.validate_input_contract(request)
         except (NativeImageConfigurationError, GenerationProviderGatewayError, GenerationRuntimeUnavailable) as error:
-            await self._model_route_resolver.release(
-                provider_id=route.provider_id, model_id=route.model_id, succeeded=False
-            )
+            if self._route_admission is None:
+                await self._model_route_resolver.release(
+                    provider_id=route.provider_id, model_id=route.model_id, succeeded=False
+                )
             raise GenerationRuntimeUnavailable(str(error)) from error
+        native_preparer = submission_preparer
+        admission = self._route_admission
+        if admission is not None:
+
+            async def prepare(session: AsyncSession, task: GenerationTask) -> None:
+                release_key = f"generation:{task.task_id}"
+                if native_preparer is not None:
+                    from .native_image.models import NativeImageExecutionRow
+
+                    await native_preparer(session, task)
+                    await session.flush()
+                    release_key = await session.scalar(
+                        select(NativeImageExecutionRow.execution_id).where(
+                            NativeImageExecutionRow.workspace_id == task.request.workspace_id,
+                            NativeImageExecutionRow.project_id == task.request.project_id,
+                            NativeImageExecutionRow.task_id == task.task_id,
+                        )
+                    )
+                    if not release_key:
+                        raise ValueError("MODEL_ROUTE_RESERVATION_TASK_MISMATCH")
+                await admission.reserve(
+                    session,
+                    task,
+                    route,
+                    tenant_id=context.tenant_id,
+                    release_key=release_key,
+                    kind="native_image" if native_preparer is not None else "gateway",
+                    parameters=_route_parameters(task.request),
+                )
+
+            submission_preparer = prepare
         now = datetime.now(UTC)
         candidate = GenerationTask.create(
             task_id=str(uuid4()),
@@ -680,25 +733,36 @@ class GenerationRuntime:
                 budget_permissions=context.permissions,
                 submission_preparer=submission_preparer,
             )
+        except LookupError as error:
+            if admission is None:
+                await self._model_route_resolver.release(
+                    provider_id=route.provider_id, model_id=route.model_id, succeeded=False
+                )
+            raise ValueError(str(error)) from error
         except Exception:
-            await self._model_route_resolver.release(
-                provider_id=route.provider_id, model_id=route.model_id, succeeded=False
-            )
+            if admission is None:
+                await self._model_route_resolver.release(
+                    provider_id=route.provider_id, model_id=route.model_id, succeeded=False
+                )
             raise
         if created.task_id != candidate.task_id:
-            await self._model_route_resolver.release(
-                provider_id=route.provider_id, model_id=route.model_id, succeeded=True
-            )
+            if admission is None:
+                await self._model_route_resolver.release(
+                    provider_id=route.provider_id, model_id=route.model_id, succeeded=True
+                )
             return created
         if native:
             return created
         assert gateway is not None
+        if admission is not None:
+            await admission.mark_dispatched(created)
         try:
             submission = await gateway.submit(request, task_id=created.task_id, attempt=1, deadline=created.timeout_at)
         except GenerationProviderGatewayError as error:
-            await self._model_route_resolver.release(
-                provider_id=route.provider_id, model_id=route.model_id, succeeded=False
-            )
+            if admission is None:
+                await self._model_route_resolver.release(
+                    provider_id=route.provider_id, model_id=route.model_id, succeeded=False
+                )
             await self._repository_or_raise().mark_provider_submission_failed(
                 context.workspace_id,
                 project_id,
@@ -801,6 +865,7 @@ class GenerationRuntime:
         for queued in pending:
             route = None
             submission_persisted = False
+            reservation = await self._route_admission.task_reservation(queued) if self._route_admission else None
             try:
                 if self._model_route_resolver is None:
                     raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
@@ -819,18 +884,23 @@ class GenerationRuntime:
                     )
                 except ValueError as error:
                     raise GenerationProviderGatewayError(str(error)) from error
-                route = await self._model_route_resolver.resolve(
-                    tenant_id=tenant_id,
-                    workspace_id=queued.request.workspace_id,
-                    capability=queued.request.capability,
-                    media_type=queued.request.media_type.value,
-                    requested_provider_id=queued.request.requested_provider_id,
-                    requested_model_id=queued.request.requested_model_id,
-                    parameters=queued.request.parameters,
-                    acquire=True,
-                )
-                if route.provider_id != gateway.provider_id:
-                    raise GenerationRuntimeUnavailable("MODEL_PROVIDER_ADAPTER_UNAVAILABLE")
+                if reservation is not None and self._route_admission:
+                    if queued.request.requested_provider_id != gateway.provider_id:
+                        raise GenerationRuntimeUnavailable("MODEL_PROVIDER_ADAPTER_UNAVAILABLE")
+                    await self._route_admission.mark_dispatched(queued)
+                else:
+                    route = await self._model_route_resolver.resolve(
+                        tenant_id=tenant_id,
+                        workspace_id=queued.request.workspace_id,
+                        capability=queued.request.capability,
+                        media_type=queued.request.media_type.value,
+                        requested_provider_id=queued.request.requested_provider_id,
+                        requested_model_id=queued.request.requested_model_id,
+                        parameters=_route_parameters(queued.request),
+                        acquire=True,
+                    )
+                    if route.provider_id != gateway.provider_id:
+                        raise GenerationRuntimeUnavailable("MODEL_PROVIDER_ADAPTER_UNAVAILABLE")
                 submission = await gateway.submit(
                     queued.request,
                     task_id=queued.task_id,
@@ -1015,12 +1085,7 @@ class GenerationRuntime:
             received_at=received_at,
         )
         if result.disposition is CallbackDisposition.APPLIED:
-            if self._model_route_resolver is not None:
-                await self._model_route_resolver.release(
-                    provider_id=current.resolved_provider_id or "provider",
-                    model_id=current.resolved_model_id or "model",
-                    succeeded=outcome == "succeeded",
-                )
+            await self._release_task_route(current, succeeded=outcome == "succeeded")
             await self._repository_or_raise().append_provider_evidence(
                 ProviderCallEvidence(
                     evidence_id=provider_evidence_id,
@@ -1063,6 +1128,8 @@ class GenerationRuntime:
         while True:
             try:
                 await self.expire_overdue_tasks()
+                if self._route_admission:
+                    await self._route_admission.reconcile()
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - transient provider/database failures retry next sweep
@@ -1075,6 +1142,10 @@ class GenerationRuntime:
         completed = 0
         provider_jobs: list[str] = []
         for current in tasks:
+            if self._route_admission:
+                reservation = await self._route_admission.task_reservation(current)
+                if reservation is not None and reservation.dispatch_started_at is not None:
+                    continue
             if self._native_images and await self._native_images.state(
                 current.request.workspace_id, current.request.project_id, current.task_id
             ):
@@ -1090,12 +1161,7 @@ class GenerationRuntime:
                 continue
             if current.provider_job_id:
                 provider_jobs.append(current.provider_job_id)
-            if self._model_route_resolver is not None and current.resolved_provider_id and current.resolved_model_id:
-                await self._model_route_resolver.release(
-                    provider_id=current.resolved_provider_id,
-                    model_id=current.resolved_model_id,
-                    succeeded=False,
-                )
+            await self._release_task_route(current, succeeded=False)
             await self._repository_or_raise().append_audit(
                 ImmutableAuditRecord(
                     audit_id=str(uuid4()),
@@ -1121,6 +1187,14 @@ class GenerationRuntime:
                 if isinstance(result, Exception):
                     logger.warning("M06 provider cancellation failed after timeout: job_id=%s error=%s", job_id, result)
         return completed
+
+    async def _release_task_route(self, task: GenerationTask, *, succeeded: bool) -> None:
+        if self._route_admission and await self._route_admission.release(task, succeeded=succeeded):
+            return
+        if self._model_route_resolver and task.resolved_provider_id and task.resolved_model_id:
+            await self._model_route_resolver.release(
+                provider_id=task.resolved_provider_id, model_id=task.resolved_model_id, succeeded=succeeded
+            )
 
     async def close(self) -> None:
         if self._native_images:
@@ -1395,6 +1469,8 @@ def create_production_generation_runtime(
     except (SQLAlchemyError, ValueError, ModuleNotFoundError):
         return _unavailable_runtime("GENERATION_RUNTIME_DEPENDENCY_UNAVAILABLE")
     model_url = os.environ.get("XINGJING_MODEL_DATABASE_URL", "").strip() or url
+    if model_url != url:
+        return _unavailable_runtime("GENERATION_MODEL_SHARED_DATABASE_REQUIRED")
     if "+asyncpg" not in model_url and "+aiosqlite" not in model_url:
         return _unavailable_runtime("XINGJING_MODEL_DATABASE_URL_MUST_BE_ASYNC")
     try:
@@ -1425,8 +1501,11 @@ def create_production_generation_runtime(
     billing_policy = _billing_policy_from_environment()
     from server.xingjing_budget import BudgetAdmissionService
 
-    repository = SqlAlchemyGenerationTaskRepository(factory, budget_guard=BudgetAdmissionService())
     routes = ModelRouteResolver(model_factory)
+    admission = ModelRouteAdmission(factory, routes)
+    repository = SqlAlchemyGenerationTaskRepository(
+        factory, budget_guard=BudgetAdmissionService(), release_guard=admission.guard_billing_release
+    )
     native_images = None
     if artifact_store is not None:
         native_enabled = os.environ.get("XINGJING_M06_NATIVE_IMAGE_ENABLED", "").strip().lower() == "true"
@@ -1465,6 +1544,7 @@ def create_production_generation_runtime(
         billing_callback_secret=billing_callback_secret or None,
         provider_recovery_secret=provider_recovery_secret or None,
         model_route_resolver=routes,
+        route_admission=admission,
         native_images=native_images,
         close=close_engines,
     )

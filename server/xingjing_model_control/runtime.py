@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, and_, or_, select
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -99,6 +99,27 @@ class ModelRouteReleaseRow(ModelControlBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
 
 
+class ModelRouteReservationRow(ModelControlBase):
+    __tablename__ = "xingjing_model_route_reservations"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "project_id", "task_id", name="uq_xj_route_reservation_task"),
+        Index("ix_xj_route_reservation_pending", "kind", "released_at", "created_at"),
+        Index("ix_xj_route_reservation_model", "registry_key", "released_at"),
+    )
+    release_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    registry_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    pricing_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class PromptTemplateRow(ModelControlBase):
     __tablename__ = "xingjing_prompt_templates"
     __table_args__ = (UniqueConstraint("template_key", "template_version", name="uq_xj_prompt_template_version"),)
@@ -142,6 +163,7 @@ class ModelRouteDecision:
     fallback_used: bool
     credential_ref: str | None = None
     successful_output_minor: int | None = None
+    definition_version: int | None = None
 
 
 class ModelRouteResolver:
@@ -242,6 +264,7 @@ class ModelRouteResolver:
             fallback,
             selected[0].credential_ref,
             selected[2].successful_output_minor,
+            selected[0].version,
         )
 
     async def release_once(
@@ -255,10 +278,15 @@ class ModelRouteResolver:
                     raise ValueError("MODEL_ROUTE_RELEASE_CONFLICT")
                 return
             session.add(ModelRouteReleaseRow(release_key=release_key, registry_key=registry_key, succeeded=succeeded))
+            reservation = await session.get(ModelRouteReservationRow, release_key, with_for_update=True)
+            if reservation is not None:
+                if reservation.registry_key != registry_key or reservation.released_at is not None:
+                    raise ValueError("MODEL_ROUTE_RELEASE_CONFLICT")
+                reservation.released_at = _now()
             if evidence is not None:
                 session.add(evidence)
             if health is not None:
-                health.active_calls = max(0, health.active_calls - 1)
+                health.active_calls = max(await _reserved_calls(session, registry_key), health.active_calls - 1)
                 if succeeded:
                     health.status, health.consecutive_failures, health.circuit_open_until = "healthy", 0, None
                 else:
@@ -287,7 +315,7 @@ class ModelRouteResolver:
             health = await session.get(ModelHealthRow, model.registry_key, with_for_update=True)
             if health is None:
                 return
-            health.active_calls = max(0, health.active_calls - 1)
+            health.active_calls = max(await _reserved_calls(session, model.registry_key), health.active_calls - 1)
             if succeeded:
                 health.status, health.consecutive_failures, health.circuit_open_until = "healthy", 0, None
             else:
@@ -300,6 +328,20 @@ class ModelRouteResolver:
                 else:
                     health.status = "degraded"
             health.checked_at = _now()
+
+
+async def _reserved_calls(session: AsyncSession, registry_key: str) -> int:
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ModelRouteReservationRow)
+            .where(
+                ModelRouteReservationRow.registry_key == registry_key,
+                ModelRouteReservationRow.released_at.is_(None),
+            )
+        )
+        or 0
+    )
 
 
 class ModelControlRuntime:
@@ -405,13 +447,23 @@ class ModelControlRuntime:
                         else None
                     )
                 row.latency_ms = _positive_int(body.get("latencyMs"), allow_zero=True)
-                row.active_calls = _positive_int(body.get("activeCalls"), allow_zero=True) or 0
+                reserved = await session.scalar(
+                    select(ModelRouteReservationRow.release_key)
+                    .where(
+                        ModelRouteReservationRow.registry_key == key,
+                        ModelRouteReservationRow.released_at.is_(None),
+                    )
+                    .limit(1)
+                )
+                if reserved is None and "activeCalls" in body:
+                    row.active_calls = _positive_int(body.get("activeCalls"), allow_zero=True) or 0
                 row.checked_at = _now()
+            circuit_open_until = row.circuit_open_until
             return {
                 "data": {
                     "registryKey": key,
                     "status": row.status,
-                    "circuitOpenUntil": row.circuit_open_until.isoformat() if row.circuit_open_until else None,
+                    "circuitOpenUntil": circuit_open_until.isoformat() if circuit_open_until else None,
                 }
             }
 

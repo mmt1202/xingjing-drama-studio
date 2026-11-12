@@ -152,6 +152,7 @@ export interface GenerationTaskDetail {
   } | null;
   readonly progress: {
     readonly nativeExecution?: { readonly executionId: string; readonly status: string; readonly upstreamRequestId: string | null; readonly errorCode: string | null } | null;
+    readonly modelReservation?: { readonly reserved: boolean; readonly submissionUnconfirmed: boolean; readonly submittedAt: string | null };
     readonly queue_position: number | null;
     readonly latest: {
       readonly event_id: string;

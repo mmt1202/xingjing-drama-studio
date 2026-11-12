@@ -459,9 +459,16 @@ SessionFactory = async_sessionmaker[AsyncSession]
 
 
 class SqlAlchemyGenerationTaskRepository:
-    def __init__(self, session_factory: SessionFactory, *, budget_guard: BudgetAdmissionService | None = None) -> None:
+    def __init__(
+        self,
+        session_factory: SessionFactory,
+        *,
+        budget_guard: BudgetAdmissionService | None = None,
+        release_guard: Callable[[AsyncSession, GenerationTask], Awaitable[None]] | None = None,
+    ) -> None:
         self._session_factory = session_factory
         self._budget_guard = budget_guard
+        self._release_guard = release_guard
 
     async def grant_credits(
         self,
@@ -1399,6 +1406,8 @@ class SqlAlchemyGenerationTaskRepository:
             )
             if not updated.rowcount:  # pyright: ignore[reportAttributeAccessIssue]
                 raise VersionConflict("任务版本冲突或已终态")
+            if self._release_guard is not None:
+                await self._release_guard(session, task)
             hold = await session.get(
                 GenerationBillingHoldRow,
                 (task.request.workspace_id, task.request.project_id, task.task_id),

@@ -1,4 +1,9 @@
 MESSAGES = {
+    "model_configuration_changed": "提交前模型配置或价格已更新，本次未创建任务或预留费用。请刷新模型信息后重新确认。",
+    "generation_model_shared_database_required": "生成任务与模型配置必须使用同一数据库，请管理员修正部署配置后重试。",
+    "generation_provider_outcome_unknown": "该请求可能已发出，结果尚未确认。费用和模型额度继续保留，请先核对原请求，不要重新生成。",
+    "model_route_reservation_task_mismatch": "任务与模型额度记录不一致，请刷新任务并联系管理员核验。",
+    "model_route_reservation_conflict": "模型额度记录已变化，请刷新任务后核对原请求。",
     "budget_management_forbidden": "修改预算需要同时具有账单查看和预算管理权限；其他制作信息仍可单独保存。",
     "budget_policy_version_conflict": "预算策略在上次保存后已有新的变更，不能用旧请求覆盖。请重新读取当前预算后明确保存。",
     "project_budget_exceeded": "本次任务会超过项目预算上限。请等待已有任务结算，或由预算管理员调整上限。",

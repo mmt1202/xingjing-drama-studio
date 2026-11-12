@@ -2,6 +2,9 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  gatewayUnconfirmedLabel: "结果待核验",
+  gatewayUnconfirmed: "任务尚未返回可核验的结果，费用与模型并发额度继续保留。请刷新核对原任务，不要用新请求重复提交同一次生成。",
+  gatewaySubmittedAt: "开始提交：{{time}}",
   nativeUnknown: "供应商是否受理尚未确认。费用继续预留，系统不会自动重复生成；请管理员核对供应商记录后处理。",
   nativePublishing: "结果已取得，正在恢复本地入库，不会再次调用供应商。",
   nativeConfiguration: "原生图片通道尚未准备完成，请管理员核对供应商配置。",
@@ -39,6 +42,9 @@ const zh = {
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
+  gatewayUnconfirmedLabel: "Result awaiting verification",
+  gatewayUnconfirmed: "No verifiable result is available yet. Funds and model capacity remain reserved. Refresh the original task; do not submit the same generation as a new request.",
+  gatewaySubmittedAt: "Submission started: {{time}}",
   nativeUnknown: "Provider acceptance is unknown. Funds remain reserved and generation will not be repeated automatically. Ask an administrator to verify provider records.",
   nativePublishing: "The result is available. Local publication is being recovered without another provider call.",
   nativeConfiguration: "The native image channel is not ready. Ask an administrator to check provider configuration.",
@@ -75,6 +81,9 @@ const en: Copy = {
   estimate: "Server default model estimate: {{currency}} {{amount}}. Actual charges appear on the task bill.", changedModel: "Estimates for a manually selected model are checked by the server at submission.",
 };
 const vi: Copy = {
+  gatewayUnconfirmedLabel: "Kết quả chờ xác minh",
+  gatewayUnconfirmed: "Chưa có kết quả có thể xác minh. Tiền và năng lực đồng thời của mô hình vẫn được giữ. Hãy làm mới tác vụ gốc, không gửi lại cùng lượt tạo bằng yêu cầu mới.",
+  gatewaySubmittedAt: "Bắt đầu gửi: {{time}}",
   nativeUnknown: "Chưa rõ nhà cung cấp đã nhận yêu cầu chưa. Phí vẫn giữ và không tự sinh lại. Nhờ quản trị viên xác minh bản ghi nhà cung cấp.",
   nativePublishing: "Đã có kết quả; đang khôi phục lưu cục bộ mà không gọi nhà cung cấp lần nữa.",
   nativeConfiguration: "Kênh ảnh gốc chưa sẵn sàng. Nhờ quản trị viên kiểm tra cấu hình nhà cung cấp.",

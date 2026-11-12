@@ -34,6 +34,7 @@ const copy: Record<GenerationWorkbenchView, { title: string; eyebrow: string; de
 
 function errorText(error: unknown): string {
   if (!(error instanceof GenerationCenterApiError)) return "网络暂不可用，请稍后重新读取服务端状态。";
+  if (error.code === "GENERATION_PROVIDER_OUTCOME_UNKNOWN" || error.code === "GENERATION_MODEL_SHARED_DATABASE_REQUIRED" || error.code === "MODEL_CONFIGURATION_CHANGED" || error.code.startsWith("MODEL_ROUTE_RESERVATION_")) return error.message;
   if (/^(BUDGET_|PROJECT_BUDGET_|EPISODE_BUDGET_|GENERATION_NATIVE_)/.test(error.code)) return error.message;
   if (error.status === 403) return "服务端拒绝了当前工作区或项目的数据访问；不会显示任何任务详情。";
   if (error.status === 409) return "任务版本已变化。已保留当前界面，并请重新读取服务端最终状态。";
@@ -111,6 +112,7 @@ function DetailPanel({ detail, onClose, onSelectCandidate, selecting }: { readon
   if (!detail) return <aside className="border border-white/10 bg-stone-950/50 p-5 text-sm text-stone-500">选择任务以读取服务端详情、产物 ID、校验摘要与更新时间。</aside>;
   const task = detail.task;
   return <aside className="border border-white/10 bg-stone-950/80 p-5">
+    {detail.progress.modelReservation?.submissionUnconfirmed ? <div role="status" className="mb-4 rounded-lg border border-amber-400/20 p-3 text-sm text-amber-200"><strong>{submissionText("gatewayUnconfirmedLabel")}</strong><p className="mt-2">{submissionText("gatewayUnconfirmed")}</p>{detail.progress.modelReservation.submittedAt ? <p className="mt-2 text-xs">{submissionText("gatewaySubmittedAt", { time: formatTime(detail.progress.modelReservation.submittedAt) })}</p> : null}</div> : null}
     {detail.progress.nativeExecution?.status === "unknown" ? <p role="status" className="mb-4 rounded-lg border border-amber-400/20 p-3 text-sm text-amber-200">{submissionText("nativeUnknown")}</p> : null}
     {detail.progress.nativeExecution?.status === "result_ready" ? <p role="status" className="mb-4 rounded-lg border border-white/10 p-3 text-sm text-slate-300">{submissionText("nativePublishing")}</p> : null}
     <div className="flex items-start justify-between gap-4"><div><p className="font-mono text-[11px] text-cyan-200">TASK DETAIL</p><h2 className="mt-1 font-mono text-sm text-stone-100">{task.task_id}</h2></div><button type="button" onClick={onClose} className="text-sm text-stone-400 hover:text-stone-100">关闭</button></div>

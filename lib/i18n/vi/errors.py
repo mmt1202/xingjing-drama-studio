@@ -1,4 +1,9 @@
 MESSAGES = {
+    "model_configuration_changed": "Cấu hình hoặc giá mô hình đã thay đổi trước khi gửi. Chưa tạo tác vụ hay giữ tiền. Hãy tải lại thông tin mô hình và xác nhận lại.",
+    "generation_model_shared_database_required": "Tác vụ tạo và cấu hình mô hình phải sử dụng cùng cơ sở dữ liệu. Hãy nhờ quản trị viên sửa cấu hình triển khai.",
+    "generation_provider_outcome_unknown": "Yêu cầu này có thể đã được gửi nhưng kết quả chưa được xác nhận. Tiền và năng lực mô hình vẫn được giữ. Hãy đối soát yêu cầu gốc trước khi tạo lại.",
+    "model_route_reservation_task_mismatch": "Tác vụ không khớp với bản ghi giữ năng lực mô hình. Hãy làm mới và nhờ quản trị viên đối soát.",
+    "model_route_reservation_conflict": "Bản ghi giữ năng lực mô hình đã thay đổi. Hãy làm mới tác vụ và đối soát yêu cầu gốc.",
     "budget_management_forbidden": "Thay đổi ngân sách cần cả quyền xem hóa đơn và quản lý ngân sách. Các thông tin sản xuất khác vẫn có thể lưu riêng.",
     "budget_policy_version_conflict": "Chính sách ngân sách đã thay đổi sau lần lưu trước. Hãy tải lại rồi lưu rõ ràng; yêu cầu cũ không thể ghi đè.",
     "project_budget_exceeded": "Tác vụ sẽ vượt ngân sách dự án. Hãy đợi quyết toán hoặc nhờ người quản lý điều chỉnh giới hạn.",
