@@ -1,3 +1,4 @@
+import { SourceProvenancePanel } from "@/xingjing_source_planning/SourceProvenancePanel";
 import { useEffect, useRef, useState } from "react";
 import { CreatorApiError } from "./api";
 import { useScriptTranslation } from "./script-i18n";
@@ -127,7 +128,7 @@ export function SourceMappingPage(props: ScriptPageProps) {
   const { t } = useScriptTranslation();
   return <ScriptPageFrame {...props} page="source-mapping" blocked={false}>{(frame) => {
     const script = frame.script!, version = currentVersion(script);
-    return <section className={scriptPanel}><p className="text-sm leading-7 text-slate-400">{t("mappingHelp")}</p><h3 className="mt-5 text-sm font-medium">{t("versionPositions")}</h3><MappingList mappings={version?.scriptMappings ?? []} text={version?.sourceContent ?? ""} /><h3 className="mt-5 text-sm font-medium">{t("originalMappings")}</h3>{version?.sourceMappingCoordinateSystem === "original_source" ? <MappingList mappings={version.sourceMappings ?? []} text={script.sourceDocument.content} /> : <p className="mt-3 text-sm text-amber-200">{t("unmapped")}</p>}{version?.unmappedParagraphIds?.length ? <p className="mt-3 text-xs text-slate-500">{t("unmappedCount", { count: version.unmappedParagraphIds.length })}</p> : null}<NextStep frame={frame} step="source" label="openSource" /></section>;
+    return <section className={scriptPanel}><p className="text-sm leading-7 text-slate-400">{t("mappingHelp")}</p><SourceProvenancePanel key={`${frame.context.workspace.id}:${script.id}`} workspaceId={frame.context.workspace.id} projectId={props.projectId} scriptId={script.id} /><h3 className="mt-5 text-sm font-medium">{t("versionPositions")}</h3><MappingList mappings={version?.scriptMappings ?? []} text={version?.sourceContent ?? ""} /><h3 className="mt-5 text-sm font-medium">{t("originalMappings")}</h3>{version?.sourceMappingCoordinateSystem === "original_source" ? <MappingList mappings={version.sourceMappings ?? []} text={script.sourceDocument.content} /> : <p className="mt-3 text-sm text-amber-200">{t("unmapped")}</p>}{version?.unmappedParagraphIds?.length ? <p className="mt-3 text-xs text-slate-500">{t("unmappedCount", { count: version.unmappedParagraphIds.length })}</p> : null}<NextStep frame={frame} step="source" label="openSource" /></section>;
   }}</ScriptPageFrame>;
 }
 

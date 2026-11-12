@@ -29,6 +29,7 @@ from server.xingjing_identity_context import PlatformSessionGateway, TrustedWork
 from server.xingjing_model_control.runtime import ModelDefinitionRow
 from server.xingjing_platform_persistence import OptimisticConflict, PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import Project, ProjectRow
+from server.xingjing_source_planning.router import register_source_planning_routes
 from server.xingjing_team_persistence.repository import MemberRow
 
 from .budget import apply_project_budget, register_budget_routes
@@ -199,6 +200,7 @@ class ProjectsRuntime:
             return {"data": _project(project), "meta": {"requestId": context.request_id}}
 
         register_episode_routes(self, router)
+        register_source_planning_routes(self, router)
         register_budget_routes(self, router)
         register_control_routes(self, router)
         register_home_routes(self, router)
@@ -493,7 +495,7 @@ class _ProjectsRoute(APIRoute):
                     code = str(payload["error"].get("code", ""))
                     key = (
                         code.lower()
-                        if code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_"))
+                        if code.startswith(("BUDGET_", "PROJECT_BUDGET_", "EPISODE_BUDGET_", "SOURCE_PLAN_"))
                         else "project.request_failed"
                     )
                     payload["error"]["message"] = get_translator(request)(key)

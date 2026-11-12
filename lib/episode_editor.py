@@ -29,6 +29,7 @@ from lib.json_io import atomic_write_json
 from lib.path_safety import safe_join
 from lib.project_change_hints import emit_project_change_hint
 from lib.project_manager import ProjectManager
+from lib.source_structure import SourceStructureError, chapters, split_ranges, uncovered_ranges
 from lib.status_calculator import StatusCalculator
 
 
@@ -206,27 +207,20 @@ def split_remaining(
     text = next((doc["text"] for doc in snapshot["sources"] if doc["path"] == source), None)
     if text is None or type(count) is not int or not 1 <= count <= 200:
         raise EpisodeEditError("EPISODE_SPLIT_INVALID")
-    start = max(
-        (
-            e["sourceRange"]["end"]
-            for e in snapshot["items"]
-            if e["sourceRange"] and e["sourceRange"]["source_file"] == source
-        ),
-        default=0,
-    )
-    tail = text[start:]
-    paragraphs = [
-        (start + m.start(), start + m.end()) for m in re.finditer(r"[^\n]+(?:\n+|$)", tail) if m.group().strip()
+    covered = [
+        (entry["sourceRange"]["start"], entry["sourceRange"]["end"])
+        for entry in snapshot["items"]
+        if entry["sourceRange"] and entry["sourceRange"]["source_file"] == source
     ]
-    if count > len(paragraphs):
-        raise EpisodeEditError("EPISODE_NOT_ENOUGH_PARAGRAPHS")
-    boundaries = [start]
-    for i in range(1, count):
-        boundaries.append(paragraphs[len(paragraphs) * i // count][0])
-    boundaries.append(len(text))
+    try:
+        ranges = split_ranges(text, uncovered_ranges(text, covered), count, chapters(text, source))
+    except SourceStructureError as error:
+        code = str(error)
+        if code == "SOURCE_PLAN_NOT_ENOUGH_PARAGRAPHS":
+            code = "EPISODE_NOT_ENOUGH_PARAGRAPHS"
+        raise EpisodeEditError(code) from error
     result = []
-    for i in range(count):
-        begin, end = boundaries[i : i + 2]
+    for i, (begin, end) in enumerate(ranges):
         number = snapshot["nextEpisode"] + i
         title = _preview_episode_title(text[begin:end], number, locale)
         result.append(
@@ -263,6 +257,7 @@ def save_episodes(
     source_texts: dict[str, str] | None = None,
     persist_budget: bool = True,
     budget_precondition: str | None = None,
+    plan_id: str | None = None,
 ) -> dict[str, Any]:
     root = manager.get_project_path(project_id)
     snapshot = manager.load_project(project_id)
@@ -289,6 +284,7 @@ def save_episodes(
             source_texts=source_texts,
             persist_budget=persist_budget,
             budget_precondition=budget_precondition,
+            plan_id=plan_id,
         )
 
 
@@ -304,6 +300,7 @@ def _save_episodes_locked(
     source_texts: dict[str, str] | None,
     persist_budget: bool = True,
     budget_precondition: str | None = None,
+    plan_id: str | None = None,
 ) -> dict[str, Any]:
     """Commit the ledger and derived text under its existing project lock.
 
@@ -312,13 +309,29 @@ def _save_episodes_locked(
     """
     root = manager.get_project_path(project_id)
     project_file = root / manager.PROJECT_FILE
-    digest = _digest({"revision": revision, "items": [e.model_dump() for e in edits], "actor": actor})
+    digest = _digest(
+        {
+            "revision": revision,
+            "items": [e.model_dump() for e in edits],
+            "actor": actor,
+            **({"sourcePlanId": plan_id} if plan_id else {}),
+        }
+    )
     with manager.file_lock(project_file):
         project = json.loads(project_file.read_text(encoding="utf-8"))
         receipts = project.get("episode_edit_receipts", [])
-        previous = next((r for r in receipts if r["key"] == key), None)
+        if plan_id and any(
+            identity != plan_id and saved["key"] == key and saved["actor"] == actor
+            for identity, saved in project.get("episode_plan_receipts", {}).items()
+        ):
+            raise EpisodeEditError("IDEMPOTENCY_CONFLICT", 409)
+        previous = (
+            project.get("episode_plan_receipts", {}).get(plan_id)
+            if plan_id
+            else next((r for r in receipts if r["key"] == key), None)
+        )
         if previous:
-            if previous["digest"] != digest:
+            if previous["digest"] != digest or previous["key"] != key:
                 raise EpisodeEditError("IDEMPOTENCY_CONFLICT", 409)
             return previous
         if replay_only:
@@ -343,6 +356,15 @@ def _save_episodes_locked(
             old = existing.get(edit.episode, {})
             if not edit.title.strip() or any(not beat.strip() or len(beat) > 4000 for beat in edit.storyBeats):
                 raise EpisodeEditError("EPISODE_FIELDS_INVALID")
+            if (
+                plan_id
+                and old
+                and edit.model_dump()
+                != EpisodeEdit.model_validate(
+                    _editable(old, project.get("planned_episode_duration_seconds", 60))
+                ).model_dump()
+            ):
+                raise EpisodeEditError("SOURCE_PLAN_VERSION_CHANGED", 409)
             source_range = edit.sourceRange.model_dump() if edit.sourceRange else None
             if edit.episode in locked and (edit.title != old.get("title") or source_range != old.get("source_range")):
                 raise EpisodeEditError("EPISODE_PRODUCTION_LOCKED", 409)
@@ -375,13 +397,13 @@ def _save_episodes_locked(
                     raise EpisodeEditError("EPISODE_SOURCE_CHANGED", 409)
                 ranges.setdefault(rel, []).append((start, end))
                 entry["source_range"] = source_range
-                if edit.episode not in locked:
+                if edit.episode not in locked and not (plan_id and old):
                     writes[root / "source" / f"episode_{edit.episode}.txt"] = text[start:end]
             else:
                 entry.pop("source_range", None)
                 if old.get("source_range"):
                     raise EpisodeEditError("EPISODE_SOURCE_RANGE_REQUIRED")
-            updated.append(entry)
+            updated.append(old if plan_id and old else entry)
         for segments in ranges.values():
             segments.sort()
             if any(right[0] < left[1] for left, right in zip(segments, segments[1:])):
@@ -398,6 +420,11 @@ def _save_episodes_locked(
             rel, end = max(covered)
             project["planning_cursor"] = {"source_file": rel, "offset": end}
         receipt = {
+            **(
+                {"planId": plan_id, "planItems": [edit.model_dump() for edit in edits if edit.episode not in existing]}
+                if plan_id
+                else {}
+            ),
             **({"budgetPrecondition": budget_precondition} if budget_precondition is not None else {}),
             "key": key,
             "digest": digest,
@@ -407,7 +434,11 @@ def _save_episodes_locked(
             "episodes": numbers,
             "at": datetime.now(UTC).isoformat(),
         }
-        project["episode_edit_receipts"] = [*receipts[-49:], receipt]
+        if plan_id:
+            # A confirmation can recover SQL after later editor writes; its receipt must not age out.
+            project.setdefault("episode_plan_receipts", {})[plan_id] = receipt
+        else:
+            project["episode_edit_receipts"] = [*receipts[-49:], receipt]
         project.setdefault("metadata", {})["updated_at"] = receipt["at"]
         backups: dict[Path, str | None] = {}
         try:

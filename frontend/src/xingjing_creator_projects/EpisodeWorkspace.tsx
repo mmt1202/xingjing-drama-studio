@@ -3,12 +3,12 @@ import { ArrowDown, ArrowUp, GripVertical, Plus, RefreshCw } from "lucide-react"
 import { CreatorApiError } from "./api";
 import { CreatorPage } from "./shared";
 import type { CreatorProjectsPort } from "./types";
-import { episodeDraft, plannedEpisode, type Episode, type EpisodeCosts, type EpisodeDraft, type EpisodesApi, type EpisodesSnapshot, type ProductionCatalog } from "./episodes-api";
+import { episodeDraft, plannedEpisode, type Episode, type EpisodeCosts, type EpisodesApi, type EpisodesSnapshot, type ProductionCatalog } from "./episodes-api";
 import { useEpisodesTranslation } from "./episodes-i18n";
 import { EpisodeDetails, episodeButton as button, episodeInput as input } from "./EpisodeDetails";
 import { useEpisodeProductionTranslation } from "./episode-production-i18n";
 import { EpisodeProductionPanel } from "./EpisodeProductionPanel";
-import { EpisodeSourcePicker } from "./EpisodeSourcePicker";
+import { SourcePlanPanel } from "@/xingjing_source_planning/SourcePlanPanel";
 import { EpisodeWorkingScriptPanel } from "./EpisodeWorkingScriptPanel";
 import { useEpisodeHandoffTranslation } from "./episode-handoff-i18n";
 import { useBudgetTranslation } from "@/xingjing_budget/i18n";
@@ -17,7 +17,7 @@ import { useProjectNavigationBlocker } from "./ProjectFlowShell";
 interface Props { api: EpisodesApi; creatorApi: CreatorProjectsPort; projectId: string; initialEpisodeId?: number; selectedScriptId?: string; onCommitted?: () => void; mode: "editor" | "library"; onNavigate: (target: string) => void }
 export function EpisodeWorkspace(props: Props) {
   const { t } = useEpisodesTranslation();
-  return <CreatorPage api={props.creatorApi} permission="project.view" title={t(props.mode)}>{(context) => <Workspace key={`${context.workspace.id}:${props.projectId}:${props.mode}`} {...props} storagePrefix={`episodes:${context.user.id}:${context.workspace.id}:${props.projectId}`} canManage={context.permissions.includes("project.manage")} />}</CreatorPage>;
+  return <CreatorPage api={props.creatorApi} permission="project.view" title={t(props.mode)}>{(context) => <Workspace key={`${context.workspace.id}:${props.projectId}:${props.mode}`} {...props} workspaceId={context.workspace.id} actorId={context.user.id} storagePrefix={`episodes:${context.user.id}:${context.workspace.id}:${props.projectId}`} canManage={context.permissions.includes("project.manage")} />}</CreatorPage>;
 }
 
 const budgetProblem = (error: unknown) => error instanceof CreatorApiError && /^(BUDGET_|PROJECT_BUDGET_|EPISODE_BUDGET_)/.test(error.code);
@@ -33,7 +33,7 @@ function totals(values: Record<string, Record<string, number>> | undefined) {
   return Object.entries(amounts).map(([currency, value]) => `${currency} ${value.toFixed(2)}`).join(" · ");
 }
 
-function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommitted, mode, onNavigate, canManage, storagePrefix }: Props & { canManage: boolean; storagePrefix: string }) {
+function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommitted, mode, onNavigate, canManage, storagePrefix, workspaceId, actorId }: Props & { canManage: boolean; storagePrefix: string; workspaceId: string; actorId: string }) {
   const { t } = useEpisodesTranslation();
   const { t: handoff } = useEpisodeHandoffTranslation();
   const { t: budgetText } = useBudgetTranslation();
@@ -47,15 +47,15 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   const { t: productionText } = useEpisodeProductionTranslation();
   const [productionCatalog, setProductionCatalog] = useState<ProductionCatalog>();
   const [productionBusy, setProductionBusy] = useState(false);
-  const busy = workspaceBusy || productionBusy;
+  const [planningBusy, setPlanningBusy] = useState(false);
+  const [planningBlocked, setPlanningBlocked] = useState(false);
+  const busy = workspaceBusy || productionBusy || planningBusy;
   const [error, setError] = useState<Error>();
   const [search, setSearch] = useState(() => sessionStorage.getItem(`${storagePrefix}:search`) ?? "");
   const [status, setStatus] = useState(() => sessionStorage.getItem(`${storagePrefix}:status`) ?? "");
   const [page, setPage] = useState(1);
   const [source, setSource] = useState("");
-  const [count, setCount] = useState(1);
-  const [preview, setPreview] = useState<EpisodeDraft[]>();
-  useProjectNavigationBlocker(dirty || busy || Boolean(preview));
+  useProjectNavigationBlocker(dirty || busy || Boolean(planningBlocked));
   const [checking, setChecking] = useState(false);
   const [costs, setCosts] = useState<EpisodeCosts>();
   const [costError, setCostError] = useState(false);
@@ -80,18 +80,17 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
       setActive(initialEpisodeId !== undefined ? result.items.find((item) => item.episode === initialEpisodeId)?.episode : result.items.find((item) => item.episode === remembered)?.episode);
       const originating = selectedScriptId ? result.sources.filter((item) => item.scriptId === selectedScriptId) : [];
       setSource(originating.length === 1 ? originating[0].path : "");
-      setCount(Math.max(1, Math.min(200, result.plannedCount - result.items.length)));
-      setPreview(undefined); setSelected([]); setChecking(false); setActivatePlans(false);
+      setSelected([]); setChecking(false); setActivatePlans(false);
     } catch (reason) { if (mounted.current && sequence === readSequence.current) setError(reason as Error); }
     finally { if (mounted.current && sequence === readSequence.current) setBusy(false); }
   }, [api, projectId, initialEpisodeId, selectedScriptId, storagePrefix]);
   useEffect(() => { mounted.current = true; const timer = window.setTimeout(() => void load(), 0); return () => { mounted.current = false; window.clearTimeout(timer); readSequence.current += 1; }; }, [load]);
   useEffect(() => {
-    if (!dirty && !busy && !preview) return;
+    if (!dirty && !busy && !planningBlocked) return;
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); };
     window.addEventListener("beforeunload", prevent);
     return () => window.removeEventListener("beforeunload", prevent);
-  }, [dirty, busy, preview]);
+  }, [dirty, busy, planningBlocked]);
 
   const canManageBudget = data?.permissions?.canManageBudget === true;
   const budgetDirty = canManageBudget && (activatePlans || draft.some((item) => item.budgetMinor !== (data?.items.find((old) => old.episode === item.episode)?.budgetMinor ?? null)));
@@ -112,30 +111,31 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
     finally { saving.current = false; if (mounted.current) setBusy(false); }
   }, [api, projectId, data, canManage, canManageBudget, budgetDirty, onCommitted]);
   useEffect(() => {
-    if (!dirty || busy || error || preview || budgetDirty) return;
+    if (!dirty || busy || error || planningBlocked || budgetDirty) return;
     const timer = window.setTimeout(() => void save(), 1100);
     return () => window.clearTimeout(timer);
-  }, [draft, dirty, busy, error, preview, budgetDirty, save]);
+  }, [draft, dirty, busy, error, planningBlocked, budgetDirty, save]);
 
   function edit(items: Episode[]) {
-    if (productionBusy) return;
+    if (productionBusy || planningBlocked || planningBusy) return;
     draftRef.current = items; setDraft(items); setDirty(true); setChecking(false);
     if (!(error instanceof CreatorApiError && error.status === 409 && !budgetProblem(error))) setError(undefined);
   }
   function inspect(number: number) {
     if (busy) return;
     setActive(number); sessionStorage.setItem(`${storagePrefix}:active`, String(number));
-    if (!dirty && !preview && draft.some((item) => item.episode === number)) {
+    if (!dirty && !planningBlocked && draft.some((item) => item.episode === number)) {
       const item = draft.find((entry) => entry.episode === number);
       const query = new URLSearchParams({ episodeId: String(number), ...(item?.workingScript ? { scriptId: item.workingScript.scriptId } : {}) });
       onNavigate(`${mode === "editor" ? "episode-split-editor" : "episodes"}?${query.toString()}`);
     }
   }
   function go(target: string) {
-    if (dirty || busy || preview) return;
+    if (dirty || busy || planningBlocked) return;
     const [path, supplied = ""] = target.split("?");
     const query = new URLSearchParams(supplied);
-    const item = draft.find((entry) => entry.episode === active);
+    const currentItem = draft.find((entry) => entry.episode === active);
+    const item = !query.has("episodeId") || query.get("episodeId") === String(currentItem?.episode) ? currentItem : undefined;
     if (item && !query.has("episodeId")) query.set("episodeId", String(item.episode));
     if (item?.workingScript && !query.has("scriptId")) query.set("scriptId", item.workingScript.scriptId);
     if (item?.production?.scriptVersionId && !query.has("scriptVersionId")) query.set("scriptVersionId", item.production.scriptVersionId);
@@ -146,7 +146,7 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
     setData(snapshot); setDraft(snapshot.items); draftRef.current = snapshot.items; setDirty(false); onCommitted?.();
   }
   function move(from: number, to: number) {
-    if (!canManage || productionBusy || preview || from === to || to < 0 || to >= draft.length) return;
+    if (!canManage || productionBusy || planningBlocked || from === to || to < 0 || to >= draft.length) return;
     const items = [...draft]; const [item] = items.splice(from, 1); items.splice(to, 0, item); edit(items);
   }
   function add(copy = false) {
@@ -155,13 +155,6 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
     const previous = draft[draft.length - 1];
     const item = plannedEpisode({ episode: number, title: t("untitled", { number }), hook: copy ? previous?.hook ?? "" : "", storyBeats: copy ? [...(previous?.storyBeats ?? [])] : [], nextEpisodeTeaser: copy ? previous?.nextEpisodeTeaser ?? "" : "", targetDuration: copy ? previous?.targetDuration ?? data.defaultDuration : data.defaultDuration, budgetMinor: copy ? previous?.budgetMinor ?? null : null, sourceRange: null });
     edit([...draft, item]); inspect(number); setSearch(""); setStatus(""); setPage(Math.ceil((draft.length + 1) / 20));
-  }
-  async function split() {
-    if (!data) return;
-    setBusy(true); setError(undefined);
-    try { const result = await api.preview(projectId, data.revision, source, count, data.sources.find((item) => item.path === source)?.digest ?? ""); if (mounted.current) setPreview(result); }
-    catch (reason) { if (mounted.current) setError(reason as Error); }
-    finally { if (mounted.current) setBusy(false); }
   }
   async function readCosts() {
     setCostBusy(true); setCostError(false);
@@ -184,11 +177,11 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   const visible = filtered.slice((currentPage - 1) * 20, currentPage * 20);
   const current = draft.find((item) => item.episode === active);
   useEffect(() => {
-    if (dirty || busy || preview || !current || current.episode === initialEpisodeId || !data?.items.some((item) => item.episode === current.episode)) return;
+    if (dirty || busy || planningBlocked || !current || current.episode === initialEpisodeId || !data?.items.some((item) => item.episode === current.episode)) return;
     const query = new URLSearchParams({ episodeId: String(current.episode), ...(current.workingScript ? { scriptId: current.workingScript.scriptId } : {}) });
     onNavigate(`${mode === "editor" ? "episode-split-editor" : "episodes"}?${query.toString()}`);
-  }, [dirty, busy, preview, current, initialEpisodeId, data, onNavigate, mode]);
-  const canAdd = canManage && !preview && !busy && draft.length < 500 && !(data?.contentMode === "ad" && draft.length > 0);
+  }, [dirty, busy, planningBlocked, current, initialEpisodeId, data, onNavigate, mode]);
+  const canAdd = canManage && !planningBlocked && !busy && draft.length < 500 && !(data?.contentMode === "ad" && draft.length > 0);
   const invalid = data && !validItems(draft, data.sources, data.items);
   const errorCode = error instanceof CreatorApiError ? error.code : "";
   const errorMessage = errorCode.startsWith("EPISODE_") ? handoff(errorCode, { defaultValue: t(errorCode, { defaultValue: error?.message ?? t("error") }) }) : errorCode === "VERSION_CONFLICT" || errorCode === "IDEMPOTENCY_CONFLICT" ? t("conflict") : error?.message ?? t("error");
@@ -204,10 +197,10 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
     {!data && !error && <p className="p-8 text-center text-slate-400">{t("loading")}</p>}
     {data && <>
       <div className="grid grid-cols-2 divide-x divide-[#2A2E3A] rounded-xl border border-[#2A2E3A] bg-[#12141B] py-4 md:grid-cols-4">{[["total", draft.length], ["scripted", draft.filter((e) => e.scriptStatus === "generated" || e.production?.scriptVersionId).length], ["inProduction", draft.filter((e) => ["in_production", "storyboard_ready"].includes(stateFor(e))).length], ["completed", draft.filter((e) => e.status === "completed" || e.production?.finalVideoVersionId).length]].map(([label, value]) => <div key={label} className="px-5"><p className="text-xs text-slate-400">{t(String(label))}</p><p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p></div>)}</div>
-      {mode === "editor" && <section className="rounded-xl border border-[#2A2E3A] bg-[#12141B] p-5"><div className="flex flex-wrap items-end gap-3"><div className="min-w-52 flex-1"><h2 className="font-semibold">{t("split")}</h2><p className="mt-2 max-w-3xl text-xs leading-6 text-slate-400">{t("splitHelp")}</p></div><label className="w-24 text-xs text-slate-400">{t("count")}<input type="number" min={1} max={200} className={input} value={count} onChange={(e) => setCount(Number(e.target.value))} disabled={!canManage || busy || !!preview} /></label><button className={`${button} bg-[#FF6B4A] font-semibold text-[#1B100C]`} disabled={!canManage || busy || dirty || !!preview || !source || !Number.isInteger(count) || count < 1 || count > 200 || data.contentMode === "ad"} onClick={() => void split()}>{t("preview")}</button></div><EpisodeSourcePicker api={api} projectId={projectId} sources={data.sources} value={source} disabled={!canManage || busy || !!preview || dirty} onChange={setSource} />
-        {preview && <div className="mt-5 border-t border-[#2A2E3A] pt-4"><h3 className="text-sm font-semibold">{t("result", { count: preview.length })}</h3><ol className="mt-3 max-h-64 space-y-2 overflow-y-auto">{preview.map((item) => <li key={item.episode} className="flex gap-3 text-sm"><span className="font-mono text-[#FF9B83]">{item.episode}</span><span className="flex-1">{item.title}</span><span className="text-xs tabular-nums text-slate-400">{item.sourceRange?.start}–{item.sourceRange?.end}</span></li>)}</ol><div className="mt-4 flex gap-3"><button className={`${button} bg-[#FF6B4A] text-[#1B100C]`} disabled={!preview.length || draft.length + preview.length > 500} onClick={() => { edit([...draft, ...preview.map(plannedEpisode)]); if (preview[0]) inspect(preview[0].episode); setPreview(undefined); }}>{t("apply")}</button><button className={button} onClick={() => setPreview(undefined)}>{t("cancel")}</button></div></div>}
-      </section>}
-      <div className="flex flex-wrap items-center gap-2"><input aria-label={t("search")} placeholder={t("search")} className={`${input} !mt-0 !w-auto min-w-60 flex-1`} value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:search`, e.target.value); }} /><select aria-label={t("all")} className={`${input} !mt-0 !w-auto`} value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:status`, e.target.value); }}><option value="">{t("all")}</option>{["draft", "scripted", "in_production", "completed", "script_frozen", "storyboard_ready", "final_ready", "pending_review", "review_blocked", "package_ready"].map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</select><button className={button} disabled={!canAdd} onClick={() => add()}><Plus size={15} className="mr-1 inline" />{t("add")}</button><button className={button} title={t("copyHelp")} disabled={!canAdd || draft.length === 0} onClick={() => add(true)}>{t("copy")}</button><button className={button} disabled={!canManage || !dirty || busy || !!preview || !!invalid || (error instanceof CreatorApiError && error.status === 409 && !budgetProblem(error))} onClick={() => void save()}>{budgetDirty ? budgetText("saveLimits") : t("save")}</button></div>
+      {mode === "editor" && <SourcePlanPanel workspaceId={workspaceId} actorId={actorId} projectId={projectId} episodes={data} initialSource={source}
+        blocked={dirty || workspaceBusy || productionBusy} canManage={canManage && data.permissions?.canCreateWorkingScript === true}
+        onBusy={setPlanningBusy} onBlocked={setPlanningBlocked} onRefresh={load} onNavigate={go} />}
+      <div className="flex flex-wrap items-center gap-2"><input aria-label={t("search")} placeholder={t("search")} className={`${input} !mt-0 !w-auto min-w-60 flex-1`} value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:search`, e.target.value); }} /><select aria-label={t("all")} className={`${input} !mt-0 !w-auto`} value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:status`, e.target.value); }}><option value="">{t("all")}</option>{["draft", "scripted", "in_production", "completed", "script_frozen", "storyboard_ready", "final_ready", "pending_review", "review_blocked", "package_ready"].map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</select><button className={button} disabled={!canAdd} onClick={() => add()}><Plus size={15} className="mr-1 inline" />{t("add")}</button><button className={button} title={t("copyHelp")} disabled={!canAdd || draft.length === 0} onClick={() => add(true)}>{t("copy")}</button><button className={button} disabled={!canManage || !dirty || busy || !!planningBlocked || !!invalid || (error instanceof CreatorApiError && error.status === 409 && !budgetProblem(error))} onClick={() => void save()}>{budgetDirty ? budgetText("saveLimits") : t("save")}</button></div>
       {invalid && <p role="status" className="text-sm text-amber-300">{t("invalid")}</p>}
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0 overflow-hidden rounded-xl border border-[#2A2E3A] bg-[#12141B]">
@@ -215,19 +208,19 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
           <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-[#2A2E3A] text-xs text-slate-400"><tr><th className="p-3"><input type="checkbox" aria-label={t("selectAll")} checked={visible.length > 0 && visible.every((item) => selected.includes(item.episode))} onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...visible.map((item) => item.episode)])] : selected.filter((id) => !visible.some((item) => item.episode === id)))} /></th><th className="p-3">{t("order")}</th><th className="min-w-48 p-3">{t("title")}</th><th className="p-3">{t("all")}</th><th className="p-3">{t("progress")}</th><th className="min-w-36 p-3">{t("costs")}</th></tr></thead><tbody>{visible.map((item) => {
             const position = draft.findIndex((candidate) => candidate.episode === item.episode);
             const cost = costs?.episodes.find((candidate) => candidate.episode === item.episode);
-            return <tr key={item.episode} className={`border-b border-[#252936] ${active === item.episode ? "bg-[#FF6B4A]/8" : "hover:bg-white/3"}`} onDragOver={(e) => { if (canManage) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); if (dragging.current !== undefined) move(draft.findIndex((entry) => entry.episode === dragging.current), position); dragging.current = undefined; }}><td className="p-3"><input type="checkbox" aria-label={t("select", { number: item.episode })} checked={selected.includes(item.episode)} onChange={(e) => setSelected(e.target.checked ? [...selected, item.episode] : selected.filter((number) => number !== item.episode))} /></td><td className="p-3"><div className="flex items-center gap-1"><button draggable={canManage && !preview} aria-label={t("drag")} className="cursor-grab text-slate-500" disabled={!canManage || !!preview} onDragStart={(event) => { event.dataTransfer.setData("text/plain", String(item.episode)); event.dataTransfer.effectAllowed = "move"; dragging.current = item.episode; }} onDragEnd={() => { dragging.current = undefined; }}><GripVertical size={16} /></button><span className="w-5 font-mono tabular-nums">{position + 1}</span><div className="flex flex-col"><button aria-label={`${t("up")} ${item.episode}`} disabled={!canManage || !!preview || position === 0} className="p-1 disabled:opacity-20" onClick={() => move(position, position - 1)}><ArrowUp size={12} /></button><button aria-label={`${t("down")} ${item.episode}`} disabled={!canManage || !!preview || position === draft.length - 1} className="p-1 disabled:opacity-20" onClick={() => move(position, position + 1)}><ArrowDown size={12} /></button></div></div></td><td className="p-3"><button className="text-left hover:text-[#FF9B83]" aria-label={t("inspect", { number: item.episode })} onClick={() => inspect(item.episode)}><span className="block max-w-72 truncate font-medium">{item.title}</span><span className="mt-1 block text-xs text-slate-500">{t("episode")} {item.episode} · {item.targetDuration}s · {shotsFor(item)} {t("shots")}</span></button></td><td className="whitespace-nowrap p-3 text-xs text-slate-300">{statusLabel(stateFor(item))}</td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{data.generationMode === "reference_video" ? "—" : `${item.storyboards.completed}/${item.storyboards.total}`}</p><p className="mt-1">{item.videos.completed}/{item.videos.total}</p></td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{totals(cost?.totals.estimate) || t("unknown")}</p><p className="mt-1">{totals(cost?.totals.actual) || t("unknown")}</p></td></tr>;
+            return <tr key={item.episode} className={`border-b border-[#252936] ${active === item.episode ? "bg-[#FF6B4A]/8" : "hover:bg-white/3"}`} onDragOver={(e) => { if (canManage) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); if (dragging.current !== undefined) move(draft.findIndex((entry) => entry.episode === dragging.current), position); dragging.current = undefined; }}><td className="p-3"><input type="checkbox" aria-label={t("select", { number: item.episode })} checked={selected.includes(item.episode)} onChange={(e) => setSelected(e.target.checked ? [...selected, item.episode] : selected.filter((number) => number !== item.episode))} /></td><td className="p-3"><div className="flex items-center gap-1"><button draggable={canManage && !planningBlocked} aria-label={t("drag")} className="cursor-grab text-slate-500" disabled={!canManage || !!planningBlocked} onDragStart={(event) => { event.dataTransfer.setData("text/plain", String(item.episode)); event.dataTransfer.effectAllowed = "move"; dragging.current = item.episode; }} onDragEnd={() => { dragging.current = undefined; }}><GripVertical size={16} /></button><span className="w-5 font-mono tabular-nums">{position + 1}</span><div className="flex flex-col"><button aria-label={`${t("up")} ${item.episode}`} disabled={!canManage || !!planningBlocked || position === 0} className="p-1 disabled:opacity-20" onClick={() => move(position, position - 1)}><ArrowUp size={12} /></button><button aria-label={`${t("down")} ${item.episode}`} disabled={!canManage || !!planningBlocked || position === draft.length - 1} className="p-1 disabled:opacity-20" onClick={() => move(position, position + 1)}><ArrowDown size={12} /></button></div></div></td><td className="p-3"><button className="text-left hover:text-[#FF9B83]" aria-label={t("inspect", { number: item.episode })} onClick={() => inspect(item.episode)}><span className="block max-w-72 truncate font-medium">{item.title}</span><span className="mt-1 block text-xs text-slate-500">{t("episode")} {item.episode} · {item.targetDuration}s · {shotsFor(item)} {t("shots")}</span></button></td><td className="whitespace-nowrap p-3 text-xs text-slate-300">{statusLabel(stateFor(item))}</td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{data.generationMode === "reference_video" ? "—" : `${item.storyboards.completed}/${item.storyboards.total}`}</p><p className="mt-1">{item.videos.completed}/{item.videos.total}</p></td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{totals(cost?.totals.estimate) || t("unknown")}</p><p className="mt-1">{totals(cost?.totals.actual) || t("unknown")}</p></td></tr>;
           })}</tbody></table></div>
           {!visible.length && <div className="p-10 text-center"><p>{t(draft.length ? "noMatch" : "empty")}</p>{!draft.length && <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-slate-400">{t("emptyHelp")}</p>}</div>}
           <div className="flex items-center justify-between gap-3 p-4 text-xs text-slate-400"><span>{t("page", { current: currentPage, total: pages })}</span><div className="flex gap-2"><button className={button} disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>{t("previous")}</button><button className={button} disabled={currentPage >= pages} onClick={() => setPage(currentPage + 1)}>{t("next")}</button></div></div>
         </section>
-        {current && <EpisodeDetails key={current.episode} readSource={readSource} canReadSources={Boolean(data.permissions?.canReadSources)} canManageBudget={canManageBudget} episode={current} sources={data.sources} disabled={!canManage || productionBusy || !!preview} update={(patch) => edit(draft.map((item) => item.episode === current.episode ? { ...item, ...patch } : item))} />}
+        {current && <EpisodeDetails key={current.episode} readSource={readSource} canReadSources={Boolean(data.permissions?.canReadSources)} canManageBudget={canManageBudget} episode={current} sources={data.sources} disabled={!canManage || productionBusy || !!planningBlocked} update={(patch) => edit(draft.map((item) => item.episode === current.episode ? { ...item, ...patch } : item))} />}
       </div>
       {initialEpisodeId !== undefined && !draft.some((item) => item.episode === initialEpisodeId) ? <p role="alert" className="text-sm text-amber-200">{handoff("selectedUnavailable")}</p> : null}
-      <EpisodeWorkingScriptPanel key={current?.episode ?? "none"} api={api} projectId={projectId} revision={data.revision} episode={current} sources={data.sources} disabled={dirty || busy || !!preview} canCreate={Boolean(canManage && data.permissions?.canCreateWorkingScript)} onBusy={setProductionBusy} onAccepted={acceptedWorking} onNavigate={go} />
-      <EpisodeProductionPanel storagePrefix={storagePrefix} api={api} projectId={projectId} revision={data.revision} items={draft} current={current} selected={selected} onLoaded={setProductionCatalog} disabled={dirty || busy || !!preview} onBusy={setProductionBusy} onNavigate={go} update={(production) => { if (current) edit(draft.map((item) => item.episode === current.episode ? { ...item, production } : item)); }} />
+      <EpisodeWorkingScriptPanel key={current?.episode ?? "none"} api={api} projectId={projectId} revision={data.revision} episode={current} sources={data.sources} disabled={dirty || busy || !!planningBlocked} canCreate={Boolean(canManage && data.permissions?.canCreateWorkingScript)} onBusy={setProductionBusy} onAccepted={acceptedWorking} onNavigate={go} />
+      <EpisodeProductionPanel storagePrefix={storagePrefix} api={api} projectId={projectId} revision={data.revision} items={draft} current={current} selected={selected} onLoaded={setProductionCatalog} disabled={dirty || busy || !!planningBlocked} onBusy={setProductionBusy} onNavigate={go} update={(production) => { if (current) edit(draft.map((item) => item.episode === current.episode ? { ...item, production } : item)); }} />
       <p className="text-xs leading-6 text-slate-500">{t("estimateHelp")}{data.generationMode === "reference_video" ? ` ${t("reference")}` : ""}</p>{costError && <p role="alert" className="text-sm text-amber-300">{t("costsFailed")}</p>}
       {checking && <section className="rounded-xl border border-[#2A2E3A] bg-[#12141B] p-5"><h2 className="font-semibold">{t("healthTitle")}</h2><p className="mt-2 text-xs text-slate-400">{t("healthHelp")}</p><ul className="mt-4 space-y-3">{draft.filter((item) => selected.includes(item.episode)).map((item) => <li key={item.episode} className="flex flex-wrap gap-3 text-sm"><strong>{item.episode} · {item.title}</strong><span className={issuesFor(item).length ? "text-amber-300" : "text-emerald-300"}>{issuesFor(item).map((issue) => t(issue)).join(" · ") || t("healthy")}</span></li>)}</ul></section>}
-      <p className="text-xs leading-6 text-slate-500">{handoff("readyNext")}</p><nav className="flex flex-wrap gap-3 border-t border-[#2A2E3A] pt-5">{[["script-lab", "script"], ["shots", "storyboard"], ["release-package", "release"]].map(([target, label]) => <button key={target} className={button} disabled={dirty || busy || !!preview || !current || (target === "script-lab" && !current.workingScript)} onClick={() => go(target)}>{t(label)} →</button>)}</nav>
+      <p className="text-xs leading-6 text-slate-500">{handoff("readyNext")}</p><nav className="flex flex-wrap gap-3 border-t border-[#2A2E3A] pt-5">{[["script-lab", "script"], ["shots", "storyboard"], ["release-package", "release"]].map(([target, label]) => <button key={target} className={button} disabled={dirty || busy || !!planningBlocked || !current || (target === "script-lab" && !current.workingScript)} onClick={() => go(target)}>{t(label)} →</button>)}</nav>
     </>}
   </div>;
 }

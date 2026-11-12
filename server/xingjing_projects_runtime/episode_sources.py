@@ -33,6 +33,7 @@ from server.xingjing_content_persistence.repository import (
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import ProjectRow
+from server.xingjing_source_planning.guards import ensure_plans_complete
 from server.xingjing_storyboard_persistence.repository import StoryboardRow
 from server.xingjing_team_persistence.repository import WorkspaceRow
 
@@ -366,6 +367,8 @@ async def create_working_script(
             if receipt.fingerprint != fingerprint:
                 raise EpisodeEditError("IDEMPOTENCY_CONFLICT", 409)
             return receipt.response
+        project_snapshot = await asyncio.to_thread(get_project_manager().load_project, project_id)
+        await ensure_plans_complete(session, context, project_id, project_snapshot)
         collection = await sources(session, context, project_id)
         snapshot = await asyncio.to_thread(
             read_episodes, get_project_manager(), project_id, source_texts=collection.texts
@@ -407,9 +410,12 @@ async def create_working_script(
             .order_by(EpisodeWorkingScriptRow.sequence.desc())
             .limit(1)
         )
-        created = latest is None or latest.source_ref != source_ref
+        same_source = latest is not None and all(
+            latest.source_ref.get(key) == value for key, value in source_ref.items()
+        )
+        created = not same_source
         now = datetime.now(UTC)
-        if latest is not None and latest.source_ref != source_ref and previous != latest.script_id:
+        if latest is not None and not same_source and previous != latest.script_id:
             raise EpisodeEditError("EPISODE_WORKING_SCRIPT_REPLACEMENT_REQUIRED", 409)
         if latest is not None and previous is not None and previous != latest.script_id:
             raise EpisodeEditError("VERSION_CONFLICT", 409)

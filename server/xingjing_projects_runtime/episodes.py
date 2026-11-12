@@ -18,6 +18,7 @@ from lib.project_manager import get_project_manager
 from server.services.cost_estimation import CostEstimationService
 from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import ProjectRow
+from server.xingjing_source_planning.guards import ensure_plans_complete
 
 from .budget import apply_episode_budgets, enrich_episode_budgets
 from .episode_production import (
@@ -255,6 +256,7 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             collection = await sources(uow.session, context, project_id)
             manager = get_project_manager()
             project = await asyncio.to_thread(manager.load_project, project_id)
+            await ensure_plans_complete(uow.session, context, project_id, project)
             previous_receipt = next(
                 (receipt for receipt in project.get("episode_edit_receipts", []) if receipt["key"] == key), None
             )
