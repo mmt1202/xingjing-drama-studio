@@ -135,7 +135,14 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
       if (request !== sequence.current) return;
       if (page.items.some((item) => !completeScript(item) || item.projectId !== projectId)) throw new Error(t("invalidResponse"));
       setResult((previous) => ({ api, projectId, items: append && previous?.api === api && previous.projectId === projectId ? [...new Map([...previous.items, ...page.items].map((item) => [item.id, item])).values()] : page.items, total: page.total ?? page.items.length }));
-    } catch (problem) { if (request === sequence.current) setError(problem); }
+    } catch (problem) {
+      if (request === sequence.current) {
+        if ((problem instanceof CreatorApiError || problem instanceof AuthSessionError) && [401, 403].includes(problem.status)) {
+          setResult(undefined); setDetail(undefined);
+        }
+        setError(problem);
+      }
+    }
     finally { if (request === sequence.current) setReading(false); }
   }, [api, projectId, query, locked, t]);
   useEffect(() => { const timer = window.setTimeout(() => { void read(); }, 0); return () => { window.clearTimeout(timer); sequence.current += 1; }; }, [read, reload]);

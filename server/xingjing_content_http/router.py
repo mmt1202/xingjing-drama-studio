@@ -427,6 +427,7 @@ def _script(document: ScriptDocument, request: Request) -> dict[str, object]:
         "title": document.title,
         "revision": document.revision,
         "sourceDocument": asdict(document.source_document),
+        **({"recoveryOrigin": asdict(document.recovery_origin)} if document.recovery_origin else {}),
         "versions": [_version_payload(item, document, request) for item in document.versions],
         "aiInputLimitCharacters": MAX_AI_INPUT_CHARS,
         "lockedVersionNumber": document.locked_version_number,

@@ -155,6 +155,7 @@ async def sources(session: AsyncSession, context: TrustedWorkspaceContext, proje
         ScriptRow.workspace_id == context.workspace_id,
         ScriptRow.project_id == project_id,
         ScriptRow.script_id.not_in(derived),
+        ScriptRow.recovery_origin.is_(None),
     )
     sizes = (
         await session.execute(

@@ -394,6 +394,7 @@ class VersionReader:
                         if scene.version_number == row.number
                     ],
                     "scriptMappings": script_mappings,
+                    **({"sourceAttributions": row.source_attributions} if row.source_attributions else {}),
                     "scriptMappingCoordinateSystem": "script_version",
                     "sourceMappings": script_mappings if original_matches else [],
                     "sourceMappingCoordinateSystem": "original_source" if original_matches else "unmapped",

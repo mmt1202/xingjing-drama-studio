@@ -7,7 +7,11 @@
 - 联合验收包：A2 内容理解与导演闭环
 
 - 当前实现证据：EV-M03-PERSISTENCE-001、EV-M03-RUNTIME-002、EV-M03-FRONTEND-AUTH-003、EV-M03-A2-INTEGRATION-004；[EV-M03-SCRIPT-WORKFLOW-005 根因与修复范围](../../../evidence/script-workflow-20261024.md)（本轮修复、专项、构建及正式浏览器／API核验通过）。
-- 状态说明：导入、修订、分析、改写、比较、冻结及持久化已有实现；普通小说转结构化剧本、导演候选确认及单集工作稿交接具有独立证据。本阶段补齐不可变来源、稳定章节、规则候选及明确确认，见下节。逐场语义映射、AI 长文本自动编排和局部版本恢复仍是实现缺口；真实模型与完整 A2 联合验收保持开放。0/9 表示尚未完成逐项联合验收，不代表零实现。
+- 状态说明：小说分集、结构化剧本、人工来源映射、局部版本恢复及导演确认已有分项证据。模型来源建议、AI 长文本执行与局部重试、真实首集联合验收继续开放。0/9 表示联合验收进度。
+
+## 剧本局部版本恢复（2026-11-19）
+
+EV-M03-PARTIAL-RECOVERY-001。历史正文可按场景、标题、对白、旁白和动作恢复。确认前展示来源映射与制作引用，冻结稿恢复成独立工作副本。[交付与验证](../../../evidence/script-partial-recovery-20261119.md)。
 
 ## 逐场来源映射进展（2026-11-13）
 
@@ -37,7 +41,7 @@ EV-M02-M03-SOURCE-PLAN-001：[交付与验证](../../../evidence/source-planning
 | CR-092 | 原文管理 | P0 | 开发中 | EV-M03-A2-INTEGRATION-004；EV-M03-SCRIPT-WORKFLOW-005；EV-M02-M03-SOURCE-PLAN-001 | 原文与不可变版本、冲突保护已有；本轮修上下文与来源展示；已补 SQL/文件来源快照及工作稿取材追溯；人工逐场映射已实现，历史整本来源补证仍待 |
 | CR-093 | AI 改写工作台 | P0 | 开发中 | EV-M03-A2-INTEGRATION-004；EV-M03-SCRIPT-WORKFLOW-005；EV-M02-M03-SOURCE-PLAN-001 | 改写与新版本已有；本轮补调用前冻结／规模门禁和未映射声明；新候选建立的工作稿具备章节快照追溯，人工逐场映射已实现，模型来源建议、正式模型及 A2 待验收 |
 | CR-094 | 原文映射 | P0 | 开发中 | EV-M03-A2-INTEGRATION-004；EV-M03-SCRIPT-WORKFLOW-005；EV-M02-M03-SOURCE-PLAN-001 | EV-M03-SOURCE-MAPPING-001：已实现逐场/段落人工确认、直引校验、章节定位和不可变映射版本；无快照旧稿明确使用导入原文，模型建议与端到端成片溯源仍待 |
-| CR-095 | 剧本版本对比 | P1 | 开发中 | EV-M03-A2-INTEGRATION-004；EV-M03-SCRIPT-WORKFLOW-005 | 对比、冻结与整版恢复已有；尚缺段落／字段范围局部回滚及来源保留，不能把整版恢复视作本项全部完成 |
+| CR-095 | 剧本版本对比 | P1 | 开发中 | EV-M03-SCRIPT-WORKFLOW-005；EV-M03-PARTIAL-RECOVERY-001 | 已支持并排比较、整版恢复及场景、标题和段落局部恢复。隔离写入与本地读取验证通过，A2 联合验收待完成。 |
 
 ## 3. 数据、权限、接口与测试覆盖
 
@@ -51,7 +55,7 @@ EV-M02-M03-SOURCE-PLAN-001：[交付与验证](../../../evidence/source-planning
 | CR-092 | Script<br>ScriptVersion<br>SourceMapping<br>DirectorProfile | script.view<br>script.manage | GET /api/v1/projects/{projectId}/scripts<br>POST /api/v1/projects/{projectId}/scripts/actions | TC-CR-092-01..06 |
 | CR-093 | Script<br>ScriptVersion<br>SourceMapping<br>DirectorProfile | script.view<br>script.manage | GET /api/v1/projects/{projectId}/scripts<br>POST /api/v1/projects/{projectId}/scripts/actions | TC-CR-093-01..06 |
 | CR-094 | Script<br>ScriptVersion<br>SourceMapping<br>DirectorProfile | script.view<br>script.manage | GET /api/v1/projects/{projectId}/scripts<br>POST /api/v1/projects/{projectId}/scripts/actions | TC-CR-094-01..06 |
-| CR-095 | Script<br>ScriptVersion<br>SourceMapping<br>DirectorProfile | script.view<br>script.manage | GET /api/v1/projects/{projectId}/scripts<br>POST /api/v1/projects/{projectId}/scripts/actions | TC-CR-095-01..06 |
+| CR-095 | 剧本版本对比 | P1 | 开发中 | EV-M03-SCRIPT-WORKFLOW-005；EV-M03-PARTIAL-RECOVERY-001 | 已支持并排比较、整版恢复及场景、标题和段落局部恢复。隔离写入与本地读取验证通过，A2 联合验收待完成。 |
 
 ## 4. 联合验收要求
 

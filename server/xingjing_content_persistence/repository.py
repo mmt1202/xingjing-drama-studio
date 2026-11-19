@@ -38,6 +38,7 @@ from server.xingjing_content.models import (
     attribution_from_dict,
     director_confirmation_from_dict,
     director_version_from_dict,
+    recovery_origin_from_dict,
 )
 
 T = TypeVar("T")
@@ -61,6 +62,7 @@ class ScriptRow(ContentPersistenceBase):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     source_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    recovery_origin: Mapped[dict[str, object] | None] = mapped_column(JSON(none_as_null=True))
     source_media_type: Mapped[str] = mapped_column(String(255), nullable=False)
     source_content: Mapped[str] = mapped_column(String, nullable=False)
     locked_version_number: Mapped[int | None] = mapped_column(Integer)
@@ -710,6 +712,7 @@ class SqlAlchemyContentRepository:
             document.script_id,
             document.title,
             document.source_document,
+            document.recovery_origin,
         )
 
     @staticmethod
@@ -721,6 +724,7 @@ class SqlAlchemyContentRepository:
             title=document.title,
             revision=document.revision,
             source_filename=document.source_document.filename,
+            recovery_origin=asdict(document.recovery_origin) if document.recovery_origin else None,
             source_media_type=document.source_document.media_type,
             source_content=document.source_document.content,
             locked_version_number=document.locked_version_number,
@@ -801,6 +805,7 @@ class SqlAlchemyContentRepository:
             title=row.title,
             revision=row.revision,
             source_document=SourceDocument(row.source_filename, row.source_media_type, row.source_content),
+            recovery_origin=recovery_origin_from_dict(row.recovery_origin) if row.recovery_origin else None,
             versions=versions,
             locked_version_number=row.locked_version_number,
             director_profile=self._profile(row.director_profile),
@@ -963,7 +968,9 @@ class SqlAlchemyContentRepository:
         self, document: ScriptDocument, before: ScriptDocument | None, idempotency_key: str
     ) -> ContentAuditRow:
         context = self._audit_context
-        if before is None:
+        if context.action == "content.script.partially_restored":
+            action = context.action
+        elif before is None:
             action = "content.script.imported"
         elif before.locked_version_number != document.locked_version_number:
             action = "content.script.frozen"

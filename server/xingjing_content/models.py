@@ -173,6 +173,14 @@ class DirectorConfirmation:
 
 
 @dataclass(frozen=True, slots=True)
+class RecoveryOrigin:
+    parent_script_id: str
+    base_version: int
+    source_version: int
+    original_script_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ScriptDocument:
     script_id: str
     workspace_id: str
@@ -185,6 +193,7 @@ class ScriptDocument:
     director_profile: DirectorProfile = field(default_factory=DirectorProfile)
     director_versions: tuple[DirectorVersion, ...] = ()
     director_confirmations: tuple[DirectorConfirmation, ...] = ()
+    recovery_origin: RecoveryOrigin | None = None
 
     @property
     def current_version(self) -> ScriptVersion:
@@ -231,7 +240,10 @@ class ScriptDocument:
         return "unconfirmed" if any(asdict(self.director_profile).values()) else "missing"
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if self.recovery_origin is None:
+            payload.pop("recovery_origin")
+        return payload
 
     def mapping_projection(self, version: ScriptVersion) -> dict[str, Any]:
         """Internal parser offsets refer to version text, never inferred novel anchors."""
@@ -328,6 +340,7 @@ def script_from_dict(data: dict[str, object]) -> ScriptDocument:
             content=_string(source_data["content"]),
         ),
         versions=tuple(versions),
+        recovery_origin=recovery_origin_from_dict(_dict(origin)) if (origin := data.get("recovery_origin")) else None,
         locked_version_number=(_integer(value) if (value := data.get("locked_version_number")) is not None else None),
         director_profile=_profile_from_dict(profile_data),
         director_versions=tuple(
@@ -336,6 +349,15 @@ def script_from_dict(data: dict[str, object]) -> ScriptDocument:
         director_confirmations=tuple(
             director_confirmation_from_dict(_dict(item)) for item in _list(data.get("director_confirmations", []))
         ),
+    )
+
+
+def recovery_origin_from_dict(data: dict[str, object]) -> RecoveryOrigin:
+    return RecoveryOrigin(
+        _string(data["parent_script_id"]),
+        _integer(data["base_version"]),
+        _integer(data["source_version"]),
+        _string(data["original_script_id"]),
     )
 
 

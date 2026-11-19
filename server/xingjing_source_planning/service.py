@@ -67,18 +67,20 @@ class SourcePlanningService:
     def __init__(self, sessions: async_sessionmaker[AsyncSession], manager: ProjectManager) -> None:
         self.sessions, self.manager = sessions, manager
 
-    async def project(self, session: AsyncSession, context: TrustedWorkspaceContext, project_id: str, *, write=False):
+    async def project(
+        self, session: AsyncSession, context: TrustedWorkspaceContext, project_id: str, *, write=False, lock=False
+    ):
         context = await authorize(session, context, project_id)
         required = MANAGE if write else {"project.view", "script.view"}
         if not required.issubset(context.permissions):
             raise EpisodeEditError("SOURCE_PLAN_PERMISSION_DENIED", 403)
         statement = select(ProjectRow).where(*scoped(ProjectRow, context, project_id), ProjectRow.deleted_at.is_(None))
-        row = await session.scalar(statement.with_for_update() if write else statement)
+        row = await session.scalar(statement.with_for_update() if write or lock else statement)
         if row is None:
             raise EpisodeEditError("PROJECT_NOT_FOUND", 404)
         if row.setup_state != "ready":
             raise EpisodeEditError("PROJECT_SETUP_REQUIRED", 409)
-        if write:
+        if write or lock:
             await session.execute(
                 update(ProjectRow).where(*scoped(ProjectRow, context, project_id)).values(version=ProjectRow.version)
             )

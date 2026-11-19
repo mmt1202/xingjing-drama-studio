@@ -134,7 +134,8 @@ class ScriptMappingService:
             )
         content = normalize_source_text(document.source_document.content)
         digest = text_digest(content)
-        source_id = f"script:{document.script_id}:original"
+        original_id = document.recovery_origin.original_script_id if document.recovery_origin else document.script_id
+        source_id = f"script:{original_id}:original"
         return MappingSource(
             source_id,
             digest,

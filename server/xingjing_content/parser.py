@@ -20,6 +20,10 @@ _SPEECH = re.compile(r"^([^：:\n]{1,40})[：:]\s*(.*)$")
 _SENSITIVE_TERMS = ("暴力", "自杀", "毒品", "色情", "赌博")
 
 
+def match_scene_heading(line: str) -> re.Match[str] | None:
+    return _HEADING.match(line)
+
+
 @dataclass(slots=True)
 class _SceneBuilder:
     heading: SceneHeading
@@ -38,7 +42,7 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
         offset += len(raw_line)
         if not stripped:
             continue
-        heading_match = _HEADING.match(stripped)
+        heading_match = match_scene_heading(stripped)
         if heading_match:
             parts = [part.strip() for part in heading_match.group(1).split("｜")]
             scenes.append(

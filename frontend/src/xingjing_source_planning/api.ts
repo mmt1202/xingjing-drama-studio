@@ -1,8 +1,9 @@
 import i18n from "@/i18n";
-import { createAuthenticatedFetcher, getSessionEpoch, getTokenForSession } from "@/utils/auth";
+import { AuthSessionError, createAuthenticatedFetcher, getSessionEpoch, getTokenForSession } from "@/utils/auth";
 import { CreatorApiError } from "@/xingjing_creator_projects/api";
 import type { EpisodeSource } from "@/xingjing_creator_projects/episodes-api";
 import type { MappingCommand, MappingResult, MappingView } from "./mapping-types";
+import type { Confirmation, Overview, Preview, Result, Selection } from "@/xingjing_script_recovery/types";
 
 export interface Chapter { id: string; ordinal: number; title: string | null; kind: "heading" | "preamble" | "body"; start: number; end: number }
 export interface SourceReference { sourceId: string; digest: string; start: number; end: number; snapshotId?: string; chapterIds?: string[]; mappingKind?: string; planId?: string }
@@ -36,6 +37,12 @@ export function createSourcePlanApi(workspaceId: string) {
     return body.data;
   }
   return {
+    recovery: (id: string, scriptId: string, signal?: AbortSignal) =>
+      request<Overview>(id, `scripts/${encodeURIComponent(scriptId)}/partial-recovery`, { signal }),
+    previewRecovery: (id: string, scriptId: string, selection: Selection) =>
+      request<Preview>(id, `scripts/${encodeURIComponent(scriptId)}/partial-recovery/preview`, { method: "POST", body: JSON.stringify(selection) }),
+    confirmRecovery: (id: string, scriptId: string, command: Confirmation, key: string) =>
+      request<Result>(id, `scripts/${encodeURIComponent(scriptId)}/partial-recovery/confirm`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(command) }),
     mapping: (id: string, scriptId: string, version: number, offset?: number, find?: string, signal?: AbortSignal) => request<MappingView>(id, `scripts/${encodeURIComponent(scriptId)}/provenance-mapping?${new URLSearchParams({ version: String(version), ...(offset !== undefined ? { offset: String(offset) } : {}), ...(find ? { find } : {}) })}`, { signal }),
     confirmMapping: (id: string, scriptId: string, payload: MappingCommand, key: string) => request<MappingResult>(id, `scripts/${encodeURIComponent(scriptId)}/provenance-mapping`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(payload) }),
     list: (id: string, signal?: AbortSignal) => request<PlanHistory>(id, "episode-plans", { signal }),
@@ -49,5 +56,5 @@ export function createSourcePlanApi(workspaceId: string) {
 }
 export type SourcePlanApi = ReturnType<typeof createSourcePlanApi>;
 export const candidateInput = ({ id, title, start, end, targetDuration }: Candidate): Candidate => ({ id, title, start, end, targetDuration });
-export const denied = (error: unknown) => error instanceof CreatorApiError && [401, 403].includes(error.status);
+export const denied = (error: unknown) => (error instanceof CreatorApiError || error instanceof AuthSessionError) && [401, 403].includes(error.status);
 export const uncertain = (error: unknown) => !(error instanceof CreatorApiError) || error.retryable || error.status === 401;
