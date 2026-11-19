@@ -1,0 +1,66 @@
+import i18n from "@/i18n";
+import { useTranslation } from "react-i18next";
+
+const zh = {
+  title: "资产提取", intro: "从冻结剧本提取素材，保存到项目资产库。", source: "冻结剧本版本",
+  choose: "请选择冻结版本", version: "{{title}} · v{{version}}", episodeVersion: "第 {{episodes}} 集 · {{title}} · v{{version}}",
+  loading: "正在读取冻结版本…", empty: "当前项目还没有冻结剧本。请先选择剧本，在版本页冻结后回来提取。",
+  episodeEmpty: "本集还没有绑定可用的冻结剧本。请在分集管理中核对工作剧本，冻结后保存制作绑定。",
+  stale: "原先选择的冻结版本已失效，请重新选择可用版本。",
+  loadFailed: "暂时无法读取冻结版本。", denied: "当前账号缺少查看剧本的权限，请联系工作区管理员。",
+  retry: "重新读取版本", versions: "前往剧本版本", episodes: "前往分集管理",
+  scope: "提取范围", character: "角色", scene: "场景", prop: "道具", costume: "服装", voice: "声音",
+  scopeHint: "角色和场景按对白与场景标题提取。选中道具、服装、声音或正文识别时会调用 AI，可能产生费用。",
+  narration: "使用 AI 从正文识别人物和地点", reading: "这是旁白稿。提取人物和地点需要分析旁白正文。",
+  submit: "开始提取资产", busy: "正在提取…", queued: "提取任务已进入队列", done: "已提取 {{count}} 项资产",
+  library: "查看项目资产", noAssets: "所选范围没有识别到资产。可调整提取范围，或检查剧本中的场景标题和对白标注。",
+  modelFailed: "AI 提取未完成，请重试。对于带对白和场景标题的剧本，也可以关闭正文识别，只提取角色和场景。",
+  inProgress: "相同的提取请求仍在处理中，请稍后再次查看结果。",
+  submitFailed: "操作未完成。请核对当前选择后重试。", operationFailed: "资产操作未完成",
+  manageDenied: "当前账号只能查看资产。提取或创建资产需要项目的资产管理权限。",
+  manual: "从冻结剧本创建可编辑资产", kind: "资产类型", name: "资产名称", description: "资产说明",
+  create: "创建资产", creating: "正在创建…",
+};
+type Copy = Record<keyof typeof zh, string>;
+const en: Copy = {
+  title: "Extract assets", intro: "Extract material from a frozen script and save it to the project library.", source: "Frozen script version",
+  choose: "Select a frozen version", version: "{{title}} · v{{version}}", episodeVersion: "Episode {{episodes}} · {{title}} · v{{version}}",
+  loading: "Loading frozen versions…", empty: "This project has no frozen scripts yet. Select a script and freeze it on its versions page.",
+  episodeEmpty: "This episode has no usable frozen script binding. Review its working script in Episodes, freeze it and save the production binding.",
+  stale: "The selected version is no longer frozen. Select an available version.",
+  loadFailed: "Frozen versions could not be loaded.", denied: "Your account needs script viewing permission. Contact a workspace administrator.",
+  retry: "Reload versions", versions: "Open script versions", episodes: "Open episodes",
+  scope: "Asset types", character: "Characters", scene: "Locations", prop: "Props", costume: "Costumes", voice: "Voices",
+  scopeHint: "Dialogue and scene headings supply characters and locations. Props, costumes, voices and analysis of narrative text use AI and may incur a charge.",
+  narration: "Use AI to identify characters and locations in the text", reading: "This is a narrated script. Extracting characters and locations requires analysis of the narration.",
+  submit: "Extract assets", busy: "Extracting…", queued: "Extraction task queued", done: "Extracted {{count}} assets",
+  library: "View project assets", noAssets: "No assets were found for these types. Change the selection or check the scene headings and dialogue cues.",
+  modelFailed: "AI extraction did not finish. Try again. For scripts with dialogue and scene headings, you can turn off narrative analysis and select only characters and locations.",
+  inProgress: "This extraction is still processing. Check the result again shortly.",
+  submitFailed: "The operation did not finish. Check your selection and try again.", operationFailed: "Asset operation incomplete",
+  manageDenied: "Your account can view assets. Extracting or creating assets requires asset management permission.",
+  manual: "Create an editable asset from a frozen script", kind: "Asset type", name: "Asset name", description: "Description",
+  create: "Create asset", creating: "Creating…",
+};
+const vi: Copy = {
+  title: "Trích xuất tài sản", intro: "Trích xuất tư liệu từ kịch bản đã đóng băng và lưu vào thư viện dự án.", source: "Phiên bản kịch bản đã đóng băng",
+  choose: "Chọn phiên bản đã đóng băng", version: "{{title}} · v{{version}}", episodeVersion: "Tập {{episodes}} · {{title}} · v{{version}}",
+  loading: "Đang tải các phiên bản đã đóng băng…", empty: "Dự án chưa có kịch bản đã đóng băng. Hãy chọn kịch bản và đóng băng trên trang phiên bản.",
+  episodeEmpty: "Tập này chưa liên kết với kịch bản đã đóng băng phù hợp. Kiểm tra kịch bản trong phần quản lý tập, đóng băng và lưu liên kết sản xuất.",
+  stale: "Phiên bản đã chọn không còn được đóng băng. Hãy chọn một phiên bản hiện có.",
+  loadFailed: "Chưa tải được các phiên bản đã đóng băng.", denied: "Tài khoản cần quyền xem kịch bản. Hãy liên hệ quản trị viên.",
+  retry: "Tải lại phiên bản", versions: "Mở phiên bản kịch bản", episodes: "Mở quản lý tập",
+  scope: "Loại tài sản", character: "Nhân vật", scene: "Bối cảnh", prop: "Đạo cụ", costume: "Trang phục", voice: "Giọng nói",
+  scopeHint: "Nhân vật và bối cảnh được lấy từ lời thoại và tiêu đề cảnh. Đạo cụ, trang phục, giọng nói và phân tích văn bản sẽ dùng AI và có thể phát sinh phí.",
+  narration: "Dùng AI để nhận diện nhân vật và địa điểm trong văn bản", reading: "Đây là kịch bản lời dẫn. Cần phân tích nội dung lời dẫn để trích xuất nhân vật và địa điểm.",
+  submit: "Trích xuất tài sản", busy: "Đang trích xuất…", queued: "Đã xếp hàng tác vụ trích xuất", done: "Đã trích xuất {{count}} tài sản",
+  library: "Xem tài sản dự án", noAssets: "Không tìm thấy tài sản thuộc các loại đã chọn. Hãy đổi lựa chọn hoặc kiểm tra tiêu đề cảnh và lời thoại.",
+  modelFailed: "Trích xuất bằng AI chưa hoàn tất. Hãy thử lại. Với kịch bản có lời thoại và tiêu đề cảnh, có thể tắt phân tích văn bản và chỉ chọn nhân vật, bối cảnh.",
+  inProgress: "Yêu cầu này vẫn đang được xử lý. Hãy kiểm tra lại sau.",
+  submitFailed: "Thao tác chưa hoàn tất. Kiểm tra lựa chọn và thử lại.", operationFailed: "Thao tác tài sản chưa hoàn tất",
+  manageDenied: "Tài khoản chỉ có quyền xem. Để trích xuất hoặc tạo tài sản, cần có quyền quản lý tài sản.",
+  manual: "Tạo tài sản có thể chỉnh sửa từ kịch bản đã đóng băng", kind: "Loại tài sản", name: "Tên tài sản", description: "Mô tả",
+  create: "Tạo tài sản", creating: "Đang tạo…",
+};
+for (const [language, copy] of Object.entries({ zh, en, vi })) i18n.addResourceBundle(language, "assetExtraction", copy, true, false);
+export const useAssetExtractionTranslation = () => useTranslation("assetExtraction");

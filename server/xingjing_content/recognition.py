@@ -28,6 +28,17 @@ _PATH = re.compile(
 _EPISODE = re.compile(r"^第[零〇一二三四五六七八九十百千万两\d]+[集幕](?:\s+[^。！？!?]{1,60})?$")
 
 
+def is_reading_script(locations: object, dialogue_count: object) -> bool:
+    """Recognize the single placeholder scene used by the narrated-reading editor."""
+    return (
+        dialogue_count == 0
+        and isinstance(locations, (tuple, list))
+        and len(locations) == 1
+        and isinstance(locations[0], str)
+        and locations[0].strip().casefold() in {"原文朗读", "reading the original text", "đọc nguyên văn"}
+    )
+
+
 def path_only(text: str) -> bool:
     value = text.strip()
     return len(value) <= 4096 and bool(_PATH.fullmatch(value.strip("\"'“”")))

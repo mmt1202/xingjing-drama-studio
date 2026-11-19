@@ -27,6 +27,18 @@ export interface PageQuery {
   readonly search?: string;
 }
 
+export interface FrozenScriptVersion {
+  readonly id: string;
+  readonly title: string;
+  readonly version: number;
+  readonly readingScript: boolean;
+}
+
+export interface FrozenScriptSources {
+  readonly scripts: readonly FrozenScriptVersion[];
+  readonly canManage: boolean;
+}
+
 export interface PageResult<T> {
   readonly items: readonly T[];
   readonly nextToken: string | null;
@@ -208,6 +220,7 @@ export type BatchItemStatus = "succeeded" | "failed" | "cancelled" | "skipped";
 
 export interface BatchItemResult {
   readonly id: string;
+  readonly name?: string;
   readonly status: BatchItemStatus;
   readonly message?: string;
   readonly code?: string;
@@ -356,6 +369,7 @@ export interface RightsEvidenceUpload {
 }
 
 export interface AssetsStoryboardPort {
+  getFrozenScriptSources?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<FrozenScriptSources>;
   getAsset?(
     scope: WorkspaceProjectScope,
     assetId: string,

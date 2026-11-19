@@ -7,6 +7,7 @@ import type {
   AssetItem,
   AssetListQuery,
   AssetsStoryboardPort,
+  FrozenScriptSources,
   PageResult,
   PromptTemplateItem,
   ShotAction,
@@ -375,6 +376,10 @@ export function createAssetsStoryboardApi(
         permissions,
         featureFlags: {},
       };
+    },
+    async getFrozenScriptSources(scope, signal) {
+      const path = `/projects/${requireProject(scope)}/assets/sources/frozen-scripts`;
+      return (await request<FrozenScriptSources>(scope, path, {}, signal)).data;
     },
     async getAsset(scope, assetId, signal) {
       const base = scope.projectId

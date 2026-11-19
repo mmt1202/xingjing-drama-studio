@@ -172,7 +172,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
           : episode ? !episode.finalVersionId ? "finals" : null
             : !validData.episodes.some((item) => item.finalVersionId) ? "finals" : null;
   const pageGate = isCover ? coverReason ? { id: "export", reason: coverReason, recovery: coverReason === "setup" ? "guided-create" : coverReason === "finals" ? "postproduction" : null } : undefined
-    : stages.find((s) => s.id === active && s.reason);
+    : stages.find((s) => s.id === active && s.reason && !(slug === "assets-extract" && s.reason === "frozen"));
   return <CreatorShell active="projects" title={t(`stage.${active}`)} workspaceLabel={workspaceAccess?.workspaceName ?? workspaceId} permissions={workspaceAccess?.permissions ?? []} notifications={workspaceAccess ? <NotificationCenter workspaceId={workspaceId} actorId={workspaceAccess.actorId} token={token} permissions={workspaceAccess.permissions} onNavigate={goWorkspace} registerNavigationGuard={registerGuard} /> : undefined} onNavigate={goWorkspace} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
     <div className="xj-project-layout">
       <section className="xj-project-card" aria-label={t("projectIdentity")}>

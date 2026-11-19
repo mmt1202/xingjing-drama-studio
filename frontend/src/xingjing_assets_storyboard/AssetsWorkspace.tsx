@@ -23,6 +23,8 @@ import { useRecoverableDraft } from "./useRecoverableDraft";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
 import { AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferenceGeneration";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
+import { useAssetExtractionTranslation } from "./asset-extraction-i18n";
+import { FrozenScriptSelect, useFrozenScriptSource, type EpisodeScriptBinding, type FrozenScriptSource } from "./FrozenScriptSelect";
 import { assetTaskRecoveryKey, clearPendingAssetSubmission, isRecoverableAssetAction, readAssetTask, readPendingAssetSubmission, rememberAssetTask, rememberPendingAssetSubmission, type PendingAssetSubmission } from "./asset-task-recovery";
 
 export type AssetView = "extract" | "library" | "editor" | "turnaround" | "expressions" | "market" | "market-detail";
@@ -35,12 +37,14 @@ export interface AssetsWorkspaceProps {
   readonly api?: AssetsStoryboardPort;
   readonly onNavigate?: (view: AssetView, assetId?: string) => void;
   readonly initialScriptVersionId?: string;
+  readonly initialScriptId?: string;
+  readonly episodeBindings?: readonly EpisodeScriptBinding[];
+  readonly onReviewScripts?: () => void;
 }
 
 const assetTypeLabels: Record<AssetType, string> = { character: "角色", scene: "场景", prop: "道具", costume: "服装", voice: "声音" };
 const rightsLabels: Record<RightsStatus, string> = { missing: "缺少授权", pending: "待核验", verified: "已授权", expired: "已过期", blocked: "已阻断" };
-const viewTitles: Record<AssetView, [string, string]> = {
-  extract: ["资产提取", "从冻结剧本提取角色、场景、道具、服装与声音主体，并以任务回执追踪结果。"],
+const viewTitles: Record<Exclude<AssetView, "extract">, [string, string]> = {
   library: ["主体资产库", "按稳定资产 ID 维护项目与工作区复用对象，版本、授权和镜头引用在同一视图闭环。"],
   editor: ["资产编辑与版本", "编辑主体设定、权利记录和主版本；所有保存都携带当前服务端版本。"],
   turnaround: ["角色三视图", "基于已选角色主版本生成正面、侧面、背面、半身、全身与服装变化。"],
@@ -111,23 +115,87 @@ function AssetFilters({ search, type, rights, onSearch, onType, onRights, onAppl
   </section>;
 }
 
-function AssetExtraction({ canManage, onRun, task, batch, busy, initialScriptVersionId }: { readonly canManage: boolean; readonly onRun: (scriptVersionId: string, types: AssetType[]) => void; readonly task?: TaskReceipt; readonly batch?: BatchReceipt; readonly busy: boolean; readonly initialScriptVersionId?: string }) {
-  const [scriptVersionId, setScriptVersionId] = useState(initialScriptVersionId ?? "");
-  const { t } = useProductionHandoffTranslation();
-  const [types, setTypes] = useState<AssetType[]>(["character", "scene", "prop", "costume", "voice"]);
+interface AssetSourceFormProps {
+  readonly source: FrozenScriptSource;
+  readonly episodes?: readonly EpisodeScriptBinding[];
+  readonly onReview?: () => void;
+  readonly canManage: boolean;
+  readonly busy: boolean;
+}
+
+const extractionTypes: readonly AssetType[] = ["character", "scene", "prop", "costume", "voice"];
+
+function AssetExtraction({ source, episodes, onReview, canManage, busy, onRun, task, onLibrary, onOpenAsset }: AssetSourceFormProps & {
+  onRun: (version: string, types: AssetType[], interpretNarration: boolean) => Promise<AssetActionResult | undefined>;
+  task?: TaskReceipt;
+  onLibrary: () => void;
+  onOpenAsset: (id: string) => void;
+}) {
+  const { t } = useAssetExtractionTranslation();
+  const [types, setTypes] = useState<AssetType[]>(["character", "scene"]);
+  const [narrationChoice, setNarrationChoice] = useState<{ version: string; enabled: boolean }>();
+  const [completed, setCompleted] = useState<{ selection: string; result: AssetActionResult }>();
+  const selectedTypes = extractionTypes.filter((kind) => types.includes(kind));
+  const reading = source.choices.find((item) => item.id === source.value)?.readingScript ?? false;
+  const includesPeopleOrPlaces = types.includes("character") || types.includes("scene");
+  const interpretNarration = includesPeopleOrPlaces && (narrationChoice?.version === source.value ? narrationChoice.enabled : reading);
+  const needsNarration = reading && includesPeopleOrPlaces && !interpretNarration;
+  const selection = JSON.stringify([source.value, selectedTypes, interpretNarration]);
+  const result = completed?.selection === selection ? completed.result : undefined;
+  async function submit() {
+    if (!canManage || busy || !source.value || !selectedTypes.length || needsNarration || result) return;
+    const receipt = await onRun(source.value, selectedTypes, interpretNarration);
+    if (receipt?.batch || receipt?.task) setCompleted({ selection, result: receipt });
+  }
   return <section className={`${panel} max-w-4xl p-6`}>
-    <h2 className="text-lg font-semibold">提取输入</h2><p className="mt-2 text-sm text-[#B8BECC]">只接受已冻结剧本版本；角色与场景会从 M03 的已标注结构创建为真实资产，无法可靠推导的类别会明确跳过。</p>
-    <label className="mt-5 block text-sm">冻结剧本版本 ID<input value={scriptVersionId} readOnly={Boolean(initialScriptVersionId)} onChange={(event) => setScriptVersionId(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2" /></label>{initialScriptVersionId ? <p className="mt-3 text-xs leading-6 text-slate-400">{t("frozenContext")} {t("boundReadOnly")}</p> : null}
-    <fieldset className="mt-5"><legend className="text-sm">提取范围</legend><div className="mt-3 flex flex-wrap gap-3">{Object.entries(assetTypeLabels).map(([value, label]) => <label key={value} className="rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-sm"><input type="checkbox" className="mr-2 accent-[#8B5CF6]" checked={types.includes(value as AssetType)} onChange={() => setTypes((current) => current.includes(value as AssetType) ? current.filter((item) => item !== value) : [...current, value as AssetType])} />{label}</label>)}</div></fieldset>
-    <button type="button" className={`${primaryButton} mt-6`} disabled={!canManage || busy || !scriptVersionId.trim() || types.length === 0} onClick={() => onRun(scriptVersionId.trim(), types)}>{busy ? "提交中…" : "开始提取资产"}</button>
-    {task ? <TaskSummary task={task} message="提取任务已进入队列" /> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} /> : null}
+    <FrozenScriptSelect source={source} episodes={episodes} disabled={busy} onReview={onReview} />
+    <fieldset className="mt-5" disabled={busy || !canManage}>
+      <legend className="text-sm">{t("scope")}</legend>
+      <div className="mt-3 flex flex-wrap gap-3">{extractionTypes.map((kind) =>
+        <label key={kind} className="rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-sm">
+          <input type="checkbox" className="mr-2 accent-[#8B5CF6]" checked={types.includes(kind)}
+            onChange={() => setTypes((current) => current.includes(kind) ? current.filter((item) => item !== kind) : [...current, kind])} />{t(kind)}
+        </label>)}</div>
+      <label className="mt-4 block text-sm"><input type="checkbox" className="mr-2 accent-[#8B5CF6]" disabled={!source.value || !includesPeopleOrPlaces} checked={interpretNarration} onChange={(event) => setNarrationChoice({ version: source.value, enabled: event.target.checked })} />{t("narration")}</label>
+      {reading ? <p className="mt-2 text-sm text-violet-200">{t("reading")}</p> : null}
+      <p className="mt-2 text-sm leading-6 text-[#B8BECC]">{t("scopeHint")}</p>
+    </fieldset>
+    {!canManage ? <p className="mt-3 text-sm text-amber-200">{t("manageDenied")}</p> : null}
+    <div className="mt-5 flex flex-wrap gap-3">
+      <button type="button" className={primaryButton} disabled={!canManage || busy || !source.value || !types.length || needsNarration || Boolean(result)} onClick={() => void submit()}>{t(busy ? "busy" : "submit")}</button>
+      <button type="button" className={button} onClick={onLibrary} disabled={busy}>{t("library")}</button>
+    </div>
+    {result?.task ? <TaskSummary task={task?.taskId === result.task.taskId ? task : result.task} message={t("queued")} /> : null}
+    {result?.batch ? <BatchResultPanel receipt={result.batch} busy={busy} successTitle={t("done", { count: result.batch.succeeded })} onOpenItem={onOpenAsset} /> : null}
   </section>;
 }
 
-function ManualAssetCreate({ canManage, busy, onCreate, initialScriptVersionId, onDirty }: { readonly canManage: boolean; readonly busy: boolean; readonly onCreate: (payload: Record<string, unknown>) => void; readonly initialScriptVersionId?: string; readonly onDirty: (value: boolean) => void }) {
-  const [snapshot, setSnapshot] = useState(initialScriptVersionId ?? ""); const [kind, setKind] = useState<AssetType>("character"); const [name, setName] = useState(""); const [description, setDescription] = useState("");
-  useEffect(() => { onDirty(Boolean(canManage && (name || description || snapshot !== (initialScriptVersionId ?? "")))); return () => onDirty(false); }, [canManage, name, description, snapshot, initialScriptVersionId, onDirty]);
-  return <details className={`${panel} mb-5 p-5`}><summary className="cursor-pointer font-semibold text-[#F5F6FA]">从冻结剧本创建可编辑资产</summary><p className="mt-3 text-sm text-[#B8BECC]">此入口创建真实持久化的资产及首个版本。请输入 M03 中冻结的“剧本 ID@版本号”；角色三视图和表情集可在资产详情中提交到 M06 生成队列。</p><div className="mt-4 grid gap-3 md:grid-cols-2"><label className="text-sm text-[#B8BECC]">冻结剧本版本 ID<input disabled={busy || !canManage} value={snapshot} readOnly={Boolean(initialScriptVersionId)} onChange={(event) => setSnapshot(event.target.value)} placeholder="script-...@1" className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><label className="text-sm text-[#B8BECC]">资产类型<select disabled={busy || !canManage} value={kind} onChange={(event) => setKind(event.target.value as AssetType)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3">{Object.entries(assetTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm text-[#B8BECC]">资产名称<input disabled={busy || !canManage} value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label><label className="text-sm text-[#B8BECC]">资产说明<input disabled={busy || !canManage} value={description} onChange={(event) => setDescription(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label></div><button type="button" disabled={!canManage || busy || !snapshot.trim() || !name.trim()} onClick={() => onCreate({ frozenSnapshotId: snapshot.trim(), kind, name: name.trim(), metadata: { description } })} className={`${primaryButton} mt-4 disabled:opacity-50`}>{busy ? "正在创建…" : "创建资产"}</button></details>;
+function ManualAssetCreate({ canManage, busy, onCreate, source, episodes, onReview, onDirty }: AssetSourceFormProps & {
+  onCreate: (payload: Record<string, unknown>) => void; onDirty: (dirty: boolean) => void;
+}) {
+  const { t } = useAssetExtractionTranslation();
+  const [kind, setKind] = useState<AssetType>("character");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  useEffect(() => {
+    onDirty(Boolean(canManage && (name || description || kind !== "character")));
+    return () => onDirty(false);
+  }, [canManage, name, description, kind, onDirty]);
+  const field = "mt-2 block w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3";
+  return <details className={`${panel} mb-5 p-5`}>
+    <summary className="cursor-pointer font-semibold text-[#F5F6FA]">{t("manual")}</summary>
+    <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <FrozenScriptSelect source={source} episodes={episodes} disabled={busy} onReview={onReview} />
+      <label className="text-sm text-[#B8BECC]">{t("kind")}
+        <select disabled={busy || !canManage} value={kind} onChange={(event) => setKind(event.target.value as AssetType)} className={field}>
+          {extractionTypes.map((value) => <option key={value} value={value}>{t(value)}</option>)}
+        </select>
+      </label>
+      <label className="text-sm text-[#B8BECC]">{t("name")}<input disabled={busy || !canManage} value={name} onChange={(event) => setName(event.target.value)} className={field} /></label>
+      <label className="text-sm text-[#B8BECC]">{t("description")}<input disabled={busy || !canManage} value={description} onChange={(event) => setDescription(event.target.value)} className={field} /></label>
+    </div>
+    <button type="button" disabled={!canManage || busy || !source.value || !name.trim()} onClick={() => onCreate({ frozenSnapshotId: source.value, kind, name: name.trim(), metadata: { description } })} className={`${primaryButton} mt-4 disabled:opacity-50`}>{t(busy ? "creating" : "create")}</button>
+  </details>;
 }
 
 function MetadataEditor({ asset, values, onChange }: { readonly asset: AssetItem; readonly values: Record<string, unknown>; readonly onChange: (key: string, value: string) => void }) {
@@ -280,10 +348,11 @@ function CharacterDerivative({ asset, mode, canManage, busy, ownerProject, onRun
 export function AssetsWorkspace(props: AssetsWorkspaceProps) {
   const sessionEpoch = useAuthStore((auth) => auth.sessionEpoch);
   const api = useMemo(() => props.api ?? createAssetsStoryboardApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }), [props.api, sessionEpoch]);
-  return <AssetWorkspaceSession key={`${sessionEpoch}:${props.scope.workspaceId}:${props.scope.projectId ?? "workspace"}`} {...props} api={api} sessionEpoch={sessionEpoch} />;
+  const scopeKey = JSON.stringify([sessionEpoch, props.scope.workspaceId, props.scope.projectId, props.scope.episodeId, props.initialScriptVersionId, props.initialScriptId]);
+  return <AssetWorkspaceSession key={scopeKey} {...props} api={api} sessionEpoch={sessionEpoch} />;
 }
 
-function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, api, onNavigate, initialScriptVersionId, sessionEpoch }: AssetsWorkspaceProps & { api: AssetsStoryboardPort; sessionEpoch: string }) {
+function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, api, onNavigate, initialScriptVersionId, initialScriptId, episodeBindings, onReviewScripts, sessionEpoch }: AssetsWorkspaceProps & { api: AssetsStoryboardPort; sessionEpoch: string }) {
   const [localNavigation, setLocalNavigation] = useState<{ readonly source: AssetView; readonly target: AssetView; readonly assetId?: string }>();
   const activeView = localNavigation?.source === view ? localNavigation.target : view;
   const targetAssetId = localNavigation?.source === view ? localNavigation.assetId ?? assetId : assetId;
@@ -295,6 +364,8 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const loadAbort = useRef<AbortController | undefined>(undefined);
   const { t: handoff } = useProductionHandoffTranslation();
   const { t: generationText } = useAssetGenerationTranslation();
+  const { t: extractionText } = useAssetExtractionTranslation();
+  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string }>();
   const [pendingRecovery, setPendingRecovery] = useState<{ key: string; operation?: PendingAssetSubmission }>();
   const [taskStorageUnavailable, setTaskStorageUnavailable] = useState(false);
   const [draftBlocked, setDraftBlocked] = useState(false), [draftReset, setDraftReset] = useState(0), [discardConfirm, setDiscardConfirm] = useState(false);
@@ -320,6 +391,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       if (!active()) return;
       if (!session.permissions.includes("asset.view")) { setForbidden(new AssetsStoryboardApiError(403, "PERMISSION_DENIED", "没有资产查看权限")); setAssets([]); setDetail(undefined); return; }
       setContext(session);
+      if (activeView === "extract") { setAssets([]); return; }
       if (exactDetail && targetAssetId && api.getAsset) {
         const asset = await api.getAsset(scope, targetAssetId, controller.signal);
         if (active()) { setDetail({ key: detailKey, loading: false, asset }); setAssets((current) => current ?? []); }
@@ -357,6 +429,8 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [api, scope, task]);
   const canManage = context?.permissions.includes("asset.manage") ?? false;
+  const source = useFrozenScriptSource(api, scope, Boolean(context) && (activeView === "extract" || activeView === "library"), initialScriptVersionId, initialScriptId);
+  const sourceProps = { source, episodes: episodeBindings, onReview: onReviewScripts, canManage: source.canManage ?? canManage, busy };
   const currentAsset = exactDetail
     ? detail?.key === detailKey ? detail.asset : undefined
     : targetAssetId ? assets?.find((item) => item.id === targetAssetId)
@@ -408,7 +482,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       }
       setPendingRecovery({ key: storageKey, operation: retained });
     }
-    operationLatch.current = true; setBusy(true); setError(undefined); setConflict(undefined); setMessage("");
+    operationLatch.current = true; setBusy(true); setError(undefined); setSourceError(undefined); setConflict(undefined); setMessage("");
     try {
       const result = await api.assetAction(scope, { action: action as never, targetId: retained?.targetId ?? target?.id, version: retained?.version ?? version, payload: commandPayload, ...(retained ? { idempotencyKey: retained.idempotencyKey } : {}) });
       if (retained && (action === "adoptGenerationOutput" ? result.asset?.id !== retained.targetId : !result.task?.taskId)) throw new Error(generationText("uncertain"));
@@ -434,11 +508,17 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     } catch (cause) {
       const uncertain = !(cause instanceof AssetsStoryboardApiError) || cause.status === null || cause.status >= 500 || cause.status === 408;
       if (retained && storageKey && !uncertain) { clearPendingAssetSubmission(storageKey); setPendingRecovery({ key: storageKey }); }
-      if (isForbidden(cause)) { setForbidden(cause as AssetsStoryboardApiError); setAssets([]); setContext(undefined); } else if (isConflict(cause)) setConflict(cause as AssetsStoryboardApiError); else setError(cause);
+      if (action === "extractAssets" || action === "createAsset") {
+        const code = cause instanceof AssetsStoryboardApiError ? cause.code : "";
+        const stale = code === "FROZEN_SCRIPT_VERSION_ID_INVALID" || code === "FROZEN_SCRIPT_VERSION_NOT_FOUND";
+        const messages = { NO_EXTRACTABLE_ASSETS: "noAssets", NARRATION_REQUIRES_INTERPRETATION: "reading", SEMANTIC_EXTRACTION_MODEL_FAILED: "modelFailed", SEMANTIC_EXTRACTION_IN_PROGRESS: "inProgress", PERMISSION_DENIED: "manageDenied" } as const;
+        setSourceError({ message: extractionText(stale ? "stale" : messages[code as keyof typeof messages] ?? "submitFailed"), requestId: errorRequestId(cause) });
+        if (stale) source.reload();
+      } else if (isForbidden(cause)) { setForbidden(cause as AssetsStoryboardApiError); setAssets([]); setContext(undefined); } else if (isConflict(cause)) setConflict(cause as AssetsStoryboardApiError); else setError(cause);
       return undefined;
     } finally { operationLatch.current = false; setBusy(false); }
   };
-  const title = viewTitles[activeView];
+  const title = activeView === "extract" ? [extractionText("title"), extractionText("intro")] : viewTitles[activeView];
   const currentError = error ?? (exactDetail && detail?.key === detailKey ? detail.error : undefined);
   if (!context && !forbidden && !error && !(exactDetail && detail?.key === detailKey && detail.error)) return <LoadingState />;
   if (forbidden) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title="没有资产查看权限" detail="服务端拒绝了当前工作区或项目的数据访问。请联系管理员申请 asset.view 权限。" requestId={forbidden.requestId} tone="danger" /></main>;
@@ -451,8 +531,9 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}{draftBlocked ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { if (currentAsset) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }, "asset", currentAsset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); setConflict(undefined); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}{message ? <StatePanel title={message} tone="success" /> : null}{currentError ? <StatePanel title="操作失败" detail={errorMessage(currentError)} requestId={errorRequestId(currentError)} actionLabel="重试加载" onAction={() => void load()} tone="danger" /> : null}
     {pendingSubmission ? <section role="status" className="mb-4 rounded-xl border border-amber-400/30 p-4"><p className="text-sm leading-6 text-amber-200">{generationText("uncertain")}</p><button type="button" className={`${button} mt-3`} disabled={busy} onClick={() => void run(pendingSubmission.action, pendingSubmission.payload, { id: pendingSubmission.targetId, projectId: pendingSubmission.projectId }, pendingSubmission.version, pendingSubmission)}>{generationText("recoverSubmission")}</button></section> : null}
     {taskStorageUnavailable ? <p role="status" className="mb-4 text-xs text-amber-200">{handoff("storageUnavailable")}</p> : null}
-    {activeView === "extract" ? <AssetExtraction key={initialScriptVersionId ?? "manual"} initialScriptVersionId={initialScriptVersionId} canManage={canManage} busy={busy} task={taskOwnerId ? undefined : task} batch={batch} onRun={(scriptVersionId, types) => void run("extractAssets", { scriptVersionId, assetTypes: types }, undefined, undefined)} /> : null}
-    {activeView === "library" || activeView === "market" ? <>{activeView === "library" && hasProjectContext ? <ManualAssetCreate key={`${initialScriptVersionId ?? "manual"}:${draftReset}`} initialScriptVersionId={initialScriptVersionId} onDirty={setDraftBlocked} canManage={canManage} busy={busy} onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : null}<AssetFilters search={search} type={type} rights={rights} onSearch={setSearch} onType={setType} onRights={setRights} onApply={() => { const query = { search: search || undefined, assetType: type || undefined, rightsStatus: rights || undefined }; setActiveQuery(query); void load(query); }} />{activeView === "library" && canManage && selectedAssetIds.length > 0 ? <div className="mb-4 flex items-center justify-between rounded-[14px] border border-[#8B5CF6]/40 bg-[#8B5CF6]/10 p-3"><span className="text-sm">已选择 {selectedAssetIds.length} 项</span><button type="button" className={primaryButton} disabled={busy} onClick={() => void run("confirmAssets", { itemIds: selectedAssetIds }, undefined, undefined)}>批量确认授权</button></div> : null}{assets?.length === 0 ? <StatePanel title="当前范围没有资产" detail={activeView === "market" ? "没有符合当前筛选和授权范围的市场素材。" : hasProjectContext ? "先从冻结剧本提取主体，或从冻结剧本创建可编辑资产。" : "当前工作区还没有可复用资产。请先在项目资产库中创建或提取资产。"} actionLabel={activeView === "market" ? "清除筛选" : hasProjectContext ? "开始资产提取" : undefined} onAction={() => { if (activeView === "market") { setSearch(""); setType(""); setRights(""); setActiveQuery({}); void load({}); } else if (hasProjectContext) navigate("extract"); }} /> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{assets?.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.includes(asset.id)} canManage={activeView === "library" && canManage} onSelect={() => setSelectedAssetIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])} onOpen={() => navigate(activeView === "market" ? "market-detail" : "editor", asset.id)} />)}</section>}{nextToken ? <button type="button" className={`${button} mt-4`} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : null}</> : null}
+    {sourceError && (activeView === "extract" || activeView === "library") ? <StatePanel title={extractionText("operationFailed")} detail={sourceError.message} requestId={sourceError.requestId} tone="danger" /> : null}
+    {activeView === "extract" ? <AssetExtraction {...sourceProps} task={taskOwnerId ? undefined : task} onLibrary={() => navigate("library")} onOpenAsset={(id) => navigate("editor", id)} onRun={(scriptVersionId, types, interpretNarration) => run("extractAssets", { scriptVersionId, assetTypes: types, ...(interpretNarration ? { interpretNarration } : {}) })} /> : null}
+    {activeView === "library" || activeView === "market" ? <>{activeView === "library" && hasProjectContext ? <ManualAssetCreate key={draftReset} {...sourceProps} onDirty={setDraftBlocked} onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : null}<AssetFilters search={search} type={type} rights={rights} onSearch={setSearch} onType={setType} onRights={setRights} onApply={() => { const query = { search: search || undefined, assetType: type || undefined, rightsStatus: rights || undefined }; setActiveQuery(query); void load(query); }} />{activeView === "library" && canManage && selectedAssetIds.length > 0 ? <div className="mb-4 flex items-center justify-between rounded-[14px] border border-[#8B5CF6]/40 bg-[#8B5CF6]/10 p-3"><span className="text-sm">已选择 {selectedAssetIds.length} 项</span><button type="button" className={primaryButton} disabled={busy} onClick={() => void run("confirmAssets", { itemIds: selectedAssetIds }, undefined, undefined)}>批量确认授权</button></div> : null}{assets?.length === 0 ? <StatePanel title="当前范围没有资产" detail={activeView === "market" ? "没有符合当前筛选和授权范围的市场素材。" : hasProjectContext ? "先从冻结剧本提取主体，或从冻结剧本创建可编辑资产。" : "当前工作区还没有可复用资产。请先在项目资产库中创建或提取资产。"} actionLabel={activeView === "market" ? "清除筛选" : hasProjectContext ? "开始资产提取" : undefined} onAction={() => { if (activeView === "market") { setSearch(""); setType(""); setRights(""); setActiveQuery({}); void load({}); } else if (hasProjectContext) navigate("extract"); }} /> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{assets?.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.includes(asset.id)} canManage={activeView === "library" && canManage} onSelect={() => setSelectedAssetIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])} onOpen={() => navigate(activeView === "market" ? "market-detail" : "editor", asset.id)} />)}</section>}{nextToken ? <button type="button" className={`${button} mt-4`} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : null}</> : null}
     {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor key={`${currentAsset.id}:${draftReset}`} draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }} onDirty={setDraftBlocked} asset={currentAsset} ownerProject={!scope.projectId || currentAsset.projectId === scope.projectId} task={taskOwnerId === currentAsset.id ? task : undefined} canManage={canManage} busy={busy || Boolean(pendingSubmission) || Boolean(exactDetail && detail?.loading)} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)} onAction={(action, payload, version) => void run(action, payload, currentAsset, version)} onUploadRightsEvidence={(file) => api.uploadRightsEvidence(scope, currentAsset, file)} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next, assetId: currentAsset.id })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
     {activeView === "turnaround" || activeView === "expressions" ? <CharacterDerivative asset={currentAsset} ownerProject={!scope.projectId || currentAsset?.projectId === scope.projectId} mode={activeView} canManage={canManage} busy={busy || Boolean(pendingSubmission) || Boolean(exactDetail && detail?.loading)} task={taskOwnerId === currentAsset?.id ? task : undefined} onGenerateReference={() => void run("generateReferenceImage", { sourceVersionId: currentAsset?.currentVersionId })} onRun={(payload) => void run(activeView === "turnaround" ? "generateTurnaround" : "generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}
   </WorkspaceShell>;

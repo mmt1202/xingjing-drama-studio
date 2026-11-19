@@ -15,11 +15,14 @@ export interface AssetsStoryboardRouteProps {
   readonly onNavigate?: AssetsWorkspaceProps["onNavigate"];
   readonly onNavigateStoryboard?: StoryboardWorkspaceProps["onNavigate"];
   readonly scriptVersionId?: string;
+  readonly scriptId?: string;
+  readonly episodeBindings?: AssetsWorkspaceProps["episodeBindings"];
+  readonly onReviewScripts?: AssetsWorkspaceProps["onReviewScripts"];
   readonly assetSnapshotId?: string;
 }
 
-function assetProps(props: AssetsStoryboardRouteProps): Pick<AssetsWorkspaceProps, "scope" | "assetId" | "projectName" | "api" | "onNavigate" | "initialScriptVersionId"> {
-  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, assetId: props.assetId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigate, initialScriptVersionId: props.scriptVersionId };
+function assetProps(props: AssetsStoryboardRouteProps): Pick<AssetsWorkspaceProps, "scope" | "assetId" | "projectName" | "api" | "onNavigate" | "initialScriptVersionId" | "initialScriptId" | "episodeBindings" | "onReviewScripts"> {
+  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, assetId: props.assetId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigate, initialScriptVersionId: props.scriptVersionId, initialScriptId: props.scriptId, episodeBindings: props.episodeBindings, onReviewScripts: props.onReviewScripts };
 }
 
 function shotProps(props: AssetsStoryboardRouteProps): Pick<StoryboardWorkspaceProps, "scope" | "shotId" | "projectName" | "api" | "onNavigate" | "initialScriptVersionId" | "initialAssetSnapshotId"> {

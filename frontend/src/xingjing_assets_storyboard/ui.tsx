@@ -198,11 +198,13 @@ export function BatchResultPanel({
   onRetry,
   busy = false,
   successTitle,
+  onOpenItem,
 }: {
   readonly receipt: BatchReceipt;
   readonly onRetry?: (ids: readonly string[]) => void;
   readonly busy?: boolean;
   readonly successTitle?: string;
+  readonly onOpenItem?: (id: string) => void;
 }) {
   const retryIds = failedBatchItemIds(receipt.items);
   return (
@@ -238,7 +240,9 @@ export function BatchResultPanel({
             key={item.id}
             className="grid gap-2 px-5 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_110px_2fr]"
           >
-            <code className="truncate text-[#B8BECC]">{item.id}</code>
+            {onOpenItem && item.status === "succeeded" ?
+              <button type="button" className="break-words text-left text-violet-300 underline" disabled={busy} onClick={() => onOpenItem(item.id)}>{item.name ?? item.id}</button> :
+              item.name ? <span className="break-words text-[#F5F6FA]">{item.name}</span> : <code className="truncate text-[#B8BECC]">{item.id}</code>}
             <span
               className={
                 item.status === "succeeded"

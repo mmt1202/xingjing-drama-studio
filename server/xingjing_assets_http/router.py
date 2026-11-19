@@ -38,6 +38,7 @@ from server.xingjing_assets.ports import AssetRepository, ShotImpactQuery
 from server.xingjing_assets.service import AssetService
 from server.xingjing_assets_persistence import AssetAuditEvent, AssetScope, SqlAlchemyAssetRepository
 from server.xingjing_content.parser import parse_script
+from server.xingjing_content.recognition import is_reading_script
 from server.xingjing_generation import GenerationRequest, GenerationTask, MediaType
 from server.xingjing_generation.contracts import GenerationAssetReference
 from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
@@ -206,6 +207,19 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         if rights:
             assets = tuple(item for item in assets if _rights_status(item) == rights)
         return _asset_page(context, runtime, assets, offset=offset, limit=limit)
+
+    @router.get("/projects/{project_id}/assets/sources/frozen-scripts")
+    async def frozen_scripts(request: Request, project_id: str) -> JSONResponse:
+        context = await _context(runtime, request, project_id, "asset.view")
+        if "script.view" not in context.permissions:
+            raise AssetHttpError("PERMISSION_DENIED", 403, {"permission": "script.view"})
+        return _success(
+            context,
+            {
+                "scripts": runtime.list_frozen_scripts(context, project_id),
+                "canManage": "asset.manage" in context.permissions,
+            },
+        )
 
     @router.get("/projects/{project_id}/assets/{asset_id}/audit")
     async def list_asset_audit(request: Request, project_id: str, asset_id: str) -> JSONResponse:
@@ -468,6 +482,9 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         if action == "extractAssets":
             frozen_snapshot_id = _text(payload, "scriptVersionId")
             frozen = _snapshot(runtime, context, project_id, frozen_snapshot_id)
+            interpret_narration = payload.get("interpretNarration", False)
+            if not isinstance(interpret_narration, bool):
+                raise AssetHttpError("INVALID_EXTRACTION_MODE")
             batch = await _extract_assets_from_frozen_script(
                 runtime=runtime,
                 context=context,
@@ -477,6 +494,7 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 request_body=body,
                 idempotency_key=key,
                 frozen=frozen,
+                interpret_narration=interpret_narration,
                 requested_kinds=tuple(
                     _kind(item) for item in _text_list(payload.get("assetTypes"), "ASSET_TYPES_REQUIRED")
                 ),
@@ -544,6 +562,7 @@ def create_unavailable_asset_router(code: str | None) -> APIRouter:
         _ = (request, workspace_id)
         raise AssetHttpError(unavailable, 503)
 
+    @router.get("/projects/{project_id}/assets/sources/frozen-scripts")
     @router.get("/projects/{project_id}/assets", operation_id="unavailable_project_assets_get")
     async def assets_unavailable(request: Request, project_id: str) -> JSONResponse:
         _ = (request, project_id)
@@ -759,7 +778,8 @@ async def _semantic_asset_candidates(
         generated = await generator.generate(
             TextGenerationRequest(
                 system_prompt=(
-                    "你是影视资产拆解师。只能从给定冻结剧本中提取明确出现的道具、服装和音色需求，"
+                    "你是影视资产拆解师。按请求类型从冻结剧本中提取有文本依据的人物、实际地点、道具、服装或声音。"
+                    "称呼和别名合并为同一人物。旁白和朗读格式标题不是人物或地点。"
                     "不得虚构人物、物品或权利信息。输出必须严格符合 JSON Schema。"
                 ),
                 prompt=(
@@ -814,14 +834,13 @@ async def _extract_assets_from_frozen_script(
     idempotency_key: str,
     frozen: FrozenScriptSnapshotRef,
     requested_kinds: tuple[AssetKind, ...],
+    interpret_narration: bool = False,
 ) -> dict[str, object]:
     """Persist deterministic entities plus model-validated semantic assets."""
     version_number = int(frozen.script_version_id.rsplit("@", 1)[1])
-    parsed = parse_script(
-        runtime.frozen_script_source(context, project_id, frozen.snapshot_id),
-        version_number=version_number,
-        change_summary="asset extraction",
-    )
+    source = runtime.frozen_script_source(context, project_id, frozen.snapshot_id)
+    parsed = parse_script(source, version_number=version_number, change_summary="asset extraction")
+    reading_script = is_reading_script(parsed.analysis.locations, parsed.analysis.dialogue_count)
     candidates: list[tuple[AssetKind, str, dict[str, object]]] = []
     if AssetKind.CHARACTER in requested_kinds:
         character_sources: dict[str, list[str]] = {}
@@ -841,7 +860,7 @@ async def _extract_assets_from_frozen_script(
             )
             for name, identifiers in character_sources.items()
         )
-    if AssetKind.SCENE in requested_kinds:
+    if AssetKind.SCENE in requested_kinds and not reading_script:
         scene_sources: dict[str, list[str]] = {}
         scene_metadata: dict[str, dict[str, object]] = {}
         for scene in parsed.scenes:
@@ -858,7 +877,9 @@ async def _extract_assets_from_frozen_script(
     fingerprint = _digest({"action": "extractAssets", "payload": request_body})
     result_items: list[dict[str, object]] = []
     semantic_kinds = tuple(
-        kind for kind in requested_kinds if kind in {AssetKind.PROP, AssetKind.COSTUME, AssetKind.VOICE}
+        kind
+        for kind in requested_kinds
+        if interpret_narration or kind in {AssetKind.PROP, AssetKind.COSTUME, AssetKind.VOICE}
     )
     if semantic_kinds:
         semantic = await _semantic_asset_candidates(
@@ -867,9 +888,10 @@ async def _extract_assets_from_frozen_script(
             idempotency_key=idempotency_key,
             fingerprint=fingerprint,
             project_id=project_id,
-            script_source=runtime.frozen_script_source(context, project_id, frozen.snapshot_id),
+            script_source=source,
             requested_kinds=semantic_kinds,
         )
+        structured = {(kind, name.strip().casefold()) for kind, name, _ in candidates}
         candidates.extend(
             (
                 item.kind,
@@ -882,6 +904,7 @@ async def _extract_assets_from_frozen_script(
                 },
             )
             for item in semantic.assets
+            if (item.kind, item.name.strip().casefold()) not in structured
         )
 
     for kind, name, content in candidates:
@@ -891,6 +914,7 @@ async def _extract_assets_from_frozen_script(
             result_items.append(
                 {
                     "id": replayed.asset_id,
+                    "name": replayed.name,
                     "status": "succeeded",
                     "version": replayed.revision,
                     "message": "幂等返回已创建资产。",
@@ -919,9 +943,13 @@ async def _extract_assets_from_frozen_script(
             ),
             frozen_snapshot=frozen,
         )
-        result_items.append({"id": asset.asset_id, "status": "succeeded", "version": asset.revision})
+        result_items.append(
+            {"id": asset.asset_id, "name": asset.name, "status": "succeeded", "version": asset.revision}
+        )
 
     if not candidates and not result_items:
+        if reading_script and not interpret_narration and not semantic_kinds:
+            raise AssetHttpError("NARRATION_REQUIRES_INTERPRETATION", 422)
         raise AssetHttpError("NO_EXTRACTABLE_ASSETS", 422)
     succeeded = sum(item["status"] == "succeeded" for item in result_items)
     failed = sum(item["status"] == "failed" for item in result_items)

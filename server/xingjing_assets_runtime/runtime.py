@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from server.xingjing_assets_http import create_asset_router, create_unavailable_asset_router
 from server.xingjing_assets_persistence import AssetScope, SqlAlchemyAssetRepository
+from server.xingjing_content.recognition import is_reading_script
 from server.xingjing_content_persistence.repository import ScriptRow, ScriptVersionRow
 from server.xingjing_generation import GenerationRequest, GenerationTask
 from server.xingjing_generation_persistence import GeneratedAsset
@@ -237,6 +238,33 @@ class AssetRuntime:
                 )
         except SQLAlchemyError as error:
             raise AssetRuntimeConfigurationError("ASSET_RUNTIME_UNAVAILABLE") from error
+
+    def list_frozen_scripts(self, context: TrustedWorkspaceContext, project_id: str) -> list[dict[str, object]]:
+        assert self.session_factory is not None
+        query = (
+            select(ScriptRow.script_id, ScriptRow.title, ScriptVersionRow.number, ScriptVersionRow.analysis)
+            .join(
+                ScriptVersionRow,
+                (ScriptVersionRow.workspace_id == ScriptRow.workspace_id)
+                & (ScriptVersionRow.script_id == ScriptRow.script_id)
+                & (ScriptVersionRow.number == ScriptRow.locked_version_number),
+            )
+            .where(ScriptRow.workspace_id == context.workspace_id, ScriptRow.project_id == project_id)
+            .order_by(ScriptRow.title, ScriptRow.script_id)
+        )
+        try:
+            with self.session_factory() as session:
+                return [
+                    {
+                        "id": f"{script_id}@{number}",
+                        "title": title,
+                        "version": number,
+                        "readingScript": is_reading_script(analysis.get("locations"), analysis.get("dialogue_count")),
+                    }
+                    for script_id, title, number, analysis in session.execute(query)
+                ]
+        except SQLAlchemyError as error:
+            raise AssetRuntimeConfigurationError("ASSET_DEPENDENCY_UNAVAILABLE") from error
 
     def frozen_script(
         self, context: TrustedWorkspaceContext, project_id: str, snapshot_id: str
