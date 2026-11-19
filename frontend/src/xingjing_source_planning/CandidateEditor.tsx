@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { EPISODE_PAGE_SIZE, EpisodePagination, useEpisodeListPage } from "@/xingjing_creator_projects/EpisodePagination";
 import type { Candidate, Plan, SourcePlanApi } from "./api";
 import { button, card, field, primary, useSourcePlanTranslation } from "./i18n";
 import { SourceSnapshotReader } from "./SourceSnapshotReader";
@@ -15,6 +16,7 @@ export function validCandidates(plan: Plan, candidates: Candidate[]) {
 }
 
 interface Props {
+  pageStorageKey: string;
   plan: Plan; api: SourcePlanApi; candidates: Candidate[]; included: string[]; busy: boolean; blocked: boolean; modified: boolean;
   canManage: boolean; pending: boolean; outdated: boolean;
   onReviewChange: (value: boolean) => void;
@@ -24,6 +26,8 @@ interface Props {
 export function CandidateEditor(props: Props) {
   const { t } = useSourcePlanTranslation();
   const { plan, candidates, included, api } = props;
+  const candidatePage = useEpisodeListPage(plan.proposal.candidates, 10, `${props.pageStorageKey}:candidates`);
+  const draftPage = useEpisodeListPage(plan.result?.items ?? [], EPISODE_PAGE_SIZE, `${props.pageStorageKey}:drafts`);
   const [confirming, setConfirming] = useState(false), [inspected, setInspected] = useState<string>();
   const [expanded, setExpanded] = useState<string | undefined>(candidates[0]?.id);
   const { onReviewChange } = props;
@@ -32,19 +36,28 @@ export function CandidateEditor(props: Props) {
   const valid = validCandidates(plan, accepted);
   const disabled = props.busy || props.blocked || props.pending || props.outdated || !props.canManage || !!plan.result || plan.confirmationPending;
   const selected = accepted.reduce((sum, item) => sum + Math.max(0, item.end - item.start), 0);
-  const inspectedItem = candidates.find(item => item.id === inspected);
+  const inspectedItem = candidatePage.items.some(item => item.id === inspected) ? candidates.find(item => item.id === inspected) : undefined;
   function update(item: Candidate, patch: Partial<Candidate>) {
     setConfirming(false);
     props.onChange(candidates.map(candidate => candidate.id === item.id ? { ...candidate, ...patch } : candidate), included);
   }
   return <section className={card + " mt-5"}>
     <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">{t("planTitle")}</h3><p className="mt-2 text-xs text-violet-200">{plan.source.label} · {t("rules")}</p></div><button className={button} disabled={props.busy || props.pending || props.modified || confirming} onClick={props.onClose}>{t("close")}</button></div>
-    {plan.result ? <div role="status" className="mt-5 rounded-xl border border-emerald-300/20 bg-emerald-500/5 p-4"><p className="text-sm leading-7 text-emerald-100">{t("done")}</p><ul className="mt-4 space-y-3">{plan.result.items.map(item => <li key={item.scriptId} className="flex flex-wrap items-center justify-between gap-3"><span className="text-sm">{t("episode", { number: item.episode })} · {item.title}</span><button className={button} disabled={props.busy || props.pending} onClick={() => props.onNavigate(`script-lab?${new URLSearchParams({ episodeId: String(item.episode), scriptId: item.scriptId })}`)}>{t("openScript")}</button></li>)}</ul></div> : <>
+    {plan.result ? <div className="mt-5 rounded-xl border border-emerald-300/20 bg-emerald-500/5 p-4">
+      <p role="status" className="text-sm leading-7 text-emerald-100">{t("done")}</p>
+      <EpisodePagination list={draftPage} label="draftPages" />
+      <ul className="mt-4 space-y-3">{draftPage.items.map(item => <li key={item.scriptId} className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm">{t("episode", { number: item.episode })} · {item.title}</span>
+        <button className={button} disabled={props.busy || props.pending} onClick={() => props.onNavigate(`script-lab?${new URLSearchParams({ episodeId: String(item.episode), scriptId: item.scriptId })}`)}>{t("openScript")}</button>
+      </li>)}</ul>
+      <EpisodePagination list={draftPage} label="draftPages" />
+    </div> : <>
       <p className="mt-4 text-sm leading-7 text-slate-400">{t("editHelp")}</p>
       {!props.canManage && <p className="mt-3 text-sm text-amber-200">{t("readonly")}</p>}
       {props.outdated && <p role="status" className="mt-3 text-sm text-amber-200">{t("sourceChanged")}</p>}
       {plan.confirmationPending && !props.pending && <p role="status" className="mt-3 text-sm text-amber-200">{t("pendingOther")}</p>}
-      <div className="mt-5 space-y-4">{plan.proposal.candidates.map(proposal => {
+      <EpisodePagination list={candidatePage} label="candidatePages" />
+      <div className="mt-4 space-y-4">{candidatePage.items.map(proposal => {
         const item = candidates.find(item => item.id === proposal.id) ?? proposal;
         const chosen = included.includes(item.id);
         return <article className="rounded-xl border border-white/10 p-4" key={item.id}>
@@ -57,6 +70,7 @@ export function CandidateEditor(props: Props) {
           <button className={button + " mt-3"} disabled={item.start < 0 || item.end <= item.start || item.end > plan.source.length} onClick={() => setInspected(item.id)}>{t("inspectSource")}</button>
         </article>;
       })}</div>
+      <EpisodePagination list={candidatePage} label="candidatePages" />
       <p className="mt-3 text-xs leading-6 text-slate-500">{t("coordinates")}</p>
       <p className="mt-4 text-sm text-slate-300">{t("remaining", { selected, remaining: Math.max(0, plan.proposal.uncoveredCharacters - selected) })}</p>
       {!valid && <p role="status" className="mt-3 text-sm text-amber-200">{t("invalid")}</p>}
