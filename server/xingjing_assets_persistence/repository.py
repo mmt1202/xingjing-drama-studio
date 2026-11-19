@@ -438,6 +438,82 @@ class SqlAlchemyAssetRepository:
             ).all()
             return tuple(self._load_asset(session, scope, row) for row in rows)
 
+    def extraction_history(
+        self, scope: AssetScope, project_id: str, script_version_id: str, operation_id: str | None
+    ) -> dict[str, object]:
+        """Read saved extractions from the original create events, including retried writes."""
+        events = (
+            select(AuditRow.event_id, AuditRow.request_id, AuditRow.occurred_at)
+            .select_from(AuditRow)
+            .join(
+                AssetRow,
+                (AssetRow.tenant_id == AuditRow.tenant_id)
+                & (AssetRow.workspace_id == AuditRow.workspace_id)
+                & (AssetRow.asset_id == AuditRow.asset_id),
+            )
+            .where(
+                AuditRow.tenant_id == scope.tenant_id,
+                AuditRow.workspace_id == scope.workspace_id,
+                AuditRow.action == "asset.extractAssets",
+                AuditRow.result == "succeeded",
+                AssetRow.owner_project_id == project_id,
+                AssetRow.frozen_snapshot["script_version_id"].as_string() == script_version_id,
+            )
+        )
+        saved_at: dict[str, datetime] = {}
+        counts: dict[str, int] = {}
+        selected = operation_id
+        selected_events: list[str] = []
+        with self._session_factory() as session:
+            for event_id, request_id, occurred_at in session.execute(
+                events.order_by(AuditRow.occurred_at.desc(), AuditRow.event_id.desc())
+            ):
+                # Each extracted asset is committed with <operation key>:extract:<kind>:<name digest>.
+                key, separator, _ = event_id.removeprefix(f"{request_id}:").rpartition(":extract:")
+                if not separator or not key:
+                    continue
+                run = f"asset-extract:{key}"
+                saved_at.setdefault(run, occurred_at)
+                counts[run] = counts.get(run, 0) + 1
+                if selected is None:
+                    selected = run
+                if run == selected:
+                    selected_events.append(event_id)
+
+            runs = [
+                {
+                    "operationId": run,
+                    "savedAt": stamp.replace(tzinfo=UTC).isoformat() if stamp.tzinfo is None else stamp.isoformat(),
+                    "count": counts[run],
+                }
+                for run, stamp in saved_at.items()
+            ]
+            if not selected_events:
+                return {"runs": runs, "batch": None}
+            rows = session.execute(
+                events.with_only_columns(
+                    AuditRow.asset_id,
+                    AuditRow.after_payload["name"].as_string(),
+                    AssetRow.kind,
+                    AuditRow.after_payload["revision"].as_integer(),
+                    AuditRow.after_payload["versions"][0]["content"]["description"].as_string(),
+                )
+                .where(AuditRow.event_id.in_(selected_events))
+                .order_by(AuditRow.occurred_at, AuditRow.asset_id)
+            )
+            items = [
+                {
+                    "id": asset_id,
+                    "name": name,
+                    "type": kind,
+                    "version": revision,
+                    "description": description,
+                    "status": "succeeded",
+                }
+                for asset_id, name, kind, revision, description in rows
+            ]
+            return {"runs": runs, "batch": {"operationId": selected, "succeeded": len(items), "failed": 0, "items": items}}
+
     def list_audit(
         self,
         scope: AssetScope,

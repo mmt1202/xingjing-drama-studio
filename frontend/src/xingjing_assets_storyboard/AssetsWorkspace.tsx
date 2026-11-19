@@ -25,6 +25,7 @@ import { AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferen
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
 import { useAssetExtractionTranslation } from "./asset-extraction-i18n";
 import { FrozenScriptSelect, useFrozenScriptSource, type EpisodeScriptBinding, type FrozenScriptSource } from "./FrozenScriptSelect";
+import { ExtractionResults, extractionTypes, useExtractionLocation } from "./ExtractionResults";
 import { assetTaskRecoveryKey, clearPendingAssetSubmission, isRecoverableAssetAction, readAssetTask, readPendingAssetSubmission, rememberAssetTask, rememberPendingAssetSubmission, type PendingAssetSubmission } from "./asset-task-recovery";
 
 export type AssetView = "extract" | "library" | "editor" | "turnaround" | "expressions" | "market" | "market-detail";
@@ -123,9 +124,9 @@ interface AssetSourceFormProps {
   readonly busy: boolean;
 }
 
-const extractionTypes: readonly AssetType[] = ["character", "scene", "prop", "costume", "voice"];
-
-function AssetExtraction({ source, episodes, onReview, canManage, busy, onRun, task, onLibrary, onOpenAsset }: AssetSourceFormProps & {
+function AssetExtraction({ source, episodes, onReview, canManage, busy, onRun, task, onLibrary, onOpenAsset, api, scope }: AssetSourceFormProps & {
+  api: AssetsStoryboardPort;
+  scope: WorkspaceProjectScope;
   onRun: (version: string, types: AssetType[], interpretNarration: boolean) => Promise<AssetActionResult | undefined>;
   task?: TaskReceipt;
   onLibrary: () => void;
@@ -134,7 +135,8 @@ function AssetExtraction({ source, episodes, onReview, canManage, busy, onRun, t
   const { t } = useAssetExtractionTranslation();
   const [types, setTypes] = useState<AssetType[]>(["character", "scene"]);
   const [narrationChoice, setNarrationChoice] = useState<{ version: string; enabled: boolean }>();
-  const [completed, setCompleted] = useState<{ selection: string; result: AssetActionResult }>();
+  const location = useExtractionLocation();
+  const [completed, setCompleted] = useState<{ version: string; selection: string; result: AssetActionResult }>();
   const selectedTypes = extractionTypes.filter((kind) => types.includes(kind));
   const reading = source.choices.find((item) => item.id === source.value)?.readingScript ?? false;
   const includesPeopleOrPlaces = types.includes("character") || types.includes("scene");
@@ -145,10 +147,17 @@ function AssetExtraction({ source, episodes, onReview, canManage, busy, onRun, t
   async function submit() {
     if (!canManage || busy || !source.value || !selectedTypes.length || needsNarration || result) return;
     const receipt = await onRun(source.value, selectedTypes, interpretNarration);
-    if (receipt?.batch || receipt?.task) setCompleted({ selection, result: receipt });
+    if (receipt?.batch || receipt?.task) {
+      setCompleted({ version: source.value, selection, result: receipt });
+      if (receipt.batch) location.select(receipt.batch.operationId);
+    }
   }
-  return <section className={`${panel} max-w-4xl p-6`}>
-    <FrozenScriptSelect source={source} episodes={episodes} disabled={busy} onReview={onReview} />
+  function chooseSource(version: string) {
+    source.select(version);
+    location.select(undefined, undefined, 1, version);
+  }
+  return <><section className={`${panel} max-w-4xl p-6`}>
+    <FrozenScriptSelect source={source} onSelect={chooseSource} episodes={episodes} disabled={busy} onReview={onReview} />
     <fieldset className="mt-5" disabled={busy || !canManage}>
       <legend className="text-sm">{t("scope")}</legend>
       <div className="mt-3 flex flex-wrap gap-3">{extractionTypes.map((kind) =>
@@ -166,8 +175,10 @@ function AssetExtraction({ source, episodes, onReview, canManage, busy, onRun, t
       <button type="button" className={button} onClick={onLibrary} disabled={busy}>{t("library")}</button>
     </div>
     {result?.task ? <TaskSummary task={task?.taskId === result.task.taskId ? task : result.task} message={t("queued")} /> : null}
-    {result?.batch ? <BatchResultPanel receipt={result.batch} busy={busy} successTitle={t("done", { count: result.batch.succeeded })} onOpenItem={onOpenAsset} /> : null}
-  </section>;
+  </section>
+    {source.value ? <ExtractionResults key={source.value} api={api} scope={scope} version={source.value} location={location}
+      live={completed?.version === source.value ? completed.result.batch : undefined} busy={busy} onOpen={onOpenAsset} /> : null}
+  </>;
 }
 
 function ManualAssetCreate({ canManage, busy, onCreate, source, episodes, onReview, onDirty }: AssetSourceFormProps & {
@@ -502,7 +513,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         if (exactDetail && saved.id === targetAssetId) setDetail({ key: detailKey, loading: false, asset: saved });
         setAssets((items) => items?.map((item) => item.id === saved.id ? saved : item));
       }
-      if (result.batch) setBatch(result.batch); if (result.message && receiptSaved) setMessage(result.message);
+      if (result.batch && action !== "extractAssets") setBatch(result.batch); if (result.message && receiptSaved) setMessage(result.message);
       await load();
       return result;
     } catch (cause) {
@@ -532,7 +543,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     {pendingSubmission ? <section role="status" className="mb-4 rounded-xl border border-amber-400/30 p-4"><p className="text-sm leading-6 text-amber-200">{generationText("uncertain")}</p><button type="button" className={`${button} mt-3`} disabled={busy} onClick={() => void run(pendingSubmission.action, pendingSubmission.payload, { id: pendingSubmission.targetId, projectId: pendingSubmission.projectId }, pendingSubmission.version, pendingSubmission)}>{generationText("recoverSubmission")}</button></section> : null}
     {taskStorageUnavailable ? <p role="status" className="mb-4 text-xs text-amber-200">{handoff("storageUnavailable")}</p> : null}
     {sourceError && (activeView === "extract" || activeView === "library") ? <StatePanel title={extractionText("operationFailed")} detail={sourceError.message} requestId={sourceError.requestId} tone="danger" /> : null}
-    {activeView === "extract" ? <AssetExtraction {...sourceProps} task={taskOwnerId ? undefined : task} onLibrary={() => navigate("library")} onOpenAsset={(id) => navigate("editor", id)} onRun={(scriptVersionId, types, interpretNarration) => run("extractAssets", { scriptVersionId, assetTypes: types, ...(interpretNarration ? { interpretNarration } : {}) })} /> : null}
+    {activeView === "extract" ? <AssetExtraction {...sourceProps} api={api} scope={scope} task={taskOwnerId ? undefined : task} onLibrary={() => navigate("library")} onOpenAsset={(id) => navigate("editor", id)} onRun={(scriptVersionId, types, interpretNarration) => run("extractAssets", { scriptVersionId, assetTypes: types, ...(interpretNarration ? { interpretNarration } : {}) })} /> : null}
     {activeView === "library" || activeView === "market" ? <>{activeView === "library" && hasProjectContext ? <ManualAssetCreate key={draftReset} {...sourceProps} onDirty={setDraftBlocked} onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : null}<AssetFilters search={search} type={type} rights={rights} onSearch={setSearch} onType={setType} onRights={setRights} onApply={() => { const query = { search: search || undefined, assetType: type || undefined, rightsStatus: rights || undefined }; setActiveQuery(query); void load(query); }} />{activeView === "library" && canManage && selectedAssetIds.length > 0 ? <div className="mb-4 flex items-center justify-between rounded-[14px] border border-[#8B5CF6]/40 bg-[#8B5CF6]/10 p-3"><span className="text-sm">已选择 {selectedAssetIds.length} 项</span><button type="button" className={primaryButton} disabled={busy} onClick={() => void run("confirmAssets", { itemIds: selectedAssetIds }, undefined, undefined)}>批量确认授权</button></div> : null}{assets?.length === 0 ? <StatePanel title="当前范围没有资产" detail={activeView === "market" ? "没有符合当前筛选和授权范围的市场素材。" : hasProjectContext ? "先从冻结剧本提取主体，或从冻结剧本创建可编辑资产。" : "当前工作区还没有可复用资产。请先在项目资产库中创建或提取资产。"} actionLabel={activeView === "market" ? "清除筛选" : hasProjectContext ? "开始资产提取" : undefined} onAction={() => { if (activeView === "market") { setSearch(""); setType(""); setRights(""); setActiveQuery({}); void load({}); } else if (hasProjectContext) navigate("extract"); }} /> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{assets?.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.includes(asset.id)} canManage={activeView === "library" && canManage} onSelect={() => setSelectedAssetIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])} onOpen={() => navigate(activeView === "market" ? "market-detail" : "editor", asset.id)} />)}</section>}{nextToken ? <button type="button" className={`${button} mt-4`} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : null}</> : null}
     {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor key={`${currentAsset.id}:${draftReset}`} draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }} onDirty={setDraftBlocked} asset={currentAsset} ownerProject={!scope.projectId || currentAsset.projectId === scope.projectId} task={taskOwnerId === currentAsset.id ? task : undefined} canManage={canManage} busy={busy || Boolean(pendingSubmission) || Boolean(exactDetail && detail?.loading)} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)} onAction={(action, payload, version) => void run(action, payload, currentAsset, version)} onUploadRightsEvidence={(file) => api.uploadRightsEvidence(scope, currentAsset, file)} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next, assetId: currentAsset.id })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
     {activeView === "turnaround" || activeView === "expressions" ? <CharacterDerivative asset={currentAsset} ownerProject={!scope.projectId || currentAsset?.projectId === scope.projectId} mode={activeView} canManage={canManage} busy={busy || Boolean(pendingSubmission) || Boolean(exactDetail && detail?.loading)} task={taskOwnerId === currentAsset?.id ? task : undefined} onGenerateReference={() => void run("generateReferenceImage", { sourceVersionId: currentAsset?.currentVersionId })} onRun={(payload) => void run(activeView === "turnaround" ? "generateTurnaround" : "generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}

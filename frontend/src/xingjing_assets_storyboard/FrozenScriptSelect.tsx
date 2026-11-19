@@ -43,15 +43,16 @@ export function useFrozenScriptSource(
 
 export type FrozenScriptSource = ReturnType<typeof useFrozenScriptSource>;
 
-export function FrozenScriptSelect({ source, episodes, disabled, onReview }: {
+export function FrozenScriptSelect({ source, episodes, disabled, onReview, onSelect = source.select }: {
   source: FrozenScriptSource; episodes?: readonly EpisodeScriptBinding[]; disabled: boolean; onReview?: () => void;
+  onSelect?: (version: string) => void;
 }) {
   const { t } = useAssetExtractionTranslation();
   return <div>
     <label className="block text-sm text-[#B8BECC]">{t("source")}
       <select className="mt-2 block w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3 text-[#F5F6FA]"
         value={source.value} disabled={disabled || source.bound || !source.choices.length}
-        onChange={(event) => source.select(event.target.value)}>
+        onChange={(event) => onSelect(event.target.value)}>
         {!source.value || !source.bound ? <option value="">{t("choose")}</option> : null}
         {source.choices.map((item) => {
           const numbers = episodes?.filter((episode) => episode.scriptVersionId === item.id).map((episode) => episode.episode);

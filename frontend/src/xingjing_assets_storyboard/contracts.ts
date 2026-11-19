@@ -221,6 +221,8 @@ export type BatchItemStatus = "succeeded" | "failed" | "cancelled" | "skipped";
 export interface BatchItemResult {
   readonly id: string;
   readonly name?: string;
+  readonly type?: AssetType;
+  readonly description?: string | null;
   readonly status: BatchItemStatus;
   readonly message?: string;
   readonly code?: string;
@@ -234,6 +236,11 @@ export interface BatchReceipt {
   readonly succeeded: number;
   readonly failed: number;
   readonly requestId?: string;
+}
+
+export interface ExtractionHistory {
+  readonly runs: readonly { readonly operationId: string; readonly savedAt: string; readonly count: number }[];
+  readonly batch: BatchReceipt | null;
 }
 
 export interface TaskReceipt {
@@ -370,6 +377,7 @@ export interface RightsEvidenceUpload {
 
 export interface AssetsStoryboardPort {
   getFrozenScriptSources?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<FrozenScriptSources>;
+  getExtractionHistory?(scope: WorkspaceProjectScope, version: string, operationId?: string, signal?: AbortSignal): Promise<ExtractionHistory>;
   getAsset?(
     scope: WorkspaceProjectScope,
     assetId: string,

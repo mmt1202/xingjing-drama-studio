@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
@@ -82,6 +82,10 @@ class AssetContractRoute(APIRoute):
                 return cast(JSONResponse, await original(request))
             except AssetHttpError as error:
                 return _error(request, error.code, error.status_code, error.details)
+            except HTTPException as error:
+                detail = error.detail if isinstance(error.detail, Mapping) else {}
+                code = detail.get("code")
+                return _error(request, code if isinstance(code, str) else "REQUEST_REJECTED", error.status_code)
             except LookupError as error:
                 return _error(request, str(error) or "NOT_FOUND", 404)
             except VersionConflict as error:
@@ -220,6 +224,20 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 "canManage": "asset.manage" in context.permissions,
             },
         )
+
+    @router.get("/projects/{project_id}/assets/extractions")
+    async def extraction_history(request: Request, project_id: str) -> JSONResponse:
+        context = await _context(runtime, request, project_id, "asset.view")
+        if "script.view" not in context.permissions:
+            raise AssetHttpError("PERMISSION_DENIED", 403, {"permission": "script.view"})
+        version = _text(request.query_params, "scriptVersionId")
+        history = _repository(runtime).extraction_history(
+            AssetScope(context.tenant_id, context.workspace_id),
+            project_id,
+            version,
+            request.query_params.get("operationId"),
+        )
+        return _success(context, history)
 
     @router.get("/projects/{project_id}/assets/{asset_id}/audit")
     async def list_asset_audit(request: Request, project_id: str, asset_id: str) -> JSONResponse:
@@ -563,6 +581,7 @@ def create_unavailable_asset_router(code: str | None) -> APIRouter:
         raise AssetHttpError(unavailable, 503)
 
     @router.get("/projects/{project_id}/assets/sources/frozen-scripts")
+    @router.get("/projects/{project_id}/assets/extractions")
     @router.get("/projects/{project_id}/assets", operation_id="unavailable_project_assets_get")
     async def assets_unavailable(request: Request, project_id: str) -> JSONResponse:
         _ = (request, project_id)
@@ -875,7 +894,6 @@ async def _extract_assets_from_frozen_script(
         candidates.extend((AssetKind.SCENE, name, scene_metadata[name]) for name in scene_sources)
 
     fingerprint = _digest({"action": "extractAssets", "payload": request_body})
-    result_items: list[dict[str, object]] = []
     semantic_kinds = tuple(
         kind
         for kind in requested_kinds
@@ -907,19 +925,14 @@ async def _extract_assets_from_frozen_script(
             if (item.kind, item.name.strip().casefold()) not in structured
         )
 
+    if not candidates:
+        if reading_script and not interpret_narration and not semantic_kinds:
+            raise AssetHttpError("NARRATION_REQUIRES_INTERPRETATION", 422)
+        raise AssetHttpError("NO_EXTRACTABLE_ASSETS", 422)
+
     for kind, name, content in candidates:
         candidate_key = f"{idempotency_key}:extract:{kind.value}:{_digest({'name': name})[:16]}"
-        replayed = repository.replay(scope, idempotency_key=candidate_key, fingerprint=fingerprint)
-        if replayed is not None:
-            result_items.append(
-                {
-                    "id": replayed.asset_id,
-                    "name": replayed.name,
-                    "status": "succeeded",
-                    "version": replayed.revision,
-                    "message": "幂等返回已创建资产。",
-                }
-            )
+        if repository.replay(scope, idempotency_key=candidate_key, fingerprint=fingerprint) is not None:
             continue
         service = AssetService(
             ContextAssetRepository(
@@ -932,7 +945,7 @@ async def _extract_assets_from_frozen_script(
             ),
             StoryboardImpactQuery(runtime, context, project_id),
         )
-        asset = service.create(
+        service.create(
             workspace_id=context.workspace_id,
             owner_project_id=project_id,
             kind=kind,
@@ -943,23 +956,14 @@ async def _extract_assets_from_frozen_script(
             ),
             frozen_snapshot=frozen,
         )
-        result_items.append(
-            {"id": asset.asset_id, "name": asset.name, "status": "succeeded", "version": asset.revision}
-        )
 
-    if not candidates and not result_items:
-        if reading_script and not interpret_narration and not semantic_kinds:
-            raise AssetHttpError("NARRATION_REQUIRES_INTERPRETATION", 422)
-        raise AssetHttpError("NO_EXTRACTABLE_ASSETS", 422)
-    succeeded = sum(item["status"] == "succeeded" for item in result_items)
-    failed = sum(item["status"] == "failed" for item in result_items)
-    return {
-        "operationId": f"asset-extract:{idempotency_key}",
-        "items": result_items,
-        "succeeded": succeeded,
-        "failed": failed,
-        "requestId": context.request_id,
-    }
+    history = repository.extraction_history(
+        scope, project_id, frozen.script_version_id, f"asset-extract:{idempotency_key}"
+    )
+    batch = history["batch"]
+    if not isinstance(batch, dict):
+        raise AssetHttpError("ASSET_RUNTIME_UNAVAILABLE", 503)
+    return {**batch, "requestId": context.request_id}
 
 
 def _asset_page(

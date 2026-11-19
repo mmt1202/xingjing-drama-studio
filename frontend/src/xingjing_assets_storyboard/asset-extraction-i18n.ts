@@ -2,7 +2,7 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
-  title: "资产提取", intro: "从冻结剧本提取素材，保存到项目资产库。", source: "冻结剧本版本",
+  title: "资产提取", intro: "从已冻结的剧本中识别角色、场景和道具，在项目资产库建立可编辑的档案。", source: "剧本来源",
   choose: "请选择冻结版本", version: "{{title}} · v{{version}}", episodeVersion: "第 {{episodes}} 集 · {{title}} · v{{version}}",
   loading: "正在读取冻结版本…", empty: "当前项目还没有冻结剧本。请先选择剧本，在版本页冻结后回来提取。",
   episodeEmpty: "本集还没有绑定可用的冻结剧本。请在分集管理中核对工作剧本，冻结后保存制作绑定。",
@@ -20,6 +20,15 @@ const zh = {
   manageDenied: "当前账号只能查看资产。提取或创建资产需要项目的资产管理权限。",
   manual: "从冻结剧本创建可编辑资产", kind: "资产类型", name: "资产名称", description: "资产说明",
   create: "创建资产", creating: "正在创建…",
+  results: "提取结果", saved: "已入库 {{count}} 项资产", openHint: "点选资产可查看详情和剧本中记录的说明。",
+  runs: "提取记录", runOption: "{{time}} · 入库 {{count}} 项", recentRun: "刚刚提取 · 入库 {{count}} 项",
+  loadingRuns: "正在读取提取记录…", noRuns: "这个剧本版本还没有资产提取记录。",
+  historyError: "暂时无法读取提取记录。", reloadRuns: "重新读取记录",
+  missingRun: "该次记录不在当前剧本版本中。", latestRun: "查看最近一次提取",
+  all: "全部", filter: "按资产类别筛选", noKind: "这次提取没有「{{kind}}」记录。",
+  uncategorized: "未分类", unnamed: "名称待核对", openAsset: "查看「{{name}}」的资产详情",
+  notSaved: "另有 {{count}} 项未入库", skipped: "已跳过", cancelled: "已取消", failed: "提取失败",
+  resultPages: "提取结果分页",
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
@@ -41,6 +50,15 @@ const en: Copy = {
   manageDenied: "Your account can view assets. Extracting or creating assets requires asset management permission.",
   manual: "Create an editable asset from a frozen script", kind: "Asset type", name: "Asset name", description: "Description",
   create: "Create asset", creating: "Creating…",
+  results: "Extraction results", saved: "Assets saved · {{count}}", openHint: "Select an asset to view its details and script description.",
+  runs: "Extraction history", runOption: "{{time}} · {{count}} saved", recentRun: "Just extracted · {{count}} saved",
+  loadingRuns: "Loading extraction history…", noRuns: "This script version has no saved extractions yet.",
+  historyError: "Extraction history could not be loaded.", reloadRuns: "Reload history",
+  missingRun: "This extraction is unavailable for this script version.", latestRun: "View the latest extraction",
+  all: "All", filter: "Filter by asset type", noKind: "This extraction has no records under {{kind}}.",
+  uncategorized: "Uncategorized", unnamed: "Name unavailable", openAsset: "View asset details for {{name}}",
+  notSaved: "Unsaved items · {{count}}", skipped: "Skipped", cancelled: "Cancelled", failed: "Extraction failed",
+  resultPages: "Extraction result pages",
 };
 const vi: Copy = {
   title: "Trích xuất tài sản", intro: "Trích xuất tư liệu từ kịch bản đã đóng băng và lưu vào thư viện dự án.", source: "Phiên bản kịch bản đã đóng băng",
@@ -61,6 +79,15 @@ const vi: Copy = {
   manageDenied: "Tài khoản chỉ có quyền xem. Để trích xuất hoặc tạo tài sản, cần có quyền quản lý tài sản.",
   manual: "Tạo tài sản có thể chỉnh sửa từ kịch bản đã đóng băng", kind: "Loại tài sản", name: "Tên tài sản", description: "Mô tả",
   create: "Tạo tài sản", creating: "Đang tạo…",
+  results: "Kết quả trích xuất", saved: "Đã lưu {{count}} tài sản", openHint: "Chọn tài sản để xem chi tiết và phần mô tả từ kịch bản.",
+  runs: "Lịch sử trích xuất", runOption: "{{time}} · đã lưu {{count}} mục", recentRun: "Vừa trích xuất · đã lưu {{count}} mục",
+  loadingRuns: "Đang tải lịch sử trích xuất…", noRuns: "Phiên bản kịch bản này chưa có lần trích xuất nào được lưu.",
+  historyError: "Chưa tải được lịch sử trích xuất.", reloadRuns: "Tải lại lịch sử",
+  missingRun: "Lần trích xuất này không thuộc phiên bản kịch bản hiện tại.", latestRun: "Xem lần trích xuất gần nhất",
+  all: "Tất cả", filter: "Lọc theo loại tài sản", noKind: "Lần trích xuất này không có mục nào thuộc loại {{kind}}.",
+  uncategorized: "Chưa phân loại", unnamed: "Chưa có tên", openAsset: "Xem chi tiết tài sản {{name}}",
+  notSaved: "Còn {{count}} mục chưa được lưu", skipped: "Đã bỏ qua", cancelled: "Đã hủy", failed: "Trích xuất thất bại",
+  resultPages: "Trang kết quả trích xuất",
 };
 for (const [language, copy] of Object.entries({ zh, en, vi })) i18n.addResourceBundle(language, "assetExtraction", copy, true, false);
 export const useAssetExtractionTranslation = () => useTranslation("assetExtraction");
