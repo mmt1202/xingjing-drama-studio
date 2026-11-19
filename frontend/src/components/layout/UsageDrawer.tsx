@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/ui/Pagination";
 import { useState, useEffect, useCallback, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -7,8 +8,6 @@ import {
   AudioLines,
   AlertCircle,
   DollarSign,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 import { useUsageStore, type UsageStats, type UsageCall } from "@/stores/usage-store";
 import { API } from "@/api";
@@ -340,66 +339,8 @@ export function UsageDrawer({ open, onClose, projectName, anchorRef }: UsageDraw
           </ul>
         )}
       </div>
-
-      {/* Pagination */}
       {totalPages > 1 && (
-        <div
-          className="flex items-center justify-between px-4 py-2"
-          style={{ borderTop: "1px solid var(--color-hairline-soft)" }}
-        >
-          <span
-            className="num text-[10px]"
-            style={{ color: "var(--color-text-4)" }}
-          >
-            {t("records_count", { count: total })}
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-              className="focus-ring grid h-6 w-6 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-              style={{ color: "var(--color-text-3)" }}
-              onMouseEnter={(e) => {
-                if (page > 1) {
-                  e.currentTarget.style.color = "var(--color-text)";
-                  e.currentTarget.style.background = "oklch(1 0 0 / 0.05)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--color-text-3)";
-                e.currentTarget.style.background = "transparent";
-              }}
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-            </button>
-            <span
-              className="num text-[10.5px]"
-              style={{ color: "var(--color-text-3)" }}
-            >
-              {page}/{totalPages}
-            </span>
-            <button
-              type="button"
-              disabled={page >= totalPages}
-              onClick={() => setPage(page + 1)}
-              className="focus-ring grid h-6 w-6 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-30"
-              style={{ color: "var(--color-text-3)" }}
-              onMouseEnter={(e) => {
-                if (page < totalPages) {
-                  e.currentTarget.style.color = "var(--color-text)";
-                  e.currentTarget.style.background = "oklch(1 0 0 / 0.05)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--color-text-3)";
-                e.currentTarget.style.background = "transparent";
-              }}
-            >
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
+        <Pagination offset={(page - 1) * pageSize} pageSize={pageSize} total={total} onOffsetChange={offset => setPage(offset / pageSize + 1)} />
       )}
     </GlassPopover>
   );

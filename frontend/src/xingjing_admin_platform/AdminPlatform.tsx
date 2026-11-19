@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/ui/Pagination";
 import { useCallback, useEffect, useState } from "react";
 
 import { adminRouteMap } from "./routes";
@@ -185,6 +186,6 @@ export function AdminPlatform({ routeId, api }: { routeId: string; api: AdminApi
         <td><strong>{item.name}</strong><small>{item.id}</small></td><td><span className={`xj-admin-status is-${item.status}`}>{item.status}</span></td>
         <td>{detailText(item.details)}</td><td>{Object.values(item.sensitive ?? {}).map(mask).join(" · ") || "—"}</td><td>v{item.version}</td><td>{item.updatedAt}</td>
         <td>{usesStructuredForm ? "—" : <button disabled={!canManage || actionState === "processing" || (route.resource === "content" && !actionReason.trim())} onClick={() => void runAction(item)}>{route.primaryAction}</button>}</td>
-      </tr>)}</tbody></table><footer className="xj-admin-toolbar" aria-label="分页"><span>共 {total} 条 · 第 {pageNumber} 页</span><button disabled={pageNumber <= 1} onClick={() => setPageNumber((value) => value - 1)}>上一页</button><button disabled={pageNumber * 20 >= total} onClick={() => setPageNumber((value) => value + 1)}>下一页</button></footer></section>}
+      </tr>)}</tbody></table><Pagination offset={(pageNumber - 1) * 20} pageSize={20} total={total} onOffsetChange={offset => setPageNumber(offset / 20 + 1)} /></section>}
   </main>;
 }

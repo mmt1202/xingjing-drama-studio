@@ -60,7 +60,6 @@
 .xj-payments-status--paid, .xj-payments-status--succeeded { border-color: rgb(34 197 94 / 25%); background: rgb(34 197 94 / 8%); color: #86efac; }
 .xj-payments-status--failed, .xj-payments-status--rejected { border-color: rgb(248 113 113 / 25%); background: rgb(248 113 113 / 8%); color: #fca5a5; }
 .xj-payments-status--pending_approval, .xj-payments-status--unknown, .xj-payments-status--processing { border-color: rgb(214 167 92 / 25%); background: rgb(214 167 92 / 8%); color: #f0d4a0; }
-.xj-payments-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; color: var(--xj-text-3, #8590a7); font-size: 11px; }
 .xj-payments-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .xj-payments-facts { display: grid; gap: 14px; margin-top: 18px; }
 .xj-payments-facts > div { min-width: 0; padding-bottom: 12px; border-bottom: 1px solid rgb(255 255 255 / 6%); }

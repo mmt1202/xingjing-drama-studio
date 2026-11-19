@@ -1,3 +1,4 @@
+import { SequentialPagination } from "@/components/ui/Pagination";
 import { useCallback, useEffect, useState } from "react";
 import { useProjectNavigationBlocker } from "@/xingjing_creator_projects/ProjectFlowShell";
 
@@ -565,31 +566,7 @@ export function M08EditingWorkspace({
                     当前项目还没有时间线。请用右侧表单从已完成的视频资产建立第一条。
                   </p>
                 )}
-                <div className="mt-4 flex items-center justify-between">
-                  <button
-                    type="button"
-                    disabled={timelineOffset === 0}
-                    onClick={() =>
-                      setTimelineOffset((current) => Math.max(0, current - 20))
-                    }
-                    className="border border-slate-700 px-3 py-2 text-sm disabled:opacity-40"
-                  >
-                    上一页
-                  </button>
-                  <span className="text-xs text-slate-500">
-                    第 {Math.floor(timelineOffset / 20) + 1} 页
-                  </span>
-                  <button
-                    type="button"
-                    disabled={timelines.length < 20}
-                    onClick={() =>
-                      setTimelineOffset((current) => current + 20)
-                    }
-                    className="border border-slate-700 px-3 py-2 text-sm disabled:opacity-40"
-                  >
-                    下一页
-                  </button>
-                </div>
+                <SequentialPagination count={timelines.length} page={Math.floor(timelineOffset / 20) + 1} previous={timelineOffset > 0 ? () => setTimelineOffset(Math.max(0, timelineOffset - 20)) : undefined} next={timelines.length >= 20 ? () => setTimelineOffset(timelineOffset + 20) : undefined} />
               </section>
               <section
                 className={`${pageId === "CR-028" ? "" : "hidden "}border border-cyan-300/25 bg-cyan-300/[0.03] p-5`}

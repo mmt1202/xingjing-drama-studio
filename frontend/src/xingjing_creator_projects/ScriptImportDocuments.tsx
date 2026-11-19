@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, ChevronLeft, ChevronRight, FileText, Search } from "lucide-react";
+import { ArrowRight, ChevronRight, FileText, Search } from "lucide-react";
+import { Pagination } from "@/components/ui/Pagination";
 import { useImportTranslation } from "./import-i18n";
 import { useRecognitionTranslation } from "./recognition-i18n";
 import { useScriptTranslation } from "./script-i18n";
@@ -33,7 +34,6 @@ export function ImportCatalog({ api, projectId, compact, revision, onSelect }: {
   }, [api, projectId, key, query, page, limit]);
   const data = response?.key === key ? response : undefined;
   if (compact) return data?.total !== undefined ? <p className="text-xs text-slate-400">{data.total ? t("total", { count: data.total }) : script("noScripts")}</p> : null;
-  const pages = Math.max(1, Math.ceil((data?.total ?? 0) / limit));
   return <section className="space-y-4">
     <label className="relative block"><Search size={17} aria-hidden="true" className="pointer-events-none absolute top-3 left-3 text-slate-400" />
       <span className="sr-only">{t("search")}</span><input type="search" className={scriptField + " mt-0 pl-10"} value={query} placeholder={t("search")} onChange={e => { setQuery(e.target.value); setPage(0); }} />
@@ -43,11 +43,8 @@ export function ImportCatalog({ api, projectId, compact, revision, onSelect }: {
         <button type="button" className="xj-intake-document" onClick={() => onSelect(item.id)}><FileText size={19} aria-hidden="true" />
           <span className="min-w-0 flex-1"><strong className="block break-words">{item.title}</strong><small className="block truncate text-slate-400">{item.filename}{item.lockedVersionNumber ? " · " + script("frozenVersion", { number: item.lockedVersionNumber }) : ""}</small></span><ChevronRight size={16} aria-hidden="true" /></button>
       </li>)}</ul> : <p role="status" className="text-sm text-slate-400">{query ? t("noMatches") : script("noScripts")}</p>}
-    {data?.total && pages > 1 ? <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-      <span>{t("page", { page: page + 1, pages, count: data.total })}</span><div className="flex gap-2">
-        <button className={scriptButton} disabled={!page} aria-label={t("previous")} onClick={() => setPage(n => n - 1)}><ChevronLeft size={16} /></button>
-        <button className={scriptButton} disabled={page + 1 >= pages} aria-label={t("next")} onClick={() => setPage(n => n + 1)}><ChevronRight size={16} /></button>
-      </div></div> : null}
+    {data?.total !== undefined && <Pagination offset={page * limit} pageSize={limit} total={data.total}
+      unit="documents" label={t("existing")} onOffsetChange={offset => setPage(offset / limit)} />}
   </section>;
 }
 

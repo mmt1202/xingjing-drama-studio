@@ -176,7 +176,6 @@ export function SourcePlanPanel(props: Props) {
           {chapterPage.pageCount > 1 && <button type="button" className={button} disabled={!canWrite} onClick={() => selectChapters(chapterPage.items, !pageSelected)}>{t(pageSelected ? "clearPage" : "selectPage")}</button>}
           <span className="text-xs text-slate-400">{t("selectedChapters", { count: selectedChapters.length })}</span>
         </div>
-        <EpisodePagination list={chapterPage} label="chapterPages" />
         <div key={chapterPage.page} className="mt-2 max-h-72 space-y-2 overflow-auto">
           {chapterPage.items.map(chapter => <label key={chapter.id} className="flex items-center gap-3 rounded-lg border border-white/5 px-3 py-2 text-sm">
             <input type="checkbox" checked={chapterIds.has(chapter.id)} disabled={!canWrite} onChange={event => selectChapters([chapter], event.target.checked)} />
@@ -184,6 +183,7 @@ export function SourcePlanPanel(props: Props) {
             <span className="text-xs tabular-nums text-slate-500">{chapter.start}–{chapter.end}</span>
           </label>)}
         </div>
+        <EpisodePagination list={chapterPage} label="chapterPages" />
       </details> : null}
       <details className="mt-5 border-t border-white/10 pt-4"><summary className="cursor-pointer text-sm text-slate-300">{t("history")}</summary>{historyError ? <p role="alert" className="mt-3 text-sm text-amber-200">{problemText(historyError, t)}</p> : history?.items.length ? <ul className="mt-3 max-h-64 space-y-2 overflow-auto">{history.items.map(item => <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/5 p-3"><span className="text-xs text-slate-400">{item.sourceLabel} · {item.count} · {t(item.confirmationPending ? "pendingHistory" : item.applied ? "applied" : "proposed")}<time className="mt-1 block text-slate-500" dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time></span><button className={button} disabled={busy || !!pending || modified || reviewing || props.blocked} onClick={() => choose(item.id)}>{t("open")}</button></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">{t(history ? "noHistory" : "loading")}</p>}</details>
       {readError && <p role="alert" className="mt-4 text-sm text-amber-200">{problemText(readError, t)}</p>}

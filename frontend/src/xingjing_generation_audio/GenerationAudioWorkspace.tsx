@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/ui/Pagination";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthenticatedVideo } from "@/components/shared/AuthenticatedVideo";
 import { BudgetScopePicker, type BudgetScope } from "@/xingjing_budget/BudgetScopePicker";
@@ -829,25 +830,7 @@ function GenerationAudioWorkspaceContent({
             ))}
           </div>
         )}
-        <div className="mt-4 flex items-center justify-between">
-          <span className="text-sm text-slate-400">共 {trackTotal} 条</span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={trackPage === 0}
-              onClick={() => setTrackPage((value) => Math.max(0, value - 1))}
-            >
-              上一页
-            </button>
-            <button
-              type="button"
-              disabled={(trackPage + 1) * 20 >= trackTotal}
-              onClick={() => setTrackPage((value) => value + 1)}
-            >
-              下一页
-            </button>
-          </div>
-        </div>
+        <Pagination offset={trackPage * 20} pageSize={20} total={trackTotal} onOffsetChange={offset => setTrackPage(offset / 20)} />
       </section>
 
       <section
@@ -1386,25 +1369,7 @@ function GenerationAudioWorkspaceContent({
             ))}
           </div>
         )}
-        <div className="mt-4 flex items-center justify-between">
-          <span className="text-sm text-slate-400">共 {taskTotal} 条</span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={taskPage === 0}
-              onClick={() => setTaskPage((value) => Math.max(0, value - 1))}
-            >
-              上一页
-            </button>
-            <button
-              type="button"
-              disabled={(taskPage + 1) * 20 >= taskTotal}
-              onClick={() => setTaskPage((value) => value + 1)}
-            >
-              下一页
-            </button>
-          </div>
-        </div>
+        <Pagination offset={taskPage * 20} pageSize={20} total={taskTotal} onOffsetChange={offset => setTaskPage(offset / 20)} />
       </section>
       </fieldset>
     </main>

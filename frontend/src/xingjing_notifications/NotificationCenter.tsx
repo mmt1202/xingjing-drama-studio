@@ -1,7 +1,8 @@
+import { Pagination } from "@/components/ui/Pagination";
 import { AuthSessionError, getTokenForSession } from "@/utils/auth";
 import { useAuthStore } from "@/stores/auth-store";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowUpRight, Bell, Check, CheckCheck, ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, Settings2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Bell, Check, CheckCheck, LoaderCircle, RefreshCw, Settings2, X } from "lucide-react";
 import { createNotificationsApi, NotificationApiError } from "./api";
 import type { InboxNotification, NotificationChannel, NotificationPage, NotificationPreference, NotificationTarget } from "./contracts";
 import { useNotificationTranslation } from "./i18n";
@@ -233,7 +234,7 @@ function ScopedNotificationCenter({ workspaceId, actorId, token, permissions, on
             </li>)}</ul>
           </>}
         </div>
-        {!target && page && <div className="xj-notification-pagination"><span>{t("total", { count: page.total })} · {t("page", { page: Math.floor(offset / PAGE_SIZE) + 1 })}</span><div><button type="button" aria-label={t("previous")} disabled={offset === 0 || loading || Boolean(busy)} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}><ChevronLeft size={17} aria-hidden="true" /></button><button type="button" aria-label={t("next")} disabled={offset + PAGE_SIZE >= page.total || loading || Boolean(busy)} onClick={() => setOffset(offset + PAGE_SIZE)}><ChevronRight size={17} aria-hidden="true" /></button></div></div>}
+        {!target && page && <div className="px-4"><Pagination offset={offset} pageSize={PAGE_SIZE} total={page.total} disabled={loading || Boolean(busy)} onOffsetChange={setOffset} /></div>}
         <footer className="xj-notification-footer"><button type="button" className="xj-notification-text-button" onClick={() => switchView("preferences")}><Settings2 size={14} aria-hidden="true" />{t("preferences")}</button>{loading && <small role="status">{t("syncing")}</small>}</footer>
       </> : <section className="xj-notification-preferences">
         <button type="button" className="xj-notification-text-button" onClick={() => switchView("inbox")}><ArrowLeft size={14} aria-hidden="true" />{t("back")}</button><p className="xj-notification-muted">{t("preferenceHint")}</p>

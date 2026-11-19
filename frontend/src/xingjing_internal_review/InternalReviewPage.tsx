@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/ui/Pagination";
 import { getTokenForSession } from "@/utils/auth";
 import { useAuthStore } from "@/stores/auth-store";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
@@ -211,7 +212,7 @@ function InternalWorkspace({ workspaceId, projectId, accessToken }: { workspaceI
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label className="min-w-0 flex-1 text-xs text-slate-400">{t("selectRound")}<select className={irField + " mt-2"} value={roundId} disabled={pending || pageWaiting || page.rounds.length === 0} onChange={event => change({ roundId: event.target.value })}><option value="">{t("selectRound")}</option>{roundId && !page.rounds.some(round => round.id === roundId) && <option value={roundId}>{current?.round.title ?? roundId}</option>}{page.rounds.map(round => <option key={round.id} value={round.id}>{t("roundNumber", { number: round.number })} · {round.title} · {t(round.state)}{round.locked ? ` · ${t("locked")}` : ""}</option>)}</select></label>
-        <div className="flex items-center gap-2 self-end text-xs text-slate-400"><span>{t("pagination", { total: page.total, page: Math.floor(offset / 12) + 1 })}</span><button type="button" className={irButton} disabled={pending || pageWaiting || offset === 0} onClick={() => change({ reviewOffset: String(Math.max(0, offset - 12)), roundId: "" })}>{t("previous")}</button><button type="button" className={irButton} disabled={pending || pageWaiting || offset + 12 >= page.total} onClick={() => change({ reviewOffset: String(offset + 12), roundId: "" })}>{t("next")}</button></div>
+        <Pagination offset={offset} pageSize={12} total={page.total} disabled={pending || pageWaiting} onOffsetChange={value => change({ reviewOffset: String(value), roundId: "" })} />
       </div>
     </section>
 

@@ -1,3 +1,4 @@
+import { SequentialPagination } from "@/components/ui/Pagination";
 import { useEffect, useState } from "react";
 import type { SnapshotExcerpt, SourcePlanApi, SourceReference } from "./api";
 import { button, card, problemText, useSourcePlanTranslation } from "./i18n";
@@ -18,12 +19,12 @@ export function SourceSnapshotReader({ api, projectId, reference, onDenied }: { 
   if (!reference.snapshotId) return <p className="text-sm text-slate-400">{t("legacySource")}</p>;
   const current = state?.key === key ? state : undefined;
   return <section className={card + " mt-4"}>
-    <div className="flex flex-wrap items-center justify-between gap-3"><h4 className="font-medium">{t("snapshot")}</h4><span className="text-xs tabular-nums text-slate-500">{start}–{end} / {reference.end}</span></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><h4 className="font-medium">{t("snapshot")}</h4>{start === reference.start && end === reference.end && <span className="text-xs tabular-nums text-slate-500">{start}–{end} / {reference.end}</span>}</div>
     <p className="mt-2 text-xs leading-6 text-slate-400">{t("snapshotHelp")}</p>
     {!current ? <p role="status" className="mt-4 text-sm text-slate-400">{t("loading")}</p> : current.error ? <div role="alert" className="mt-4 text-sm text-amber-200"><p>{problemText(current.error, t)}</p><button className={button + " mt-3"} onClick={() => setReload(value => value + 1)}>{t("refresh")}</button></div> : <>
       <p className="mt-3 text-xs text-violet-200">{current.data?.chapters.map(chapter => `${chapter.ordinal}. ${chapter.title ?? t(chapter.kind)}`).join(" / ")}</p>
       <pre className="mt-4 max-h-96 overflow-auto whitespace-pre-wrap break-words font-sans text-sm leading-8 text-slate-200">{current.data?.text}</pre>
     </>}
-    <div className="mt-4 flex gap-2"><button className={button} disabled={start === reference.start} onClick={() => setOffset(Math.max(reference.start, start - 4000))}>{t("previousText")}</button><button className={button} disabled={end === reference.end} onClick={() => setOffset(end)}>{t("nextText")}</button></div>
+    <SequentialPagination summary={<>{start}–{end} / {reference.end}</>} previousLabel={t("previousText")} nextLabel={t("nextText")} previous={start > reference.start ? () => setOffset(Math.max(reference.start, start - 4000)) : undefined} next={end < reference.end ? () => setOffset(end) : undefined} />
   </section>;
 }

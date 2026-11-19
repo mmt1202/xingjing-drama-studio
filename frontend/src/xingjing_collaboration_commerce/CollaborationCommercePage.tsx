@@ -1,7 +1,7 @@
+import { SequentialPagination } from "@/components/ui/Pagination";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronRight,
   Clock3,
   Download,
   Handshake,
@@ -228,6 +228,8 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
   const [phase, setPhase] = useState<Phase>("checking");
   const [session, setSession] = useState<SessionContext | null>(null);
   const [snapshot, setSnapshot] = useState<CommercePageSnapshot | null>(null);
+  const [pageTrail, setPageTrail] = useState<readonly string[]>([]);
+  const [pageLoading, setPageLoading] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
@@ -242,13 +244,14 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
   const [exporting, setExporting] = useState(false);
   const mounted = useRef(true);
 
-  const readServerState = useCallback(async (options: { readonly silent?: boolean; readonly pageToken?: string; readonly signal?: AbortSignal } = {}) => {
+  const readServerState = useCallback(async (options: { readonly silent?: boolean; readonly trail?: readonly string[]; readonly signal?: AbortSignal } = {}) => {
     if (!activeApi) return;
     const readId = ++latestRead.current;
     pendingRead.current?.abort();
     const controller = new AbortController();
     pendingRead.current = controller;
     const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+    setPageLoading(true);
     if (!options.silent) setPhase("checking");
     try {
       let currentSession: SessionContext | null = null;
@@ -259,10 +262,11 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
           return;
         }
       }
-      const data = await activeApi.loadPage(route, context, { ...(isBilling ? billingFilters : {}), ...(isBilling && context.projectId ? { projectId: context.projectId } : {}), pageSize: 25, query: submittedQuery || undefined, pageToken: options.pageToken }, signal);
+      const data = await activeApi.loadPage(route, context, { ...(isBilling ? billingFilters : {}), ...(isBilling && context.projectId ? { projectId: context.projectId } : {}), pageSize: 25, query: submittedQuery || undefined, pageToken: options.trail?.at(-1) }, signal);
       if (!mounted.current || readId !== latestRead.current || signal.aborted) return;
       setSession(currentSession);
       setSnapshot(data);
+      setPageTrail(options.trail ?? []);
       setRequestId(data.requestId || null);
       setSelectedId((current) => current && data.items.some((item) => item.id === current) ? current : data.items[0]?.id ?? data.detail?.id ?? null);
       setPhase("ready");
@@ -271,6 +275,8 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
       const info = errorInfo(cause);
       setRequestId(info.requestId);
       setPhase(info.status === 401 || info.status === 403 ? "denied" : "failed");
+    } finally {
+      if (mounted.current && readId === latestRead.current && !signal.aborted) setPageLoading(false);
     }
   }, [activeApi, billingFilters, context, isBilling, route, submittedQuery]);
 
@@ -409,7 +415,9 @@ export function CollaborationCommercePage({ pageId, api, commercialM14Api, conte
               return <tr key={itemKey} className={item.id === selectedId ? "is-selected" : undefined} onClick={() => item.id && setSelectedId(item.id)}>{route.columns.map((column) => <td key={column.key}><span className={column.format === "status" ? "xj-cc-status" : undefined}>{formatValue(item[column.key], column.format, i18nInstance.language, typeof item.currency === "string" ? item.currency : "CNY")}</span></td>)}</tr>;
             })}</tbody></table></div>
           ) : detailRecord ? <dl className="xj-cc-detail-grid">{route.columns.map((column) => <div key={column.key}><dt>{t(column.labelKey)}</dt><dd>{formatValue(detailRecord[column.key], column.format, i18nInstance.language, typeof detailRecord.currency === "string" ? detailRecord.currency : "CNY")}</dd></div>)}</dl> : null}
-          {snapshot.nextPageToken && <button type="button" className="xj-cc-button xj-cc-next" onClick={() => void readServerState({ silent: true, pageToken: snapshot.nextPageToken ?? undefined })}>{t("common.nextPage")}<ChevronRight aria-hidden="true" size={16} /></button>}
+          <div className="px-4"><SequentialPagination count={snapshot.items.length} page={pageTrail.length + 1} disabled={pageLoading}
+            previous={pageTrail.length ? () => void readServerState({ silent: true, trail: pageTrail.slice(0, -1) }) : undefined}
+            next={snapshot.nextPageToken ? () => void readServerState({ silent: true, trail: [...pageTrail, snapshot.nextPageToken!] }) : undefined} /></div>
         </section>
 
         <aside className="xj-cc-evidence-panel">

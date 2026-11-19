@@ -1,3 +1,4 @@
+import { SequentialPagination } from "@/components/ui/Pagination";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CreatorApiError } from "@/xingjing_creator_projects/api";
 import type { ScriptFrameContext } from "@/xingjing_creator_projects/script-workflow";
@@ -129,7 +130,7 @@ export function ScriptSourceMapper({ frame, projectId, onBlocked }: {
             const node = event.currentTarget;
             if (node.selectionEnd > node.selectionStart) setRange({ start: data.excerpt.start + Array.from(node.value.slice(0, node.selectionStart)).length, end: data.excerpt.start + Array.from(node.value.slice(0, node.selectionEnd)).length });
           }} />
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><button className={button} disabled={busy || data.excerpt.start === data.source.start} onClick={() => setOffset(Math.max(data.source.start, data.excerpt.start - 4000))}>{t("previous")}</button><span>{data.excerpt.start}–{data.excerpt.end} / {data.source.end}</span><button className={button} disabled={busy || data.excerpt.end === data.source.end} onClick={() => setOffset(data.excerpt.end)}>{t("next")}</button></div>
+          <SequentialPagination summary={<>{data.excerpt.start}–{data.excerpt.end} / {data.source.end}</>} disabled={busy} previousLabel={t("previous")} nextLabel={t("next")} previous={data.excerpt.start > data.source.start ? () => setOffset(Math.max(data.source.start, data.excerpt.start - 4000)) : undefined} next={data.excerpt.end < data.source.end ? () => setOffset(data.excerpt.end) : undefined} />
         </section>
       </div>
     </>}
