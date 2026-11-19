@@ -136,6 +136,7 @@ MESSAGES = {
     "script_ai_structure_invalid": "AI 返回的剧本缺少有效场景或段落，未保存该结果，请重试。",
     "script_prefix_content_unparsed": "首场景前仍有未结构化正文，请先将其改编为场景与段落。",
     "script_paragraph_text_required": "剧本段落正文不能为空。",
+    "script_source_is_path": "这里只收到了文件路径。请通过文件选择器上传原文件，或粘贴小说、剧本的正文。",
     "project_not_found": "项目 '{name}' 不存在或未初始化",
     "resource_not_found": "请求的资源不存在",
     "overview_ai_response_invalid": "AI 返回内容无法解析为项目概述，请重试或更换模型/供应商",

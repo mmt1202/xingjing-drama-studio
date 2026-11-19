@@ -136,6 +136,7 @@ MESSAGES = {
     "script_ai_structure_invalid": "The AI screenplay lacks valid scenes or paragraphs. It was not saved. Please retry.",
     "script_prefix_content_unparsed": "Unstructured text remains before the first scene. Adapt it into scenes and paragraphs first.",
     "script_paragraph_text_required": "Screenplay paragraphs must contain text.",
+    "script_source_is_path": "Only a file path was received. Choose the original file or paste the novel or screenplay text.",
     "project_not_found": "Project '{name}' does not exist or is not initialized",
     "resource_not_found": "The requested resource does not exist",
     "overview_ai_response_invalid": "The AI response could not be parsed into a project overview. Please retry or switch to a different model/provider",

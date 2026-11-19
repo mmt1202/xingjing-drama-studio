@@ -1,4 +1,5 @@
 import type { ProjectSetup } from "./types";
+import { isSourceFilePath } from "./source-input";
 
 export function initialSetup(ownerId: string): ProjectSetup {
   return {
@@ -15,7 +16,7 @@ export function initialSetup(ownerId: string): ProjectSetup {
 export function missingSetup(name: string, value: ProjectSetup): string[] {
   const issues: string[] = [];
   if (!name.trim()) issues.push("missingName");
-  if (["novel", "script"].includes(value.sourceKind) && !value.sourceText.trim()) issues.push("missingSource");
+  if (["novel", "script"].includes(value.sourceKind) && (!value.sourceText.trim() || isSourceFilePath(value.sourceText))) issues.push("missingSource");
   if (value.sourceKind === "template" && !value.preset) issues.push("missingPreset");
   if (!value.subtitleLanguages.length) issues.push("missingLanguage");
   return issues;

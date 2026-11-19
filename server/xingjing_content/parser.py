@@ -14,14 +14,10 @@ from .models import (
     SourceMapping,
     ValidationIssue,
 )
+from .recognition import cover_line, scene_heading
 
-_HEADING = re.compile(r"^(?:#{1,6}\s*)?场景[：:]\s*(.+?)\s*$")
 _SPEECH = re.compile(r"^([^：:\n]{1,40})[：:]\s*(.*)$")
 _SENSITIVE_TERMS = ("暴力", "自杀", "毒品", "色情", "赌博")
-
-
-def match_scene_heading(line: str) -> re.Match[str] | None:
-    return _HEADING.match(line)
 
 
 @dataclass(slots=True)
@@ -42,22 +38,11 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
         offset += len(raw_line)
         if not stripped:
             continue
-        heading_match = match_scene_heading(stripped)
-        if heading_match:
-            parts = [part.strip() for part in heading_match.group(1).split("｜")]
-            scenes.append(
-                _SceneBuilder(
-                    heading=SceneHeading(
-                        location=parts[0],
-                        time_of_day=parts[1] if len(parts) > 1 else None,
-                        setting=parts[2] if len(parts) > 2 else None,
-                    ),
-                    paragraphs=[],
-                )
-            )
+        if parts := scene_heading(stripped):
+            scenes.append(_SceneBuilder(SceneHeading(*parts), []))
             continue
         if not scenes:
-            if not re.match(r"^#{1,6}\s+\S", stripped):
+            if not cover_line(stripped):
                 prefix_content = True
             continue
         speech_match = _SPEECH.match(stripped)
@@ -67,9 +52,9 @@ def parse_script(content: str, *, version_number: int, change_summary: str) -> S
         if speech_match:
             label, text = speech_match.groups()
             label = label.strip()
-            if label.casefold() in {"旁白", "narration"}:
+            if label.casefold() in {"旁白", "画外音", "narration", "voiceover", "lời dẫn"}:
                 kind = "narration"
-            elif label.casefold() in {"动作", "action"}:
+            elif label.casefold() in {"动作", "動作", "action", "hành động"}:
                 kind = "action"
             else:
                 kind = "dialogue"

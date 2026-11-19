@@ -1,6 +1,7 @@
 """Stable chapter coordinates and complete coverage for normalized source text."""
 
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
@@ -101,14 +102,56 @@ def uncovered_ranges(
     return [(start, end) for start, end in available if text[start:end].strip()]
 
 
+def _within_limit(text: str, start: int, end: int, limit: int) -> list[tuple[int, int]]:
+    parts = (end - start + limit - 1) // limit
+    if parts <= 1:
+        return [(start, end)]
+    # Prefer sentence or paragraph boundaries while leaving enough room for every remaining part.
+    stops = [start + match.end() for match in re.finditer(r"\n+|[。！？.!?][”’」』\"']*\s*", text[start:end])]
+    spans = []
+    for remaining in range(parts - 1, 0, -1):
+        low, high = max(start + 1, end - remaining * limit), min(start + limit, end - remaining)
+        target = start + (end - start) // (remaining + 1)
+        index = bisect_left(stops, target)
+        nearby = [point for point in stops[max(0, index - 1) : index + 1] if low <= point <= high]
+        cut = min(nearby, key=lambda point: abs(point - target)) if nearby else target
+        spans.append((start, cut))
+        start = cut
+    return [*spans, (start, end)]
+
+
 def split_ranges(
-    text: str, available: list[tuple[int, int]], count: int, structure: tuple[SourceChapter, ...]
+    text: str,
+    available: list[tuple[int, int]],
+    count: int,
+    structure: tuple[SourceChapter, ...],
+    *,
+    max_characters: int | None = None,
 ) -> list[tuple[int, int]]:
     """Partition every selected uncovered span without crossing already allocated content."""
     if type(count) is not int or not 1 <= count <= 200 or not available:
         raise SourceStructureError("SOURCE_PLAN_COUNT_INVALID")
     if count < len(available):
         raise SourceStructureError("SOURCE_PLAN_COUNT_TOO_SMALL")
+    chapter_ranges = []
+    for start, end in available:
+        selected_chapters = [
+            chapter
+            for chapter in structure
+            if chapter.kind == "heading" and chapter.start < end and chapter.end > start
+        ]
+        # Keep an opening title or preface with its first chapter, including partially allocated sources.
+        boundaries = [start, *(chapter.start for chapter in selected_chapters[1:]), end]
+        chapter_ranges.extend(zip(boundaries, boundaries[1:]))
+    if (
+        max_characters
+        and sum((end - start + max_characters - 1) // max_characters for start, end in chapter_ranges) == count
+    ):
+        bounded = [span for start, end in chapter_ranges for span in _within_limit(text, start, end, max_characters)]
+        if all(text[start:end].strip() for start, end in bounded):
+            return bounded
+    if len(chapter_ranges) == count:
+        return chapter_ranges
     headings = {chapter.start for chapter in structure if chapter.kind == "heading"}
     choices = []
     for start, end in available:

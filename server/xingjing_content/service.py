@@ -17,6 +17,7 @@ from .models import (
     director_profile_digest,
 )
 from .parser import parse_script
+from .recognition import path_only
 from .repository import FileContentRepository
 
 
@@ -96,6 +97,8 @@ class ContentService:
         fingerprint = _fingerprint(command)
 
         def create(scripts: dict[str, ScriptDocument]) -> tuple[dict[str, ScriptDocument], ScriptDocument]:
+            if path_only(command.content):
+                raise ValueError("SCRIPT_SOURCE_IS_PATH")
             script_id = str(uuid.uuid4())
             version = parse_script(command.content, version_number=1, change_summary="导入原文")
             script = ScriptDocument(
@@ -126,7 +129,10 @@ class ContentService:
                 version_number=script.current_version.number + 1,
                 change_summary=command.change_summary,
             )
-            if version.source_content == script.current_version.source_content:
+            if (
+                version.source_content == script.current_version.source_content
+                and version.scenes == script.current_version.scenes
+            ):
                 version = replace(version, source_attributions=script.current_version.source_attributions)
             revised = replace(
                 script,
@@ -294,6 +300,7 @@ class ContentService:
                 analysis=command.analysis,
                 source_attributions=script.current_version.source_attributions
                 if parsed.source_content == script.current_version.source_content
+                and parsed.scenes == script.current_version.scenes
                 else (),
             )
             revised = replace(

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSetupTranslation } from "./setup-i18n";
+import { isSourceFilePath } from "./source-input";
+import { useRecognitionTranslation } from "./recognition-i18n";
 import { useControlTranslation } from "./control-i18n";
 import type { ProjectSetup, ProjectSetupOptions, SessionContext } from "./types";
 
@@ -16,6 +18,7 @@ export function ProjectSetupFields({ step, name, onName, value, patch, context, 
   onReadingFile: (reading: boolean) => void;
 }) {
   const { t } = useSetupTranslation();
+  const { t: recognition } = useRecognitionTranslation();
   const { t: controlText } = useControlTranslation();
   const [fileError, setFileError] = useState(false);
   const readSequence = useRef(0);
@@ -77,6 +80,7 @@ export function ProjectSetupFields({ step, name, onName, value, patch, context, 
         <option value="">{t("missingPreset")}</option>{["suspense", "comic", "brand"].map((preset) => <option key={preset} value={preset}>{t(`preset_${preset}`)}</option>)}
       </select></Field>}
       {["novel", "script"].includes(value.sourceKind) && <div className="space-y-3">
+        {isSourceFilePath(value.sourceText) && <p role="status" className="text-sm text-amber-200">{recognition("pathHint")}</p>}
         <Field label={t("sourceText")} help={t("sourceHelp")}><textarea className={setupInput + " min-h-52 leading-6"} maxLength={1_000_000} value={value.sourceText} aria-invalid={invalidFields.includes("sourceText")} onChange={(event) => { readSequence.current++; patch({ sourceText: event.target.value }); }} /></Field>
         <Field label={t("readFile")}><input className={setupInput} type="file" accept=".txt,text/plain" onChange={(event) => { void readFile(event.target.files?.[0]); event.target.value = ""; }} /></Field>
         {fileError && <p role="alert" className="text-sm text-rose-300">{t("fileError")}</p>}

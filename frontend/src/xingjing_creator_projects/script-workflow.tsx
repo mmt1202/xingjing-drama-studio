@@ -7,6 +7,7 @@ import { useProjectNavigationBlocker } from "./ProjectFlowShell";
 import { useScriptTranslation } from "./script-i18n";
 import type { ContentAiReadiness, CreatorProjectsPort, ScriptDocument, ScriptVersion, SessionContext } from "./types";
 import { useScriptExperienceTranslation } from "./script-experience-i18n";
+import { AI_CHARACTER_LIMIT } from "./source-input";
 
 export interface ScriptPageProps { api: CreatorProjectsPort; projectId: string; selectedScriptId?: string; selectedDirectorCandidateId?: string; onNavigate?: (target: string) => void }
 export const scriptSteps = [
@@ -17,7 +18,6 @@ export const scriptPanel = "rounded-[14px] border border-white/10 bg-[var(--xj-s
 export const scriptButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/15 px-4 py-2 text-sm text-slate-200 hover:border-violet-300/50 focus-visible:outline-2 focus-visible:outline-violet-300 disabled:cursor-not-allowed disabled:opacity-40";
 export const scriptPrimary = scriptButton + " xj-shell-button--primary text-white";
 export const scriptField = "mt-2 w-full min-w-0 rounded-xl border border-white/15 bg-[var(--xj-bg-elevated,#0c1018)] px-3 py-2.5 text-sm text-slate-100 outline-none focus-visible:border-violet-300 disabled:opacity-50";
-export const AI_CHARACTER_LIMIT = 20_000;
 export const aiCharacterLimit = (script: ScriptDocument) => Number.isSafeInteger(script.aiInputLimitCharacters) && (script.aiInputLimitCharacters ?? 0) > 0 ? script.aiInputLimitCharacters! : AI_CHARACTER_LIMIT;
 export const characterCount = (text: string) => Array.from(text).length;
 export const currentVersion = (script: ScriptDocument): ScriptVersion | undefined => script.versions.at(-1);
@@ -68,6 +68,13 @@ export function ScriptError({ error, retry, reload }: { error: unknown; retry?: 
   const message = code === "CONTENT_AI_MODEL_FAILED" ? experience("modelFailed") : code === "CONTENT_AI_CONFIGURATION_UNAVAILABLE" ? experience("configurationFailed") : t(key, { limit: problem?.details?.maxCharacters ?? 2000 });
   return <div role="alert" className="rounded-xl border border-amber-400/30 bg-amber-400/[.04] p-4 text-sm leading-6 text-amber-100"><p>{error instanceof AuthSessionError ? error.message : message}</p>{error instanceof Error && !(error instanceof AuthSessionError) && error.message && error.message !== code && error.message !== message ? <p className="mt-2 whitespace-pre-wrap text-xs text-slate-400">{error.message}</p> : null}{code ? <p className="mt-2 break-all font-mono text-xs text-slate-500">{t("diagnostic", { code })}</p> : null}{problem?.requestId ? <p className="mt-1 font-mono text-xs text-slate-500">{t("requestId", { id: problem.requestId })}</p> : null}<div className="mt-3 flex flex-wrap gap-2">{retry ? <button type="button" className={scriptButton} onClick={retry}>{t("retry")}</button> : null}{reload ? <button type="button" className={scriptButton} onClick={reload}>{t(code === "VERSION_CONFLICT" ? "conflictRead" : "refresh")}</button> : null}</div></div>;
 }
+export function MutationFeedback({ mutation, reload, allowRetry = true }: { mutation: ReturnType<typeof useScriptMutation>; reload: () => void; allowRetry?: boolean }) {
+  const { t } = useScriptTranslation();
+  const [confirm, setConfirm] = useState(false);
+  const conflict = mutation.error?.reason instanceof CreatorApiError && mutation.error.reason.code === "VERSION_CONFLICT";
+  return <>{mutation.error ? <ScriptError error={mutation.error.reason} retry={conflict || mutation.pending || !allowRetry ? undefined : () => void mutation.retry()} reload={mutation.pending ? undefined : reload} /> : null}{mutation.uncertain && !mutation.pending ? <div className="mt-3">{confirm ? <><p className="text-xs leading-6 text-amber-200">{t("uncertainDiscard")}</p><div className="mt-3 flex gap-2"><button type="button" className={scriptButton} onClick={() => { setConfirm(false); mutation.clear(); }}>{t("acknowledgeResult")}</button><button type="button" className={scriptButton} onClick={() => setConfirm(false)}>{t("keep")}</button></div></> : <button type="button" className={scriptButton} onClick={() => setConfirm(true)}>{t("reviewRecovery")}</button>}</div> : null}{mutation.saved && mutation.saved !== "compare" ? <SavedNotice /> : null}</>;
+}
+
 export function TextPreview({ text, label }: { text: string; label?: string }) {
   const { t } = useScriptTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -103,7 +110,7 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
   const [readiness, setReadiness] = useState<{ api: CreatorProjectsPort; projectId: string; value: ContentAiReadiness }>();
   const [readinessError, setReadinessError] = useState<unknown>();
   const [readinessChecking, setReadinessChecking] = useState(false), [readinessRevision, setReadinessRevision] = useState(0);
-  const needsAi = page === "script-lab" || page === "rewrite" || page === "ai-director";
+  const needsAi = page === "script-import" || page === "script-lab" || page === "rewrite" || page === "ai-director";
   useEffect(() => {
     if (!needsAi) return;
     const abort = new AbortController();
@@ -162,7 +169,7 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
     <nav aria-label={t("workflow")} className="flex flex-wrap gap-2">{scriptSteps.map(([step, key]) => <button type="button" key={step} className={scriptButton + (step === page ? " border-violet-300/50 bg-violet-400/10 text-violet-100" : "")} aria-current={step === page ? "step" : undefined} disabled={blocked || !onNavigate} onClick={() => navigate(step)}>{t(key)}</button>)}</nav>
     {blocked ? <p role="status" className="text-xs leading-6 text-amber-200">{t("unsaved")}</p> : null}
     <div className="flex flex-wrap items-end gap-3"><label className="min-w-56 flex-1 text-xs text-slate-400">{t("choose")}<select className={scriptField} value={selected ?? ""} disabled={blocked || reading} onChange={(event) => { const id = event.target.value || undefined; setSelection({ prop: selectedScriptId, id }); setDetail(undefined); if (id) navigate(page, id); }}><option value="">{t("choosePlaceholder")}</option>{selected && !items?.some((item) => item.id === selected) ? <option value={selected}>{script?.title ?? selected}</option> : null}{items?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.id} · v{currentVersion(item)?.number ?? "—"}</option>)}</select></label><button type="button" className={scriptButton} disabled={blocked || reading} onClick={() => setReload((value) => value + 1)}><RefreshCw size={15} aria-hidden="true" />{t("refresh")}</button></div>
-    {script ? <section className={scriptPanel}><p className="text-xs text-slate-500">{t("current")}</p><h2 className="mt-2 break-words text-lg font-semibold">{script.title}</h2><p className="mt-2 break-all font-mono text-[11px] text-slate-500">{t("scriptId")}：{script.id}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400"><span>{t("version", { number: currentVersion(script)?.number ?? "—" })}</span><span>{t("revision", { number: script.revision })}</span><span className={script.lockedVersionNumber ? "text-violet-200" : "text-amber-200"}>{script.lockedVersionNumber ? t("frozenVersion", { number: script.lockedVersionNumber }) : t("notFrozen")}</span></div></section> : null}
+    {script ? <section className={scriptPanel}><p className="text-xs text-slate-500">{t("current")}</p><h2 className="mt-2 break-words text-lg font-semibold">{script.title}</h2><p className="mt-2 break-all font-mono text-[11px] text-slate-500">{script.sourceDocument.filename} · {t("textLength", { count: characterCount(contentOf(script)) })} · {script.id}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400"><span>{t("version", { number: currentVersion(script)?.number ?? "—" })}</span><span>{t("revision", { number: script.revision })}</span><span className={script.lockedVersionNumber ? "text-violet-200" : "text-amber-200"}>{script.lockedVersionNumber ? t("frozenVersion", { number: script.lockedVersionNumber }) : t("notFrozen")}</span></div></section> : null}
     {!context.permissions.includes("script.manage") ? <p role="status" className="text-sm text-slate-400">{t("readonly")}</p> : null}
     {error ? <ScriptError error={error} reload={() => { void read(); }} /> : null}
     {!items && !error ? <p role="status" className="py-8 text-slate-400">{t("loading")}</p> : null}

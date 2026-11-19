@@ -1,4 +1,4 @@
-import type { CreatorProjectsPort, ContentAiReadiness, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, SessionContext } from "./types";
+import type { CreatorProjectsPort, ContentAiReadiness, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, ScriptRecognition, SessionContext } from "./types";
 import i18n from "@/i18n";
 import { createAuthenticatedFetcher } from "@/utils/auth";
 
@@ -102,6 +102,9 @@ export function createCreatorProjectsApi({ fetcher: providedFetcher, workspaceId
     getScript: (id, scriptId, signal) => request<{ script: ScriptDocument }>(
       `/projects/${encodeURIComponent(id)}/script-documents/${encodeURIComponent(scriptId)}`, { signal },
     ).then((r) => r.value.script),
+    inspectScriptSource: (id, scriptId, signal) => request<ScriptRecognition>(
+      `/projects/${encodeURIComponent(id)}/script-documents/${encodeURIComponent(scriptId)}/recognition`, { signal },
+    ).then((r) => r.value),
     importScriptFile: async (id, title, file) => {
       const form = new FormData();
       form.set("title", title);

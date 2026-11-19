@@ -54,7 +54,7 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   const [search, setSearch] = useState(() => sessionStorage.getItem(`${storagePrefix}:search`) ?? "");
   const [status, setStatus] = useState(() => sessionStorage.getItem(`${storagePrefix}:status`) ?? "");
   const [page, setPage] = useState(1);
-  const [source, setSource] = useState("");
+  const source = selectedScriptId ? data?.sources.find(item => item.scriptId === selectedScriptId)?.path ?? "" : "";
   useProjectNavigationBlocker(dirty || busy || Boolean(planningBlocked));
   const [checking, setChecking] = useState(false);
   const [costs, setCosts] = useState<EpisodeCosts>();
@@ -77,9 +77,8 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
       if (!mounted.current || sequence !== readSequence.current) return;
       setError(undefined); setData(result); setDraft(result.items); draftRef.current = result.items; setDirty(false); setActivatePlans(false);
       const remembered = Number(sessionStorage.getItem(`${storagePrefix}:active`));
-      setActive(initialEpisodeId !== undefined ? result.items.find((item) => item.episode === initialEpisodeId)?.episode : result.items.find((item) => item.episode === remembered)?.episode);
-      const originating = selectedScriptId ? result.sources.filter((item) => item.scriptId === selectedScriptId) : [];
-      setSource(originating.length === 1 ? originating[0].path : "");
+      const requestedEpisode = initialEpisodeId ?? (selectedScriptId ? result.items.find(item => item.workingScript?.scriptId === selectedScriptId)?.episode : remembered);
+      setActive(result.items.find(item => item.episode === requestedEpisode)?.episode);
       setSelected([]); setChecking(false); setActivatePlans(false);
     } catch (reason) { if (mounted.current && sequence === readSequence.current) setError(reason as Error); }
     finally { if (mounted.current && sequence === readSequence.current) setBusy(false); }
@@ -197,7 +196,7 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
     {!data && !error && <p className="p-8 text-center text-slate-400">{t("loading")}</p>}
     {data && <>
       <div className="grid grid-cols-2 divide-x divide-[#2A2E3A] rounded-xl border border-[#2A2E3A] bg-[#12141B] py-4 md:grid-cols-4">{[["total", draft.length], ["scripted", draft.filter((e) => e.scriptStatus === "generated" || e.production?.scriptVersionId).length], ["inProduction", draft.filter((e) => ["in_production", "storyboard_ready"].includes(stateFor(e))).length], ["completed", draft.filter((e) => e.status === "completed" || e.production?.finalVideoVersionId).length]].map(([label, value]) => <div key={label} className="px-5"><p className="text-xs text-slate-400">{t(String(label))}</p><p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p></div>)}</div>
-      {mode === "editor" && <SourcePlanPanel workspaceId={workspaceId} actorId={actorId} projectId={projectId} episodes={data} initialSource={source}
+      {mode === "editor" && <SourcePlanPanel key={selectedScriptId ?? ""} workspaceId={workspaceId} actorId={actorId} projectId={projectId} episodes={data} initialSource={source}
         blocked={dirty || workspaceBusy || productionBusy} canManage={canManage && data.permissions?.canCreateWorkingScript === true}
         onBusy={setPlanningBusy} onBlocked={setPlanningBlocked} onRefresh={load} onNavigate={go} />}
       <div className="flex flex-wrap items-center gap-2"><input aria-label={t("search")} placeholder={t("search")} className={`${input} !mt-0 !w-auto min-w-60 flex-1`} value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:search`, e.target.value); }} /><select aria-label={t("all")} className={`${input} !mt-0 !w-auto`} value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:status`, e.target.value); }}><option value="">{t("all")}</option>{["draft", "scripted", "in_production", "completed", "script_frozen", "storyboard_ready", "final_ready", "pending_review", "review_blocked", "package_ready"].map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</select><button className={button} disabled={!canAdd} onClick={() => add()}><Plus size={15} className="mr-1 inline" />{t("add")}</button><button className={button} title={t("copyHelp")} disabled={!canAdd || draft.length === 0} onClick={() => add(true)}>{t("copy")}</button><button className={button} disabled={!canManage || !dirty || busy || !!planningBlocked || !!invalid || (error instanceof CreatorApiError && error.status === 409 && !budgetProblem(error))} onClick={() => void save()}>{budgetDirty ? budgetText("saveLimits") : t("save")}</button></div>

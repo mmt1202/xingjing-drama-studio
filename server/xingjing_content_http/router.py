@@ -25,6 +25,7 @@ from server.xingjing_content import (
 from server.xingjing_content.ai import MAX_AI_INPUT_CHARS, AnalyzedScript, ContentAiInputTooLarge
 from server.xingjing_content.ingest import extract_script_text
 from server.xingjing_content.models import ScriptDocument, ScriptVersion
+from server.xingjing_content.recognition import source_recognition
 from server.xingjing_identity_context import TrustedWorkspaceContext
 
 from .dependencies import ContentHttpDependencies, ContentRuntimeUnavailable
@@ -117,7 +118,15 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
             offset=offset,
             limit=limit,
         )
-        return _success(context, {"scripts": [_script(item, request) for item in page.items]}, total=page.total)
+        return _success(
+            context, {"scripts": [_script(item, request, recognition=False) for item in page.items]}, total=page.total
+        )
+
+    @result.get("/projects/{project_id}/script-documents/{script_id}/recognition")
+    async def inspect_source(request: Request, project_id: str, script_id: str):
+        context = await _context(request, project_id, dependencies, "script.view")
+        document = _project_script(dependencies.service_for(context), context, project_id, script_id)
+        return _success(context, source_recognition(document))
 
     @result.get("/projects/{project_id}/scripts/{script_id}")
     @result.get("/projects/{project_id}/script-documents/{script_id}")
@@ -420,13 +429,14 @@ def _profile(payload: Mapping[str, object]) -> DirectorProfile:
     )
 
 
-def _script(document: ScriptDocument, request: Request) -> dict[str, object]:
+def _script(document: ScriptDocument, request: Request, *, recognition: bool = True) -> dict[str, object]:
     return {
         "id": document.script_id,
         "projectId": document.project_id,
         "title": document.title,
         "revision": document.revision,
         "sourceDocument": asdict(document.source_document),
+        **({"recognition": source_recognition(document)} if recognition else {}),
         **({"recoveryOrigin": asdict(document.recovery_origin)} if document.recovery_origin else {}),
         "versions": [_version_payload(item, document, request) for item in document.versions],
         "aiInputLimitCharacters": MAX_AI_INPUT_CHARS,
@@ -636,6 +646,7 @@ def _error_response(
 
 def _error_message(code: str, request: Request) -> str:
     translated = {
+        "SCRIPT_SOURCE_IS_PATH": "script_source_is_path",
         "DIRECTOR_CANDIDATE_NOT_FOUND": "director_candidate_not_found",
         "DIRECTOR_CANDIDATE_STALE": "director_candidate_stale",
         "DIRECTOR_PROFILE_INCOMPLETE": "director_profile_incomplete",

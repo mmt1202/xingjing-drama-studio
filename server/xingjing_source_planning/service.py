@@ -19,6 +19,7 @@ from lib.episode_ledger import SourceRange
 from lib.i18n import _ as translate
 from lib.project_manager import ProjectManager
 from lib.source_structure import SourceStructureError, chapters, split_ranges, uncovered_ranges
+from server.xingjing_content.ai import MAX_AI_INPUT_CHARS
 from server.xingjing_content.models import ScriptDocument, SourceDocument
 from server.xingjing_content.parser import parse_script
 from server.xingjing_content_persistence.repository import AuditContext, SqlAlchemyContentRepository
@@ -113,6 +114,7 @@ class SourcePlanningService:
             "snapshotId": identity,
             "chapters": [asdict(item) for item in structure],
             "episodeRevision": snapshot["revision"],
+            "aiInputLimitCharacters": MAX_AI_INPUT_CHARS,
             "sourceChanged": changed,
             "uncoveredRanges": available,
             "uncoveredCharacters": sum(end - start for start, end in available),
@@ -172,7 +174,7 @@ class SourcePlanningService:
                     chosen = [(item.start, item.end) for item in structure if item.id in command.chapter_ids]
                 covered = [(item["sourceRange"]["start"], item["sourceRange"]["end"]) for item in affected]
                 available = uncovered_ranges(content, covered, chosen)
-                ranges = split_ranges(content, available, command.count, structure)
+                ranges = split_ranges(content, available, command.count, structure, max_characters=MAX_AI_INPUT_CHARS)
             except SourceStructureError as error:
                 raise EpisodeEditError(str(error)) from error
             at, plan_id = datetime.now(UTC), str(uuid4())
@@ -194,7 +196,15 @@ class SourcePlanningService:
             candidates = []
             for index, (start, end) in enumerate(ranges):
                 chapter_matches = [item for item in structure if item.start < end and item.end > start]
-                title = next((item.title for item in chapter_matches if item.title and item.start == start), None)
+                includes_preface = chapter_matches[0].kind == "preamble"
+                title = next(
+                    (
+                        item.title
+                        for item in chapter_matches
+                        if item.title and (item.start == start or includes_preface)
+                    ),
+                    None,
+                )
                 number = current["nextEpisode"] + index
                 candidates.append(
                     {

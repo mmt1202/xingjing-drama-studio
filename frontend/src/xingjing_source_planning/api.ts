@@ -19,7 +19,7 @@ export interface Plan {
   result: PlanResult | null; createdAt: string; canManage: boolean; confirmationPending: boolean;
   pendingConfirmation: { key: string; payload: ConfirmPlan } | null;
 }
-export interface Catalog { source: EpisodeSource; snapshotId: string; chapters: Chapter[]; episodeRevision: string; sourceChanged: boolean; uncoveredRanges: [number, number][]; uncoveredCharacters: number; coordinateSystem: string }
+export interface Catalog { source: EpisodeSource; snapshotId: string; chapters: Chapter[]; episodeRevision: string; sourceChanged: boolean; uncoveredRanges: [number, number][]; uncoveredCharacters: number; coordinateSystem: string; aiInputLimitCharacters?: number }
 export interface PlanHistory { items: { id: string; sourceLabel: string; count: number; createdAt: string; applied: boolean; confirmationPending?: boolean }[]; canManage: boolean }
 export interface SnapshotExcerpt { snapshotId: string; source: EpisodeSource; start: number; end: number; text: string; chapters: Chapter[]; coordinateSystem: string }
 

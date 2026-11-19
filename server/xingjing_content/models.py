@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, cast
+
+from .recognition import cover_line, scene_heading
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,9 +126,9 @@ class ScriptVersion:
     def source_preamble(self) -> str:
         headings = []
         for line in self.source_content.splitlines():
-            if re.match(r"^(?:#{1,6}\s*)?场景[：:]", line.strip()):
+            if scene_heading(line):
                 break
-            if re.match(r"^#{1,6}\s+\S", line.strip()):
+            if cover_line(line.strip()):
                 headings.append(line.strip())
         return "\n".join(headings)
 

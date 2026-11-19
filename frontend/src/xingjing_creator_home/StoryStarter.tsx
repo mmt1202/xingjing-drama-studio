@@ -4,6 +4,8 @@ import { useAuthStore } from "@/stores/auth-store";
 import { ArrowUpRight, FileUp } from "lucide-react";
 import { createCreatorProjectsApi, CreatorApiError } from "@/xingjing_creator_projects/api";
 import { initialSetup } from "@/xingjing_creator_projects/setup-state";
+import { isSourceFilePath } from "@/xingjing_creator_projects/source-input";
+import { useRecognitionTranslation } from "@/xingjing_creator_projects/recognition-i18n";
 import { homeModes, type HomePreferences } from "./HomePreferences";
 import { homeButton, homeField, useHomeTranslation } from "./i18n";
 import { useCreatorWorkspace, useWorkspaceNavigationGuard } from "./WorkspaceFrame";
@@ -12,6 +14,7 @@ export function StoryStarter({ defaultMode }: { defaultMode: HomePreferences["de
   const { access, go } = useCreatorWorkspace();
   const sessionEpoch = useAuthStore((state) => state.sessionEpoch);
   const { t } = useHomeTranslation();
+  const { t: recognition } = useRecognitionTranslation();
   const api = useMemo(() => createCreatorProjectsApi({ workspaceId: access.workspaceId, getAccessToken: () => getTokenForSession(sessionEpoch) }), [access.workspaceId, sessionEpoch]);
   const [name, setName] = useState("");
   const [story, setStory] = useState("");
@@ -30,6 +33,7 @@ export function StoryStarter({ defaultMode }: { defaultMode: HomePreferences["de
     event.preventDefault(); if (busy || reading || !canCreate) return;
     if (!name.trim()) { setError("nameRequired"); return; }
     if (!story.trim()) { setError("storyRequired"); return; }
+    if (isSourceFilePath(story)) return;
     setBusy(true); setError(undefined);
     try {
       const configuration = { ...initialSetup(access.actorId), sourceKind: "script", sourceText: story.trim(), episodeCount: mode === "series" ? 3 : 1, projectType: mode === "comic" ? "comic" : "drama", visualStyle: mode === "realistic" ? t("realistic") : "" };
@@ -64,7 +68,7 @@ export function StoryStarter({ defaultMode }: { defaultMode: HomePreferences["de
           </div>
         </fieldset>
         {dirty && <button type="button" className="mt-3 text-xs text-slate-400 underline underline-offset-4" disabled={busy || reading} onClick={() => { setName(""); setStory(""); setMode(undefined); setError(undefined); }}>{t("cancel")}</button>}
-        {error && <p role="alert" className="mt-3 text-sm text-amber-200">{t(error)}</p>}
+        {isSourceFilePath(story) ? <p role="status" className="mt-3 text-sm text-amber-200">{recognition("pathHint")}</p> : error && <p role="alert" className="mt-3 text-sm text-amber-200">{t(error)}</p>}
         {!canCreate && <p className="mt-3 text-sm text-amber-200">{t("forbidden")}</p>}
       </form>
       <p className="xj-story-note mt-3 text-xs leading-5 text-slate-500">{t("startHint")}</p>

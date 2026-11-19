@@ -6,7 +6,8 @@ from dataclasses import dataclass, replace
 
 from lib.episode_editor import EpisodeEditError
 from server.xingjing_content.models import ScriptScene, ScriptVersion, SourceAttribution
-from server.xingjing_content.parser import match_scene_heading, parse_script
+from server.xingjing_content.parser import parse_script
+from server.xingjing_content.recognition import scene_heading
 from server.xingjing_source_planning.mapping import targets
 
 from .contracts import Change
@@ -38,14 +39,26 @@ class Layout:
         self.spans: dict[str, tuple[int, int]] = {}
         self.parents: dict[str, ScriptScene] = {}
         scene_index, paragraph_index = -1, 0
+        mapped_lines = {mapping.source_start for mapping in version.source_mappings}
+        offset = 0
         for index, raw in enumerate(version.source_content.splitlines(keepends=True)):
             stripped = raw.strip()
             identity = None
-            if match_scene_heading(stripped):
+            start = offset + len(raw) - len(raw.lstrip())
+            offset += len(raw)
+            # Use the stored objects to distinguish historical action lines and preambles from headings.
+            next_index = scene_index + 1
+            heading = scene_heading(stripped) if start not in mapped_lines else None
+            if (
+                heading
+                and next_index < len(version.scenes)
+                and (
+                    heading[0] == version.scenes[next_index].heading.location
+                    or stripped.lstrip("#").lstrip().startswith(("场景：", "场景:"))
+                )
+            ):
                 scene_index += 1
                 paragraph_index = 0
-                if scene_index >= len(version.scenes):
-                    raise EpisodeEditError("SCRIPT_RECOVERY_STRUCTURE_CHANGED", 409)
                 scene = version.scenes[scene_index]
                 identity = scene.scene_id
                 self.spans[identity] = (index, index + 1)

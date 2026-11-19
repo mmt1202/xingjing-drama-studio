@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from pydantic.alias_generators import to_camel
 
 from lib.project_manager import ProjectManager
+from server.xingjing_content.recognition import path_only
 
 
 class ProjectSetup(BaseModel):
@@ -88,7 +89,7 @@ def parse_setup(value: object, *, actor_id: str, draft: bool) -> ProjectSetup:
         if setup.source_kind not in {"novel", "script"}:
             setup.source_text = ""
         missing = []
-        if setup.source_kind in {"novel", "script"} and not setup.source_text.strip():
+        if setup.source_kind in {"novel", "script"} and (not setup.source_text.strip() or path_only(setup.source_text)):
             missing.append("sourceText")
         if setup.source_kind == "template" and not setup.preset:
             missing.append("preset")

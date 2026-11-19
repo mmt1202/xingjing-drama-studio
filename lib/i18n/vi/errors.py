@@ -136,6 +136,7 @@ MESSAGES = {
     "script_ai_structure_invalid": "Kịch bản AI thiếu cảnh hoặc đoạn hợp lệ. Kết quả chưa được lưu. Vui lòng thử lại.",
     "script_prefix_content_unparsed": "Còn văn bản chưa cấu trúc trước cảnh đầu tiên. Hãy chuyển thành cảnh và đoạn trước.",
     "script_paragraph_text_required": "Đoạn kịch bản phải có nội dung.",
+    "script_source_is_path": "Chỉ nhận được đường dẫn tệp. Hãy chọn tệp gốc hoặc dán nội dung tiểu thuyết hay kịch bản.",
     "project_not_found": "Dự án '{name}' không tồn tại hoặc chưa được khởi tạo",
     "resource_not_found": "Tài nguyên được yêu cầu không tồn tại",
     "overview_ai_response_invalid": "Không thể phân tích phản hồi của AI thành tổng quan dự án, vui lòng thử lại hoặc đổi mô hình/nhà cung cấp",

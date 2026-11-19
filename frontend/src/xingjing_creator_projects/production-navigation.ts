@@ -8,6 +8,13 @@ export function productionNavigationQuery({ path, currentPath, currentQuery, tar
 }) {
   const query = new URLSearchParams(targetQuery);
   const currentEpisode = currentQuery.get("episodeId");
+  const currentScriptId = currentQuery.get("scriptId");
+  const targetScriptId = query.get("scriptId");
+  if (targetScriptId && !query.has("episodeId") && episodeOverride === undefined && scriptRoutes.has(currentPath)) {
+    const switchedDocument = scriptRoutes.has(path) && targetScriptId !== currentScriptId
+      && !episodes.some(episode => String(episode.episode) === currentEpisode && episode.scriptId === targetScriptId);
+    if (path === "episode-split-editor" || switchedDocument) return query;
+  }
   const selectedId = episodeOverride !== undefined
     ? episodeOverride === null ? null : String(episodeOverride)
     : query.has("episodeId") ? query.get("episodeId") : inheritContext ? currentEpisode : null;
@@ -16,7 +23,6 @@ export function productionNavigationQuery({ path, currentPath, currentQuery, tar
   else if (selected) query.set("episodeId", String(selected.episode));
 
   // A script chosen within the same episode remains selected between script pages.
-  const currentScriptId = currentQuery.get("scriptId");
   if (inheritContext && episodeOverride === undefined && selectedId === currentEpisode && currentScriptId
     && scriptRoutes.has(path) && scriptRoutes.has(currentPath) && !query.has("scriptId")) {
     query.set("scriptId", currentScriptId);

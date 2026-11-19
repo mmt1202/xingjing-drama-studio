@@ -32,6 +32,14 @@ def extract_script_text(filename: str, content: bytes) -> tuple[str, str]:
 
 
 def _decode_text(content: bytes) -> str:
+    if content.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            text = content.decode("utf-16")
+        except UnicodeDecodeError as error:
+            raise ValueError("SCRIPT_FILE_ENCODING_UNSUPPORTED") from error
+        if "\x00" in text:
+            raise ValueError("SCRIPT_FILE_BINARY")
+        return text
     if b"\x00" in content:
         raise ValueError("SCRIPT_FILE_BINARY")
     for encoding in ("utf-8-sig", "utf-8", "gb18030"):
@@ -54,12 +62,22 @@ def _docx_text(content: bytes) -> str:
         raise ValueError("DOCX_INVALID") from error
     paragraphs: list[str] = []
     for paragraph in root.iter(f"{_WORD_NS}p"):
-        value = "".join(node.text or "" for node in paragraph.iter(f"{_WORD_NS}t")).strip()
+        parts = []
+        for node in paragraph.iter():
+            if node.tag == f"{_WORD_NS}t":
+                parts.append(node.text or "")
+            elif node.tag in {f"{_WORD_NS}br", f"{_WORD_NS}cr"}:
+                parts.append("\n")
+            elif node.tag == f"{_WORD_NS}tab":
+                parts.append("\t")
+        value = "".join(parts).strip()
         if value:
             paragraphs.append(value)
     return "\n".join(paragraphs)
 
 
 def _normalize(text: str) -> str:
-    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    lines = [
+        re.sub(r"[ \t]+", " ", line).strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    ]
     return "\n".join(lines).strip()
