@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CreatorProjectsPort, ScriptDocument, ScriptRecognition } from "./types";
 import { useRecognitionTranslation } from "./recognition-i18n";
-import { narrationDraft } from "./source-input";
+import { matchesScriptRecognition, narrationDraft } from "./source-input";
 import { aiCharacterLimit, completeScript, currentVersion, MutationFeedback, scriptButton, scriptPrimary, useScriptMutation, type ScriptFrameContext } from "./script-workflow";
 
 interface Props {
@@ -9,19 +9,12 @@ interface Props {
   page: "import" | "lab" | "director"; busy?: boolean; onBlocked?: (value: boolean) => void;
 }
 
-function matches(info: ScriptRecognition | undefined, script: ScriptDocument): info is ScriptRecognition {
-  return Boolean(info && info.scriptId === script.id && info.revision === script.revision
-    && info.version === currentVersion(script)?.number && ["screenplay", "chapters", "prose", "path"].includes(info.kind)
-    && [info.characterCount, info.sceneCount, info.chapterCount, info.paragraphCount].every(n => Number.isSafeInteger(n) && n >= 0)
-    && Array.isArray(info.chapterTitles));
-}
-
 export function ScriptRecognitionPanel({ api, script, frame, page, busy = false, onBlocked }: Props) {
   const { t } = useRecognitionTranslation(), save = useScriptMutation();
   const [loaded, setLoaded] = useState<ScriptRecognition>(), [error, setError] = useState(false), [reload, setReload] = useState(0);
   const [preview, setPreview] = useState<string>();
-  const supplied = matches(script.recognition, script) ? script.recognition : undefined;
-  const info = supplied ?? (matches(loaded, script) ? loaded : undefined);
+  const supplied = matchesScriptRecognition(script.recognition, script) ? script.recognition : undefined;
+  const info = supplied ?? (matchesScriptRecognition(loaded, script) ? loaded : undefined);
   const writing = Boolean(save.pending || save.uncertain);
   useEffect(() => { onBlocked?.(writing); return () => onBlocked?.(false); }, [writing, onBlocked]);
   useEffect(() => {
@@ -29,7 +22,7 @@ export function ScriptRecognitionPanel({ api, script, frame, page, busy = false,
     const controller = new AbortController();
     api.inspectScriptSource(script.projectId, script.id, controller.signal).then(result => {
       if (controller.signal.aborted) return;
-      if (!matches(result, script)) throw new Error("SCRIPT_RECOGNITION_CHANGED");
+      if (!matchesScriptRecognition(result, script)) throw new Error("SCRIPT_RECOGNITION_CHANGED");
       setLoaded(result); setError(false);
     }).catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();

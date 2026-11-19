@@ -58,6 +58,36 @@ class FileContentRepository:
         with portalocker.Lock(lock_path, mode="a", timeout=10):
             return self._scripts_from_state(self._read_state(state_path))
 
+    def get_script(self, workspace_id: str, script_id: str) -> ScriptDocument:
+        document = self.read_all(workspace_id).get(script_id)
+        if document is None or document.workspace_id != workspace_id:
+            raise KeyError("SCRIPT_NOT_FOUND")
+        return document
+
+    def script_catalog(
+        self, workspace_id: str, project_id: str, query: str, offset: int, limit: int
+    ) -> tuple[list[dict[str, object]], int]:
+        needle = query.casefold()
+        items = sorted(
+            (
+                doc
+                for doc in self.read_all(workspace_id).values()
+                if doc.workspace_id == workspace_id
+                and doc.project_id == project_id
+                and (needle in doc.title.casefold() or needle in doc.script_id.casefold())
+            ),
+            key=lambda doc: (doc.title, doc.script_id),
+        )
+        return [
+            {
+                "id": doc.script_id,
+                "title": doc.title,
+                "filename": doc.source_document.filename,
+                "lockedVersionNumber": doc.locked_version_number,
+            }
+            for doc in items[offset : offset + limit]
+        ], len(items)
+
     def list_audit(
         self,
         workspace_id: str,

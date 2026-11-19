@@ -1,14 +1,14 @@
 import { ScriptRecoveryPanel } from "@/xingjing_script_recovery/ScriptRecoveryPanel";
 import { getSessionEpoch } from "@/utils/auth";
 import { ScriptSourceMapper } from "@/xingjing_source_planning/ScriptSourceMapper";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useScriptTranslation } from "./script-i18n";
-import { AiReadinessNotice, ManualScriptFormat } from "./ScriptExperience";
-import { ScriptRecognitionPanel } from "./ScriptRecognitionPanel";
 import { useRecognitionTranslation } from "./recognition-i18n";
 import { isSourceFilePath } from "./source-input";
+import { AiReadinessNotice, ManualScriptFormat } from "./ScriptExperience";
+import { ScriptRecognitionPanel } from "./ScriptRecognitionPanel";
 import {
-  AiLimitNotice, NextStep, MutationFeedback, ScriptError, ScriptPageFrame, TextPreview, ValidationSummary,
+  AiLimitNotice, NextStep, MutationFeedback, ScriptPageFrame, TextPreview, ValidationSummary,
   characterCount, completeScript, contentOf, currentVersion, scriptButton, scriptField, scriptPanel, scriptPrimary,
   aiCharacterLimit, useScriptMutation, type ScriptFrameContext, type ScriptPageProps,
 } from "./script-workflow";
@@ -16,82 +16,7 @@ import type { ScriptComparison, ScriptDocument } from "./types";
 
 export { MutationFeedback } from "./script-workflow";
 
-export function ScriptImportPage(props: ScriptPageProps) {
-  const { t } = useScriptTranslation(), { t: copy } = useRecognitionTranslation();
-  const [file, setFile] = useState<File>(), [title, setTitle] = useState(""), [content, setContent] = useState("");
-  const [localError, setLocalError] = useState(""), [success, setSuccess] = useState<{ id: string; document?: ScriptDocument }>();
-  const [detailError, setDetailError] = useState<unknown>();
-  const input = useRef<HTMLInputElement>(null), submitted = useRef(false), completed = useRef(false);
-  const [discard, setDiscard] = useState(false);
-  const [autoAdapt, setAutoAdapt] = useState(false);
-  const mutation = useScriptMutation(), adaptation = useScriptMutation();
-  const adapting = Boolean(adaptation.pending || adaptation.uncertain);
-  const blocked = Boolean(adapting || mutation.pending || (!success && (file || title || content || mutation.uncertain)));
-  useEffect(() => {
-    if (!success || success.document || !props.api.getScript) return;
-    const abort = new AbortController();
-    void props.api.getScript(props.projectId, success.id, abort.signal).then((document) => {
-      if (abort.signal.aborted) return;
-      if (!completeScript(document) || document.id !== success.id || document.projectId !== props.projectId) throw new Error(t("invalidResponse"));
-      setSuccess({ id: document.id, document });
-    }).catch((error: unknown) => { if (!abort.signal.aborted) setDetailError(error); });
-    return () => abort.abort();
-  }, [success, props.api, props.projectId, t]);
-  return <ScriptPageFrame {...props} page="script-import" blocked={blocked}>{(frame) => {
-    const locked = !frame.canManage || Boolean(mutation.pending) || mutation.uncertain;
-    const submit = () => {
-      if (submitted.current || completed.current || success || locked) return;
-      if (!file && isSourceFilePath(content)) { setLocalError(copy("pathHint")); return; }
-      if (!file && !content.trim()) { setLocalError(t("importRequired")); return; }
-      submitted.current = true; setLocalError("");
-      void mutation.run("import", () => file
-        ? props.api.importScriptFile(props.projectId, title.trim() || file.name.replace(/\.[^.]+$/, ""), file)
-        : props.api.scriptAction(props.projectId, "import", { title: title.trim() || t("unnamed"), filename: "manual-script.txt", mediaType: "text/plain", content }), (value) => {
-        if (!("id" in value) || typeof value.id !== "string") throw new Error(t("invalidResponse"));
-        completed.current = true;
-        setSuccess({ id: value.id, document: completeScript(value) ? value : undefined });
-        setFile(undefined); setTitle(""); setContent(""); if (input.current) input.current.value = "";
-        if (completeScript(value)) {
-          frame.accept(value);
-          const info = value.recognition;
-          if (autoAdapt && frame.aiReady && info && info.scriptId === value.id && info.revision === value.revision
-            && (info.kind === "prose" || info.kind === "chapters") && info.characterCount <= aiCharacterLimit(value) && !value.lockedVersionNumber) {
-            void adaptation.run("analyze", () => props.api.scriptAction(props.projectId, "analyze", {}, value.revision, value.id), next => {
-              if (!completeScript(next) || next.id !== value.id || next.projectId !== props.projectId || currentVersion(next)?.number !== info.version + 1) throw new Error(t("invalidResponse"));
-              setSuccess({ id: next.id, document: next }); frame.accept(next);
-            });
-          }
-        }
-      }).finally(() => { submitted.current = false; });
-    };
-    return <section className={scriptPanel + " max-w-4xl"}>{success ? <>
-      <h2 role="status" className="text-lg font-semibold text-emerald-300">{t("imported")}</h2>
-      {success.document ? <><h3 className="mt-4 font-medium">{success.document.title}</h3><p className="mt-2 break-words text-xs text-slate-400">{copy("fileSource")} · {success.document.sourceDocument.filename}</p>
-        <ScriptRecognitionPanel key={success.id} script={success.document} api={props.api} frame={frame} page="import" busy={adapting} /></> : <p className="mt-4 text-sm text-amber-200">{t("detailPending")}</p>}
-      {adaptation.pending && <p role="status" className="text-sm text-violet-200">{copy("processing")}</p>}
-      <MutationFeedback mutation={adaptation} reload={frame.reload} allowRetry={frame.aiReady || adaptation.uncertain} />
-      {detailError ? <ScriptError error={detailError} reload={() => { setDetailError(undefined); setSuccess({ id: success.id }); }} /> : null}
-      <NextStep frame={frame} step="source" label="openSource" scriptId={success.id} />
-      <button type="button" className={scriptButton + " mt-5"} disabled={!frame.canManage || adapting || Boolean(mutation.pending)} onClick={() => { completed.current = false; setSuccess(undefined); setDetailError(undefined); mutation.clear(); adaptation.clear(); }}>{t("importAgain")}</button>
-    </> : <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-5">
-      <p className="text-sm leading-6 text-slate-400">{copy("identified")}</p>
-      <label className="block text-sm">{t("title")}<input className={scriptField} maxLength={200} value={title} disabled={locked} onChange={(event) => setTitle(event.target.value)} /></label>
-      <label className="block text-sm">{t("file")}<input ref={input} className="mt-3 block max-w-full text-sm text-slate-400" type="file" accept=".txt,.md,.markdown,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" disabled={locked} onChange={(event) => {
-        const chosen = event.target.files?.[0]; setLocalError("");
-        if (chosen && !/\.(txt|md|markdown|docx)$/i.test(chosen.name)) { setLocalError(t("supported")); event.target.value = ""; setFile(undefined); return; }
-        setFile(chosen); if (chosen && !title.trim()) setTitle(chosen.name.replace(/\.[^.]+$/, ""));
-      }} /></label><p className="text-xs text-slate-500">{t("supported")}</p>
-      <label className="block text-sm">{t("paste")}<textarea className={scriptField + " min-h-56"} value={content} disabled={locked || Boolean(file)} onChange={(event) => setContent(event.target.value)} /></label>
-      {!file && isSourceFilePath(content) ? <div role="status"><p className="text-sm text-amber-200">{copy("pathHint")}</p><button type="button" disabled={locked} className={scriptButton + " mt-2"} onClick={() => input.current?.click()}>{copy("selectFile")}</button></div> : null}
-      <div><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={autoAdapt && frame.aiReady} disabled={locked || !frame.aiReady} onChange={event => setAutoAdapt(event.target.checked)} />{copy("automatic")}</label>
-        <p className="mt-2 text-xs leading-6 text-slate-400">{copy(frame.aiReady ? "automaticHelp" : "autoUnavailable")}</p></div>
-      {localError ? <p role="alert" className="text-sm text-amber-200">{localError}</p> : null}
-      <button className={scriptPrimary} disabled={locked || (!file && (!content.trim() || isSourceFilePath(content)))}>{t(mutation.pending ? "importing" : "importAction")}</button>
-      <MutationFeedback mutation={mutation} reload={frame.reload} />
-      {file || title || content ? <div>{discard ? <><p className="text-xs leading-6 text-amber-200">{t(mutation.uncertain ? "uncertainDiscard" : "discardConfirm")}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" className={scriptButton} disabled={Boolean(mutation.pending)} onClick={() => { setFile(undefined); setTitle(""); setContent(""); if (input.current) input.current.value = ""; setDiscard(false); mutation.clear(); }}>{t("discardYes")}</button><button type="button" className={scriptButton} disabled={Boolean(mutation.pending)} onClick={() => setDiscard(false)}>{t("keep")}</button></div></> : <button type="button" className={scriptButton} disabled={Boolean(mutation.pending)} onClick={() => setDiscard(true)}>{t("cancel")}</button>}</div> : null}
-    </form>}</section>;
-  }}</ScriptPageFrame>;
-}
+export { ScriptImportPage } from "./ScriptImportPage";
 
 export function AnalysisSummary({ script }: { script: ScriptDocument }) {
   const { t } = useScriptTranslation(), analysis = currentVersion(script)?.analysis;
@@ -129,6 +54,7 @@ export function ScriptLabPage(props: ScriptPageProps) {
 }
 function ScriptLabActions({ api, projectId, frame, onBlocked }: ScriptPageProps & { frame: ScriptFrameContext; onBlocked: (value: boolean) => void }) {
   const { t } = useScriptTranslation(), mutation = useScriptMutation(), script = frame.script!;
+  const { t: recognition } = useRecognitionTranslation();
   const [recognitionBusy, setRecognitionBusy] = useState(false);
   const tooLarge = characterCount(contentOf(script)) > aiCharacterLimit(script);
   const hasScenes = Boolean(currentVersion(script)?.scenes?.length);
@@ -143,9 +69,9 @@ function ScriptLabActions({ api, projectId, frame, onBlocked }: ScriptPageProps 
   });
   return <section className={scriptPanel}>
     <ScriptRecognitionPanel key={script.revision} api={api} script={script} frame={frame} page="lab" busy={writing} onBlocked={setRecognitionBusy} />
-    {script.lockedVersionNumber ? <p className="mt-4 text-sm text-amber-200">{t("frozenEdit")}</p> : !tooLarge ? <>
+    {script.lockedVersionNumber ? <p className="mt-4 text-sm text-amber-200">{t("frozenEdit")}</p> : !tooLarge && !isSourceFilePath(contentOf(script)) ? <>
       <AiReadinessNotice frame={frame} />
-      <button type="button" className={scriptPrimary + " mt-4"} disabled={!frame.canManage || !frame.aiReady || writing || recognitionBusy} onClick={analyze}>{t(mutation.pending ? "analyzing" : "analyze")}</button>
+      <button type="button" className={scriptPrimary + " mt-4"} disabled={!frame.canManage || !frame.aiReady || writing || recognitionBusy} onClick={analyze}>{mutation.pending ? t("analyzing") : hasScenes ? t("analyze") : recognition("adaptWithAi")}</button>
     </> : !script.recognition && !api.inspectScriptSource ? <AiLimitNotice script={script} /> : null}
     <MutationFeedback mutation={mutation} reload={frame.reload} allowRetry={frame.aiReady || mutation.uncertain} />
     {hasScenes && <><ValidationSummary script={script} /><AnalysisSummary script={script} /></>}

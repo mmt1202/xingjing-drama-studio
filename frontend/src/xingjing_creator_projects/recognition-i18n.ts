@@ -2,6 +2,7 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  adaptWithAi: "用 AI 改编为分场剧本",
   heading: "原文识别", screenplay: "分场剧本", chapters: "分章原文", prose: "叙事原文", path: "文件路径",
   counts: "{{characters}} 字 · {{paragraphs}} 段正文", scenes: "已识别 {{count}} 场", chaptersFound: "已识别 {{count}} 章",
   pathHint: "这里只收到了文件路径。请选择本机文件，或粘贴小说、剧本的正文。", selectFile: "选择原文件",
@@ -19,6 +20,7 @@ const zh = {
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
+  adaptWithAi: "Adapt into a screenplay with AI",
   heading: "Source recognition", screenplay: "Screenplay", chapters: "Chaptered text", prose: "Narrative text", path: "File path",
   counts: "{{characters}} characters · {{paragraphs}} text paragraphs", scenes: "{{count}} scenes recognized", chaptersFound: "{{count}} chapters recognized",
   pathHint: "Only a file path was received. Choose a local file or paste the novel or screenplay text.", selectFile: "Choose the original file",
@@ -35,6 +37,7 @@ const en: Copy = {
   originalRanges: "Episode planning uses the original imported text. The current working version is saved separately.",
 };
 const vi: Copy = {
+  adaptWithAi: "Dùng AI chuyển thể thành kịch bản phân cảnh",
   heading: "Nhận diện nguyên văn", screenplay: "Kịch bản phân cảnh", chapters: "Văn bản có chương", prose: "Văn xuôi", path: "Đường dẫn tệp",
   counts: "{{characters}} ký tự · {{paragraphs}} đoạn văn", scenes: "Đã nhận diện {{count}} cảnh", chaptersFound: "Đã nhận diện {{count}} chương",
   pathHint: "Chỉ nhận được đường dẫn tệp. Hãy chọn tệp trên máy hoặc dán nội dung tiểu thuyết hay kịch bản.", selectFile: "Chọn tệp gốc",

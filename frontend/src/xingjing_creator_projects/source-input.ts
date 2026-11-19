@@ -1,4 +1,13 @@
+import type { ScriptDocument, ScriptRecognition } from "./types";
+
 export const AI_CHARACTER_LIMIT = 20_000;
+
+export function matchesScriptRecognition(info: ScriptRecognition | undefined, script: ScriptDocument): info is ScriptRecognition {
+  return Boolean(info && info.scriptId === script.id && info.revision === script.revision
+    && info.version === script.versions.at(-1)?.number && ["screenplay", "chapters", "prose", "path"].includes(info.kind)
+    && [info.characterCount, info.sceneCount, info.chapterCount, info.paragraphCount].every(n => Number.isSafeInteger(n) && n >= 0)
+    && Array.isArray(info.chapterTitles));
+}
 
 export function isSourceFilePath(text: string): boolean {
   const value = text.trim();

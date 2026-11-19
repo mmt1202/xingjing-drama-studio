@@ -300,8 +300,15 @@ function ProjectBusinessContent({
       );
     case "episodes":
       return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} initialEpisodeId={complianceQuery.has("episodeId") ? Number(complianceQuery.get("episodeId")) : undefined} selectedScriptId={complianceQuery.get("scriptId") ?? undefined} onCommitted={projectFlow?.refresh} mode={surface.mode} onNavigate={go} />;
-    case "script-import":
-      return <ScriptImportPage {...scriptPageProps} />;
+    case "script-import": {
+      const currentEpisode = projectFlow?.data.episodes.find(item =>
+        String(item.episode) === complianceQuery.get("episodeId"));
+      return <ScriptImportPage {...scriptPageProps} selectedScriptId={scriptPageProps.selectedScriptId ?? currentEpisode?.scriptId ?? undefined} onDocumentSelected={(id, replace) => {
+        const query = new URLSearchParams({ scriptId: id });
+        if (currentEpisode?.scriptId === id) query.set("episodeId", String(currentEpisode.episode));
+        navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/script-import?${query}`, { replace });
+      }} />;
+    }
     case "ai-director":
       return <AiDirectorPage {...scriptPageProps} />;
     case "director-assets":

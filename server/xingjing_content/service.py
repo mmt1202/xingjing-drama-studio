@@ -315,7 +315,14 @@ class ContentService:
         return self._transact(command.workspace_id, command.idempotency_key, fingerprint, update)
 
     def get_script(self, *, workspace_id: str, script_id: str) -> ScriptDocument:
-        return _owned_script(self._repository.read_all(workspace_id), script_id, workspace_id)
+        return self._repository.get_script(workspace_id, script_id)
+
+    def script_catalog(
+        self, workspace_id: str, project_id: str, query: str, offset: int, limit: int
+    ) -> tuple[list[dict[str, object]], int]:
+        if offset < 0 or not 1 <= limit <= 200:
+            raise ValueError("INVALID_PAGINATION")
+        return self._repository.script_catalog(workspace_id, project_id, query.strip(), offset, limit)
 
     def list_scripts(
         self,

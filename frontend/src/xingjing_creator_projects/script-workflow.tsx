@@ -98,19 +98,10 @@ export interface ScriptFrameContext {
   navigate: (step: string, scriptId?: string) => void; reload: () => void; accept: (document: ScriptDocument) => void;
   aiReadiness?: ContentAiReadiness; aiReady: boolean; readinessChecking: boolean; readinessError?: unknown; recheckReadiness: () => void;
 }
-export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, page, blocked, children }: ScriptPageProps & { page: ScriptStep; blocked: boolean; children: (value: ScriptFrameContext) => ReactNode }) {
-  const { t } = useScriptTranslation();
-  const [result, setResult] = useState<{ api: CreatorProjectsPort; projectId: string; items: ScriptDocument[]; total: number }>();
-  const [explicitDetail, setDetail] = useState<{ api: CreatorProjectsPort; document: ScriptDocument }>();
-  const [selection, setSelection] = useState<{ prop: string | undefined; id: string | undefined }>({ prop: selectedScriptId, id: selectedScriptId });
-  const [error, setError] = useState<unknown>();
-  const [reading, setReading] = useState(true);
-  const [query, setQuery] = useState(""), [locked, setLocked] = useState("all");
-  const [reload, setReload] = useState(0);
+export function useContentAiReadiness(api: CreatorProjectsPort, projectId: string, needsAi: boolean) {
   const [readiness, setReadiness] = useState<{ api: CreatorProjectsPort; projectId: string; value: ContentAiReadiness }>();
   const [readinessError, setReadinessError] = useState<unknown>();
   const [readinessChecking, setReadinessChecking] = useState(false), [readinessRevision, setReadinessRevision] = useState(0);
-  const needsAi = page === "script-import" || page === "script-lab" || page === "rewrite" || page === "ai-director";
   useEffect(() => {
     if (!needsAi) return;
     const abort = new AbortController();
@@ -126,6 +117,18 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
     return () => { abort.abort(); window.clearTimeout(timer); };
   }, [api, projectId, needsAi, readinessRevision]);
   const aiReadiness = readiness?.api === api && readiness.projectId === projectId ? readiness.value : undefined;
+  return { aiReadiness, aiReady: Boolean(aiReadiness?.ready && !readinessError && !readinessChecking), readinessChecking, readinessError, recheckReadiness: () => setReadinessRevision((value) => value + 1) };
+}
+export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, page, blocked, children }: ScriptPageProps & { page: Exclude<ScriptStep, "script-import">; blocked: boolean; children: (value: ScriptFrameContext) => ReactNode }) {
+  const { t } = useScriptTranslation();
+  const [result, setResult] = useState<{ api: CreatorProjectsPort; projectId: string; items: ScriptDocument[]; total: number }>();
+  const [explicitDetail, setDetail] = useState<{ api: CreatorProjectsPort; document: ScriptDocument }>();
+  const [selection, setSelection] = useState<{ prop: string | undefined; id: string | undefined }>({ prop: selectedScriptId, id: selectedScriptId });
+  const [error, setError] = useState<unknown>();
+  const [reading, setReading] = useState(true);
+  const [query, setQuery] = useState(""), [locked, setLocked] = useState("all");
+  const [reload, setReload] = useState(0);
+  const ai = useContentAiReadiness(api, projectId, page === "script-lab" || page === "rewrite" || page === "ai-director");
   const sequence = useRef(0);
   const itemsRef = useRef<ScriptDocument[]>([]);
   const items = result?.api === api && result.projectId === projectId ? result.items : undefined;
@@ -173,9 +176,8 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
     {!context.permissions.includes("script.manage") ? <p role="status" className="text-sm text-slate-400">{t("readonly")}</p> : null}
     {error ? <ScriptError error={error} reload={() => { void read(); }} /> : null}
     {!items && !error ? <p role="status" className="py-8 text-slate-400">{t("loading")}</p> : null}
-    {page === "script-import" && items?.length === 0 ? <p role="status" className="text-sm text-slate-500">{t("noScripts")}</p> : null}
-    {page !== "script-import" && !script && items ? <section className={scriptPanel}><p role="status" className="text-sm text-amber-100">{t(preferred !== undefined ? "unavailableSelection" : !items.length ? "noScripts" : "chooseHint")}</p><button type="button" className={scriptButton + " mt-4"} disabled={blocked || !onNavigate} onClick={() => navigate("script-import")}>{t("openImport")}</button></section> : null}
-    {page === "script-import" || script ? children({ script, scripts: items ?? [], context, canManage: context.permissions.includes("script.manage") && !error && !reading, reading, canNavigate: Boolean(onNavigate), blocked, navigate, accept, reload: () => { void read(); }, aiReadiness, aiReady: Boolean(aiReadiness?.ready && !readinessError && !readinessChecking), readinessChecking, readinessError, recheckReadiness: () => setReadinessRevision((value) => value + 1) }) : null}
+    {!script && items ? <section className={scriptPanel}><p role="status" className="text-sm text-amber-100">{t(preferred !== undefined ? "unavailableSelection" : !items.length ? "noScripts" : "chooseHint")}</p><button type="button" className={scriptButton + " mt-4"} disabled={blocked || !onNavigate} onClick={() => navigate("script-import")}>{t("openImport")}</button></section> : null}
+    {script ? children({ script, scripts: items ?? [], context, canManage: context.permissions.includes("script.manage") && !error && !reading, reading, canNavigate: Boolean(onNavigate), blocked, navigate, accept, reload: () => { void read(); }, ...ai }) : null}
     <details className="text-xs text-slate-500"><summary className="cursor-pointer">{t("search")}</summary><div className="mt-3 flex flex-wrap gap-3"><label className="flex-1">{t("search")}<input className={scriptField} value={query} placeholder={t("searchHint")} disabled={blocked} onChange={(event) => setQuery(event.target.value)} /></label><label>{t("lockFilter")}<select className={scriptField} value={locked} disabled={blocked} onChange={(event) => setLocked(event.target.value)}><option value="all">{t("all")}</option><option value="editable">{t("editable")}</option><option value="locked">{t("frozen")}</option></select></label></div></details>
     {items && items.length < (result?.total ?? 0) ? <button type="button" className={scriptButton} disabled={blocked || reading} onClick={() => void read(true)}>{t(reading ? "loading" : "loadMore")}</button> : null}
   </div>}</CreatorPage>;

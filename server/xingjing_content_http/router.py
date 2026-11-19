@@ -101,6 +101,16 @@ def create_content_router(dependencies: ContentHttpDependencies) -> APIRouter:
         readiness = await dependencies.ai_service_for(context, project_id).readiness()
         return _success(context, readiness)
 
+    @result.get("/projects/{project_id}/script-catalog")
+    async def script_catalog(request: Request, project_id: str):
+        context = await _context(request, project_id, dependencies, "script.view")
+        offset = _integer(request.query_params.get("offset"), default=0, minimum=0, code="INVALID_OFFSET")
+        limit = _integer(request.query_params.get("limit"), default=12, minimum=1, maximum=200, code="INVALID_LIMIT")
+        items, total = dependencies.service_for(context).script_catalog(
+            context.workspace_id, project_id, request.query_params.get("q", ""), offset, limit
+        )
+        return _success(context, {"scripts": items}, total=total)
+
     @result.get("/projects/{project_id}/scripts")
     async def list_scripts(request: Request, project_id: str):
         context = await _context(request, project_id, dependencies, "script.view")

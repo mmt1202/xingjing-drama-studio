@@ -1,0 +1,19 @@
+.xj-script-intake > header p { display: none; }
+.xj-script-intake > header { margin-bottom: 16px; }
+.xj-intake-body { max-width: 58rem; min-width: 0; display: grid; gap: 16px; }
+.xj-intake-switch, .xj-intake-methods { display: flex; flex-wrap: wrap; gap: 6px; }
+.xj-intake-switch button, .xj-intake-methods button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 8px 14px; border: 1px solid transparent; border-radius: 10px; color: var(--xj-text-2, #c3cbda); font-size: 14px; }
+.xj-intake-switch button[aria-pressed=true] { border-color: #a78bfa70; color: #ede9fe; background: #8b5cf61c; }
+.xj-intake-methods button[aria-pressed=true] { color: var(--xj-text, #f5f7fb); background: var(--xj-panel, #171b27); border-color: var(--xj-line, #ffffff1a); }
+.xj-intake-switch button:focus-visible, .xj-intake-methods button:focus-visible, .xj-intake-document:focus-visible, .xj-intake-upload:focus-within { outline: 2px solid #c4b5fd; outline-offset: 2px; }
+.xj-intake-card, .xj-intake-current { min-width: 0; padding: clamp(16px, 2.5vw, 28px); background: var(--xj-surface, #11141d); border: 1px solid var(--xj-line, #ffffff1a); border-radius: 16px; }
+.xj-intake-current { border-inline-start: 3px solid #a78bfa; }
+.xj-intake-upload { display: flex; min-height: 116px; flex-direction: column; justify-content: center; align-items: center; gap: 6px; padding: 12px; cursor: pointer; border: 1px dashed #a78bfa80; border-radius: 12px; text-align: center; background: #8b5cf609; }
+.xj-intake-upload svg { color: #c4b5fd; }
+.xj-intake-upload strong { max-width: 100%; overflow-wrap: anywhere; font-size: 15px; }
+.xj-intake-upload span, .xj-intake-options summary { font-size: 13px; color: var(--xj-text-2, #c3cbda); }
+.xj-intake-options { padding-block: 12px; border-block: 1px solid var(--xj-line, #ffffff1a); }
+.xj-intake-options summary { cursor: pointer; }
+.xj-intake-document { width: 100%; display: flex; align-items: center; text-align: start; gap: 12px; padding: 12px 4px; }
+.xj-intake-document > svg { flex: none; color: #c4b5fd; }
+.xj-intake-document:hover strong { color: #c4b5fd; }

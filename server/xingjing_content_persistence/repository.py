@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    func,
     select,
     update,
 )
@@ -525,6 +526,33 @@ class SqlAlchemyContentRepository:
             if replayed is not None:
                 return cast(T, replayed)
             raise ValueError("VERSION_CONFLICT") from error
+
+    def get_script(self, workspace_id: str, script_id: str) -> ScriptDocument:
+        with self._session_factory() as session:
+            row = session.get(ScriptRow, (workspace_id, script_id))
+            if row is None:
+                raise KeyError("SCRIPT_NOT_FOUND")
+            return self._load_document(session, row)
+
+    def script_catalog(
+        self, workspace_id: str, project_id: str, query: str, offset: int, limit: int
+    ) -> tuple[list[dict[str, object]], int]:
+        where = [ScriptRow.workspace_id == workspace_id, ScriptRow.project_id == project_id]
+        if query:
+            where.append(
+                ScriptRow.title.icontains(query, autoescape=True)
+                | ScriptRow.script_id.icontains(query, autoescape=True)
+            )
+        listing = select(
+            ScriptRow.script_id, ScriptRow.title, ScriptRow.source_filename, ScriptRow.locked_version_number
+        ).where(*where)
+        with self._session_factory() as session:
+            total = session.scalar(select(func.count()).select_from(ScriptRow).where(*where)) or 0
+            rows = session.execute(listing.order_by(ScriptRow.title, ScriptRow.script_id).offset(offset).limit(limit))
+            return [
+                {"id": sid, "title": title, "filename": filename, "lockedVersionNumber": locked}
+                for sid, title, filename, locked in rows
+            ], total
 
     def read_all(self, workspace_id: str) -> dict[str, ScriptDocument]:
         with self._session_factory() as session:

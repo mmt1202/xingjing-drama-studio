@@ -1,4 +1,4 @@
-import type { CreatorProjectsPort, ContentAiReadiness, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptDocument, ScriptRecognition, SessionContext } from "./types";
+import type { CreatorProjectsPort, ContentAiReadiness, PageResult, ProjectAction, ProjectDetail, ProjectSummary, ProjectSetupOptions, ScriptAction, ScriptActionResult, ScriptCatalogItem, ScriptDocument, ScriptRecognition, SessionContext } from "./types";
 import i18n from "@/i18n";
 import { createAuthenticatedFetcher } from "@/utils/auth";
 
@@ -85,6 +85,11 @@ export function createCreatorProjectsApi({ fetcher: providedFetcher, workspaceId
     getProjectSetupOptions: () => request<ProjectSetupOptions>("/project-setup/options").then((r) => r.value),
     getContentAiReadiness: (id, signal) => request<ContentAiReadiness>(`/projects/${encodeURIComponent(id)}/content-ai-readiness`, { signal }).then((r) => r.value),
     projectAction: (id, name: ProjectAction, payload, version) => action(`/projects/${encodeURIComponent(id)}/actions`, name, payload, version),
+    async listScriptCatalog(id, { query, offset, limit }, signal) {
+      const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(limit) });
+      const result = await request<{ scripts: ScriptCatalogItem[] }>(`/projects/${encodeURIComponent(id)}/script-catalog?${params}`, { signal });
+      return { items: result.value.scripts, total: result.total ?? result.value.scripts.length };
+    },
     listScripts: (id, params = {}) => {
       const offset = params.offset ?? 0;
       const limit = params.limit ?? 50;

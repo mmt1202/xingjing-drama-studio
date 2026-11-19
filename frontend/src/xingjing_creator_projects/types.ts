@@ -25,6 +25,7 @@ export interface ScriptRecognition {
 export interface ScriptDocument { recognition?: ScriptRecognition; recoveryOrigin?: { parent_script_id: string; base_version: number; source_version: number; original_script_id: string }; id: string; projectId: string; title: string; revision: number; sourceDocument: { filename: string; mediaType: string; content: string }; versions: ScriptVersion[]; aiInputLimitCharacters?: number; lockedVersionNumber: number | null; directorProfile: DirectorProfile; directorState?: "missing" | "unconfirmed" | "stale" | "confirmed"; directorCandidates?: DirectorCandidate[]; directorConfirmations?: DirectorConfirmation[]; currentDirectorConfirmationId?: string | null }
 export interface ScriptComparison { baselineVersion: number; candidateVersion: number; changedFields: string[] }
 export interface ContentAiReadiness { ready: boolean; status: "ready" | "configuration_unavailable" | "temporarily_unavailable"; checksProviderConnection: false }
+export interface ScriptCatalogItem { id: string; title: string; filename: string; lockedVersionNumber: number | null }
 export interface PageResult<T> { items: T[]; nextToken: string | null; total?: number; offset?: number; limit?: number }
 
 export type ProjectAction = "create" | "update" | "updateOverview" | "archive" | "restore" | "advance" | "rollback" | "saveDraft" | "activate";
@@ -33,6 +34,7 @@ export type ScriptActionResult = ScriptDocument | ScriptComparison;
 
 export interface CreatorProjectsPort {
   getSessionContext(): Promise<SessionContext>;
+  listScriptCatalog?(projectId: string, options: { query: string; offset: number; limit: number }, signal?: AbortSignal): Promise<{ items: ScriptCatalogItem[]; total: number }>;
   listProjects(params?: { archived?: boolean; pageToken?: string; sort?: string }): Promise<PageResult<ProjectSummary>>;
   getProject(projectId: string): Promise<ProjectDetail>;
   getProjectSetupOptions?(): Promise<ProjectSetupOptions>;
