@@ -120,7 +120,10 @@ class NativeImageExecutor:
             raise NativeImageConfigurationError("GENERATION_NATIVE_MODEL_UNSUPPORTED")
         if route.successful_output_minor is None or not 0 <= route.successful_output_minor <= route.estimated_minor:
             raise NativeImageConfigurationError("GENERATION_NATIVE_SUCCESS_PRICE_REQUIRED")
-        if set(request.parameters) - _PARAMETERS:
+        parameters = set(request.parameters)
+        if request.capability in {"character_turnaround", "character_expressions"}:
+            parameters.discard("items")  # The requested views are already included in the asset prompt.
+        if parameters - _PARAMETERS:
             raise NativeImageConfigurationError("GENERATION_NATIVE_PARAMETERS_UNSUPPORTED")
         validate_input_media(request)
         if len(request.resolved_input_assets) > 16:

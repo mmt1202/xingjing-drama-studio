@@ -28,7 +28,7 @@ export function useAuthenticatedMedia({ source, workspaceId, projectId }: { sour
       if (!token || !workspaceId || !projectId || getToken() !== token) throw new AuthenticatedMediaError(401, "MEDIA_SESSION_REQUIRED");
       const url = new URL(source, window.location.origin);
       if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/v1/") || url.username || url.password || url.searchParams.has("token")) throw new AuthenticatedMediaError(400, "MEDIA_SOURCE_INVALID");
-      const response = await fetcher(url.href, { signal: controller.signal, cache: "no-store", credentials: "same-origin", redirect: "error", headers: { Authorization: `Bearer ${token}`, "X-Workspace-Id": workspaceId, "X-Project-Id": projectId, Accept: "video/*,audio/*,application/octet-stream" } });
+      const response = await fetcher(url.href, { signal: controller.signal, cache: "no-store", credentials: "same-origin", redirect: "error", headers: { Authorization: `Bearer ${token}`, "X-Workspace-Id": workspaceId, "X-Project-Id": projectId, Accept: "image/*,video/*,audio/*,application/octet-stream" } });
       if (!response.ok) throw new AuthenticatedMediaError(response.status, "MEDIA_READ_FAILED");
       const blob = await response.blob();
       if (controller.signal.aborted) return;

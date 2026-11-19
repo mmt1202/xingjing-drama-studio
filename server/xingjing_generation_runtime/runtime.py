@@ -74,8 +74,9 @@ if TYPE_CHECKING:
 
 
 class GenerationRuntimeUnavailable(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, submission_rejected: bool = False) -> None:
         self.code = code
+        self.submission_rejected = submission_rejected
         super().__init__(code)
 
 
@@ -286,7 +287,7 @@ class GenerationRuntime:
                     region=str(record["region"]),
                     media_types=media,
                     capabilities=tuple(cast(list[str], record["capabilities"])),
-                    active=True,
+                    active=bool(self._provider_gateway and record["providerId"] == self._provider_gateway.provider_id),
                     successful_output_minor=cast(dict[str, int | None], record.get("pricing", {})).get(
                         "successfulOutputMinor"
                     ),
@@ -308,6 +309,7 @@ class GenerationRuntime:
             definitions = [
                 replace(
                     item,
+                    active=True,
                     media_types=("image",),
                     capabilities=tuple(
                         cap
@@ -363,6 +365,23 @@ class GenerationRuntime:
         task = await self._repository_or_raise().get(context.workspace_id, project_id, task_id)
         if task is None:
             raise TaskScopeNotFound()
+        return task
+
+    async def find_asset_submission(
+        self, context: TrustedWorkspaceContext, project_id: str, asset_id: str, source_version_id: str, key: str
+    ) -> GenerationTask | None:
+        task = await self._repository_or_raise().get_by_idempotency_scope(
+            f"{context.workspace_id}:{key}", project_id=project_id
+        )
+        if task is None:
+            return None
+        operation = task.request
+        if (
+            operation.capability not in {"image_generation", "character_turnaround", "character_expressions"}
+            or operation.parameters.get("asset_id") != asset_id
+            or operation.parameters.get("source_version_id") != source_version_id
+        ):
+            return None
         return task
 
     async def generated_assets(
@@ -647,11 +666,11 @@ class GenerationRuntime:
         gateway = self._provider_gateway
         native_enabled = bool(self._native_images and self._native_images.enabled)
         if gateway is None and not native_enabled:
-            self._provider_or_raise()
+            raise GenerationRuntimeUnavailable("GENERATION_PROVIDER_SUBMISSION_UNAVAILABLE", submission_rejected=True)
         request = await self._project_model_default(context, project_id, request)
         request = await self._resolve_input_assets(context, project_id, request)
         if self._model_route_resolver is None:
-            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
+            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE", submission_rejected=True)
         try:
             route = await self._model_route_resolver.resolve(
                 tenant_id=context.tenant_id,
@@ -675,7 +694,7 @@ class GenerationRuntime:
                 await self._model_route_resolver.release(
                     provider_id=route.provider_id, model_id=route.model_id, succeeded=False
                 )
-            raise GenerationRuntimeUnavailable("MODEL_PROVIDER_ADAPTER_UNAVAILABLE")
+            raise GenerationRuntimeUnavailable("MODEL_PROVIDER_ADAPTER_UNAVAILABLE", submission_rejected=True)
         request = request.model_copy(
             update={"requested_provider_id": route.provider_id, "requested_model_id": route.model_id}
         )
@@ -693,7 +712,7 @@ class GenerationRuntime:
                 await self._model_route_resolver.release(
                     provider_id=route.provider_id, model_id=route.model_id, succeeded=False
                 )
-            raise GenerationRuntimeUnavailable(str(error)) from error
+            raise GenerationRuntimeUnavailable(str(error), submission_rejected=True) from error
         native_preparer = submission_preparer
         admission = self._route_admission
         if admission is not None:
@@ -1597,6 +1616,8 @@ def _route_parameters(request: GenerationRequest) -> dict[str, object]:
     }
     if request.media_type.value == "image":
         orchestration.add("duration_ms")
+    if request.capability in {"character_turnaround", "character_expressions"}:
+        orchestration.add("items")
     return {key: value for key, value in request.parameters.items() if key not in orchestration}
 
 

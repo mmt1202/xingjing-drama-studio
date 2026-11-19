@@ -82,6 +82,9 @@ class AssetContractRoute(APIRoute):
                 return cast(JSONResponse, await original(request))
             except AssetHttpError as error:
                 return _error(request, error.code, error.status_code, error.details)
+            except GenerationRuntimeUnavailable as error:
+                details = {"submissionState": "rejected"} if error.submission_rejected else {}
+                return _error(request, error.code, 503, details)
             except HTTPException as error:
                 detail = error.detail if isinstance(error.detail, Mapping) else {}
                 code = detail.get("code")
@@ -463,28 +466,25 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 raise AssetHttpError("ASSET_VERSION_CONFLICT", 409)
             if _text(payload, "sourceVersionId") != current.current_version_id:
                 raise AssetHttpError("ASSET_VERSION_CONFLICT", 409)
-            try:
-                task = await runtime.submit_generation(
-                    context,
-                    project_id,
-                    GenerationRequest(
-                        workspace_id=context.workspace_id,
-                        project_id=project_id,
-                        media_type=MediaType.IMAGE,
-                        capability="image_generation",
-                        prompt=f"Create a production reference image for {current.kind.value} {current.name}. "
-                        + json.dumps(current.current_version.content, ensure_ascii=False, sort_keys=True),
-                        parameters={
-                            "asset_id": current.asset_id,
-                            "source_version_id": current.current_version_id,
-                            "source_content_sha256": current.current_version.content_sha256,
-                            "asset_operation": "reference_image",
-                        },
-                    ),
-                    idempotency_key=key,
-                )
-            except GenerationRuntimeUnavailable as error:
-                raise AssetHttpError(str(error), 503) from error
+            task = await runtime.submit_generation(
+                context,
+                project_id,
+                GenerationRequest(
+                    workspace_id=context.workspace_id,
+                    project_id=project_id,
+                    media_type=MediaType.IMAGE,
+                    capability="image_generation",
+                    prompt=f"Create a production reference image for {current.kind.value} {current.name}. "
+                    + json.dumps(current.current_version.content, ensure_ascii=False, sort_keys=True),
+                    parameters={
+                        "asset_id": current.asset_id,
+                        "source_version_id": current.current_version_id,
+                        "source_content_sha256": current.current_version.content_sha256,
+                        "asset_operation": "reference_image",
+                    },
+                ),
+                idempotency_key=key,
+            )
             return _success(context, {"task": _generation_task_receipt(task, context)})
         if action in {"generateTurnaround", "generateExpressions"}:
             task = await _submit_character_derivative(
@@ -753,7 +753,9 @@ async def _submit_character_derivative(
     )
     try:
         return await runtime.submit_generation(context, project_id, request, idempotency_key=idempotency_key)
-    except (GenerationRuntimeUnavailable, RuntimeError) as error:
+    except GenerationRuntimeUnavailable:
+        raise
+    except RuntimeError as error:
         raise AssetHttpError(str(error), 503) from error
 
 

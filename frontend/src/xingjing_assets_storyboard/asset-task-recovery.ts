@@ -28,6 +28,7 @@ export function readPendingAssetSubmission(key: string): PendingAssetSubmission 
       || !Number.isSafeInteger(value.version) || (value.version ?? 0) < 1
       || (value.projectId !== undefined && (typeof value.projectId !== "string" || !value.projectId || value.projectId.length > 128))
       || !value.payload || typeof value.payload !== "object" || Array.isArray(value.payload)) return undefined;
+    if (value.action !== "adoptGenerationOutput" && (typeof value.payload.sourceVersionId !== "string" || !value.payload.sourceVersionId)) return undefined;
     return value as PendingAssetSubmission;
   } catch { return undefined; }
 }

@@ -2,6 +2,13 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  checking: "正在检查图像模型…", modelMissing: "当前工作区还没有可用的文生图模型。接入图像服务后，就能根据这份资产设定生成参考图。",
+  modelError: "暂时无法读取图像模型配置。", modelDenied: "当前账号没有查看项目生成配置的权限，请联系管理员。",
+  modelSetup: "打开模型中心", checkModels: "重新检查模型", modelAdmin: "请管理员检查图像服务、模型路由和报价。",
+  noDerivative: "当前没有支持这种角色派生及参考图输入的模型。", plainAsset: "当前版本只有文字设定，可以继续编辑并保存。",
+  notSubmitted: "本次生成未创建任务。", checkingReceipt: "正在核对上次提交的任务记录…", checkReceipt: "核对任务记录",
+  receiptMissing: "暂未查到上次提交的生成任务。可继续编辑资产，或在模型就绪后用原请求重试。", receiptFailed: "暂时无法核对上次生成任务，原请求已保留。",
+  retryOriginal: "用原请求重试", previewFailed: "暂时无法读取参考图。", retryImage: "重新读取图片", loadingImage: "正在读取参考图…",
   recoveryStorageUnavailable: "浏览器无法保存操作恢复信息，尚未发送新操作。请允许当前站点使用会话存储后重试。",
   receiptStorageUnavailable: "服务端已返回任务，但浏览器暂时无法保存回执。原提交已保留，请恢复原提交，不要新建重复任务。",
   detailFailed: "资产详情读取失败", reloadDetail: "重新读取这项资产",
@@ -18,6 +25,13 @@ const zh = {
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
+  checking: "Checking image models…", modelMissing: "This workspace has no available text-to-image model. Connect an image service to generate a reference from this asset.",
+  modelError: "Image model settings could not be loaded.", modelDenied: "Ask an administrator for permission to view this project's generation settings.",
+  modelSetup: "Open model center", checkModels: "Check models again", modelAdmin: "Ask an administrator to check the image service, routing and pricing.",
+  noDerivative: "No model currently supports this character view and reference-image input.", plainAsset: "This version has text only. You can continue editing and saving it.",
+  notSubmitted: "No generation task was created.", checkingReceipt: "Checking the previous submission…", checkReceipt: "Check task record",
+  receiptMissing: "No task is recorded for the last submission yet. You can edit this asset or retry the original request when the model is ready.", receiptFailed: "The previous task could not be checked. Its original request has been retained.",
+  retryOriginal: "Retry original request", previewFailed: "The reference image could not be loaded.", retryImage: "Reload image", loadingImage: "Loading reference image…",
   recoveryStorageUnavailable: "The browser could not save command recovery information. No new command was sent. Enable session storage for this site and retry.",
   receiptStorageUnavailable: "The server returned a task, but the browser could not save its receipt. The original command is retained. Recover it instead of creating a duplicate task.",
   detailFailed: "Asset details could not be read", reloadDetail: "Reload this asset",
@@ -33,6 +47,13 @@ const en: Copy = {
   firstImage: "Generate and adopt a reference first", sourceMissing: "No primary version is available. Save the asset first.", failure: "Generation did not complete. Check the model configuration and task error before submitting again.",
 };
 const vi: Copy = {
+  checking: "Đang kiểm tra mô hình ảnh…", modelMissing: "Không gian này chưa có mô hình tạo ảnh từ văn bản khả dụng. Kết nối dịch vụ ảnh để tạo ảnh tham chiếu từ mô tả tài sản.",
+  modelError: "Chưa tải được cấu hình mô hình ảnh.", modelDenied: "Hãy liên hệ quản trị viên để có quyền xem cấu hình tạo ảnh của dự án.",
+  modelSetup: "Mở trung tâm mô hình", checkModels: "Kiểm tra lại mô hình", modelAdmin: "Nhờ quản trị viên kiểm tra dịch vụ ảnh, định tuyến và giá.",
+  noDerivative: "Chưa có mô hình hỗ trợ kiểu biến thể nhân vật này và đầu vào ảnh tham chiếu.", plainAsset: "Phiên bản này chỉ có văn bản. Bạn có thể tiếp tục chỉnh sửa và lưu.",
+  notSubmitted: "Chưa tạo tác vụ sinh ảnh.", checkingReceipt: "Đang kiểm tra lần gửi trước…", checkReceipt: "Kiểm tra tác vụ",
+  receiptMissing: "Chưa tìm thấy tác vụ cho lần gửi trước. Bạn có thể chỉnh sửa tài sản hoặc gửi lại yêu cầu gốc khi mô hình sẵn sàng.", receiptFailed: "Chưa kiểm tra được tác vụ trước. Yêu cầu gốc vẫn được lưu.",
+  retryOriginal: "Gửi lại yêu cầu gốc", previewFailed: "Chưa tải được ảnh tham chiếu.", retryImage: "Tải lại ảnh", loadingImage: "Đang tải ảnh tham chiếu…",
   recoveryStorageUnavailable: "Trình duyệt không lưu được thông tin khôi phục; chưa gửi thao tác mới. Hãy cho phép lưu trữ phiên cho trang này rồi thử lại.",
   receiptStorageUnavailable: "Máy chủ đã trả về tác vụ nhưng trình duyệt chưa lưu được biên nhận. Lệnh gốc được giữ; hãy khôi phục lệnh đó thay vì tạo tác vụ trùng.",
   detailFailed: "Chưa đọc được chi tiết tài sản", reloadDetail: "Tải lại tài sản này",

@@ -4,6 +4,7 @@ import type {
   ActionInput,
   AssetAction,
   AssetActionResult,
+  AssetGenerationModels,
   AssetItem,
   AssetListQuery,
   AssetsStoryboardPort,
@@ -609,6 +610,16 @@ export function createAssetsStoryboardApi(
         signal,
       );
       return response.data;
+    },
+    async getGenerationModels(scope, signal) {
+      return (await request<AssetGenerationModels>(scope, `/generation-models?projectId=${requireProject(scope)}`, {}, signal)).data;
+    },
+    async getAssetGenerationReceipt(scope, assetId, sourceVersionId, idempotencyKey, signal) {
+      const query = new URLSearchParams({ sourceVersionId });
+      const path = `/projects/${requireProject(scope)}/assets/${encodeURIComponent(assetId)}/generation-receipt?${query}`;
+      return (await request<{ task: TaskReceipt | null }>(scope, path, {
+        cache: "no-store", headers: { "Idempotency-Key": idempotencyKey },
+      }, signal)).data.task;
     },
     async getGenerationTask(scope, task, signal) {
       const projectId = encodeURIComponent(

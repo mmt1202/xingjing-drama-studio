@@ -1,4 +1,11 @@
+import type { GenerationModelAvailability } from "@/xingjing_generation_center/contracts";
+
 export type Locale = "zh" | "en" | "vi";
+
+export interface AssetGenerationModels {
+  readonly model: GenerationModelAvailability;
+  readonly canManageModels: boolean;
+}
 
 export interface WorkspaceProjectScope {
   readonly workspaceId: string;
@@ -429,6 +436,8 @@ export interface AssetsStoryboardPort {
     input: ActionInput<AssetAction>,
     signal?: AbortSignal,
   ): Promise<AssetActionResult>;
+  getGenerationModels?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<AssetGenerationModels>;
+  getAssetGenerationReceipt?(scope: WorkspaceProjectScope, assetId: string, sourceVersionId: string, idempotencyKey: string, signal?: AbortSignal): Promise<TaskReceipt | null>;
   getGenerationTask(
     scope: WorkspaceProjectScope,
     task: TaskReceipt,

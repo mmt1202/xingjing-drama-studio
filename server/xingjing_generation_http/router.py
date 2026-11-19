@@ -96,7 +96,28 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
     async def generation_models(request: Request):
         project_id = _project_query(request)
         context = await runtime.context_for(request, project_id, "generation.view")
-        return _success(context.request_id, {"model": asdict(await runtime.read_model_availability(context=context))})
+        return _success(
+            context.request_id,
+            {
+                "model": asdict(await runtime.read_model_availability(context=context)),
+                "canManageModels": "admin.model.manage" in context.permissions,
+            },
+        )
+
+    @router.get("/projects/{project_id}/assets/{asset_id}/generation-receipt")
+    async def asset_generation_receipt(request: Request, project_id: str, asset_id: str):
+        context = await runtime.context_for(request, project_id, "generation.view")
+        key = request.headers.get("Idempotency-Key", "").strip()
+        version = request.query_params.get("sourceVersionId", "").strip()
+        if not key or len(key) > 128 or not version or len(version) > 128:
+            raise GenerationHttpError("INVALID_GENERATION_REQUEST")
+        task = await runtime.find_asset_submission(context, project_id, asset_id, version, key)
+        response = _success(
+            context.request_id,
+            {"task": {"taskId": task.task_id, "projectId": project_id, "status": task.status.value} if task else None},
+        )
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
 
     @router.get("/generation-model-usage")
     async def generation_model_usage(request: Request):

@@ -23,6 +23,7 @@ import { useRecoverableDraft } from "./useRecoverableDraft";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
 import { AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferenceGeneration";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
+import { assetImageCapabilities, useAssetImageModels, type AssetImageControls } from "./asset-image-models";
 import { useAssetExtractionTranslation } from "./asset-extraction-i18n";
 import { FrozenScriptSelect, useFrozenScriptSource, type EpisodeScriptBinding, type FrozenScriptSource } from "./FrozenScriptSelect";
 import { ExtractionResults, extractionTypes, useExtractionLocation } from "./ExtractionResults";
@@ -282,7 +283,8 @@ function MarketReusePanel({ asset, busy, onCreate }: {
   return <section className={`${panel} p-5`}><h2 className="font-semibold">授权复用</h2><p className="mt-2 text-sm text-[#B8BECC]">创建操作走市场正式 Fork：锁定当前市场版本和源版本，并保存授权、分成与来源血缘。</p><dl className="mt-4 grid grid-cols-2 gap-3 text-xs"><div><dt className="text-[#7E8494]">价格（最小计价单位）</dt><dd className="mt-1 font-mono text-[#F5F6FA]">{priceMinor}</dd></div><div><dt className="text-[#7E8494]">当前工作区使用记录</dt><dd className="mt-1 text-[#F5F6FA]">{asset.referenceCount} 次</dd></div><div><dt className="text-[#7E8494]">市场版本</dt><dd className="mt-1 font-mono text-[#F5F6FA]">v{asset.version}</dd></div><div><dt className="text-[#7E8494]">源版本</dt><dd className="mt-1 truncate font-mono text-[#F5F6FA]">{asset.currentVersionId}</dd></div></dl><label className="mt-4 block text-xs text-[#B8BECC]">新项目名称<input value={projectName} onChange={(event) => setProjectName(event.target.value)} className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2" /></label><label className="mt-3 block text-xs text-[#B8BECC]"><input type="checkbox" checked={commercialUse} disabled={!commercialAllowed} onChange={(event) => setCommercialUse(event.target.checked)} className="mr-2 accent-[#8B5CF6]" />用于商业项目{commercialAllowed ? "" : "（当前许可不允许）"}</label><p className="mt-3 text-xs text-[#7E8494]">可继承范围：{inheritableScopes.join("、") || "无"}</p><button type="button" className={`${primaryButton} mt-4 w-full`} disabled={busy || !allowFork || !projectName.trim()} onClick={() => setConfirming(true)}>{busy ? "正在创建…" : allowFork ? "创建授权副本" : "当前素材禁止 Fork"}</button><ConfirmDialog open={confirming} title="确认创建授权副本" detail={`将锁定市场 v${asset.version} 与源版本 ${asset.currentVersionId}，并按当前许可创建项目。`} confirmLabel="确认创建副本" busy={busy} onCancel={() => setConfirming(false)} onConfirm={create} /></section>;
 }
 
-function AssetEditor({ asset, canManage, busy, task, ownerProject, conflict, marketDetail, onSave, onAction, onReload, onUploadRightsEvidence, onDerivative, onDirty, draftScope }: {
+function AssetEditor({ asset, canManage, busy, generation, task, ownerProject, conflict, marketDetail, onSave, onAction, onReload, onUploadRightsEvidence, onDerivative, onDirty, draftScope }: {
+  readonly generation: AssetImageControls;
   readonly asset: AssetItem;
   readonly canManage: boolean;
   readonly busy: boolean;
@@ -326,8 +328,8 @@ function AssetEditor({ asset, canManage, busy, task, ownerProject, conflict, mar
       {proofReselect ? <p role="status" className="mb-4 text-xs text-amber-200">{t("proofReselect")}</p> : null}
       <div className="flex items-start justify-between gap-4"><div><p className="text-xs text-[#8B5CF6]">{assetTypeLabels[asset.type]} · 稳定 ID</p><code className="mt-1 block text-xs text-[#7E8494]">{asset.id}</code></div><span className={`rounded-full border px-3 py-1 text-xs ${statusTone(asset.rightsStatus)}`}>{rightsLabels[asset.rightsStatus]}</span></div>
       <fieldset disabled={busy || !canEdit} className="mt-6 grid gap-4"><label className="text-sm text-[#B8BECC]">资产名称<input disabled={busy || !canManage} value={name} onChange={(event) => setName(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label><label className="text-sm text-[#B8BECC]">资产说明<textarea disabled={busy || !canEdit} value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA]" /></label><MetadataEditor asset={asset} values={metadata} onChange={(key, value) => setMetadata((current) => ({ ...current, [key]: value }))} /></fieldset>
-      {marketDetail ? <StatePanel title="市场素材为只读版本" detail="该素材的授权、价格与复用规则由市场服务端维护。导入项目或创建 Fork 必须走 M13 的正式授权流程，不能在这里伪造资产副本。" tone="warning" /> : <button type="button" className={`${primaryButton} mt-6`} disabled={!canEdit || busy || !name.trim()} onClick={() => onSave({ name: name.trim(), description, metadata }, baseVersion)}>{busy ? "保存中…" : "保存资产"}</button>}
-      {!marketDetail ? <AssetReferenceGeneration asset={asset} ownerProject={ownerProject} canManage={canEdit} busy={busy} draftBlocked={dirty || Boolean(recovery.pending) || asset.version !== baseVersion} task={task} onGenerate={() => onAction("generateReferenceImage", { sourceVersionId: baseCurrentVersionId }, baseVersion)} onAdopt={(generatedAssetId) => onAction("adoptGenerationOutput", { generatedAssetId }, baseVersion)} /> : null}
+      {marketDetail ? <StatePanel title="市场素材为只读版本" detail="该素材的授权、价格与复用规则由市场服务端维护。导入项目或创建 Fork 必须走 M13 的正式授权流程，不能在这里伪造资产副本。" tone="warning" /> : <button type="button" className={`${primaryButton} mt-6`} disabled={!canEdit || busy || !name.trim()} onClick={() => onSave({ name: name.trim(), description, metadata }, baseVersion)}>{generation.activeAction === "updateAsset" ? "保存中…" : "保存资产"}</button>}
+      {!marketDetail ? <AssetReferenceGeneration asset={asset} generation={generation} ownerProject={ownerProject} canManage={canEdit} busy={busy} draftBlocked={dirty || Boolean(recovery.pending) || asset.version !== baseVersion} task={task} onGenerate={() => onAction("generateReferenceImage", { sourceVersionId: baseCurrentVersionId }, baseVersion)} onAdopt={(generatedAssetId) => onAction("adoptGenerationOutput", { generatedAssetId }, baseVersion)} /> : null}
       {!marketDetail && asset.type === "character" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" className={button} onClick={() => onDerivative("turnaround")}>生成角色三视图</button><button type="button" className={button} onClick={() => onDerivative("expressions")}>生成角色表情集</button></div> : null}
       {conflict ? <StatePanel title="版本冲突" detail="当前版本已被其他成员更新。你的输入仍保留，可以读取最新版本或另存新版本。" requestId={conflict.requestId} tone="warning" /> : null}
       {conflict ? <p className="mt-3 text-xs leading-6 text-slate-400">{t("saveConflict")}</p> : null}
@@ -342,17 +344,20 @@ function AssetEditor({ asset, canManage, busy, task, ownerProject, conflict, mar
   </div>;
 }
 
-function CharacterDerivative({ asset, mode, canManage, busy, ownerProject, onRun, onGenerateReference, onAdopt, task }: { readonly asset?: AssetItem; readonly mode: "turnaround" | "expressions"; readonly ownerProject: boolean; readonly canManage: boolean; readonly busy: boolean; readonly onRun: (payload: Record<string, unknown>) => void; readonly onGenerateReference: () => void; readonly onAdopt: (generatedAssetId: string) => void; readonly task?: TaskReceipt }) {
+function CharacterDerivative({ asset, mode, canManage, busy, generation, ownerProject, onRun, onGenerateReference, onAdopt, task }: { readonly generation: AssetImageControls; readonly asset?: AssetItem; readonly mode: "turnaround" | "expressions"; readonly ownerProject: boolean; readonly canManage: boolean; readonly busy: boolean; readonly onRun: (payload: Record<string, unknown>) => void; readonly onGenerateReference: () => void; readonly onAdopt: (generatedAssetId: string) => void; readonly task?: TaskReceipt }) {
   const [values, setValues] = useState(mode === "turnaround" ? "正面,侧面,背面,半身,全身" : "喜悦,愤怒,悲伤,惊讶");
   const { t } = useAssetGenerationTranslation();
   if (!asset) return <StatePanel title="未找到角色资产" detail="请从资产库选择一个角色后再进入此页面。" />;
   const hasReference = assetHasReferenceImage(asset);
   const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
+  const action = mode === "turnaround" ? "generateTurnaround" : "generateExpressions";
+  const available = generation.models.supports(assetImageCapabilities[action]);
   return <section className={`${panel} max-w-4xl p-6`}><p className="text-xs text-[#8B5CF6]">角色稳定 ID</p><code className="text-xs text-[#7E8494]">{asset.id}</code><h2 className="mt-4 text-xl font-semibold">{asset.name}</h2>
     {!hasReference ? <p role="status" className="mt-4 text-sm text-amber-200">{t("firstImage")}</p> : null}
     <label className="mt-5 block text-sm">{mode === "turnaround" ? "需要生成的视图（逗号分隔）" : "需要生成的表情（逗号分隔）"}<textarea rows={3} value={values} onChange={(event) => setValues(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label>
-    <button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || working || !hasReference || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{busy ? "提交中…" : mode === "turnaround" ? "生成三视图版本" : "生成表情集版本"}</button>
-    <AssetReferenceGeneration asset={asset} ownerProject={ownerProject} canManage={canManage} busy={busy} task={task} onGenerate={onGenerateReference} onAdopt={onAdopt} />
+    {hasReference && !available ? <p role="status" className="mt-3 text-sm text-amber-200">{t(generation.models.notice ?? "noDerivative")}</p> : null}
+    <button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || generation.pending || !available || working || !hasReference || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{generation.activeAction === action ? t("submitting") : mode === "turnaround" ? "生成三视图版本" : "生成表情集版本"}</button>
+    <AssetReferenceGeneration asset={asset} generation={generation} ownerProject={ownerProject} canManage={canManage} busy={busy} task={task} onGenerate={onGenerateReference} onAdopt={onAdopt} />
   </section>;
 }
 
@@ -376,7 +381,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const { t: handoff } = useProductionHandoffTranslation();
   const { t: generationText } = useAssetGenerationTranslation();
   const { t: extractionText } = useAssetExtractionTranslation();
-  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string }>();
+  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string; assetId?: string }>();
   const [pendingRecovery, setPendingRecovery] = useState<{ key: string; operation?: PendingAssetSubmission }>();
   const [taskStorageUnavailable, setTaskStorageUnavailable] = useState(false);
   const [draftBlocked, setDraftBlocked] = useState(false), [draftReset, setDraftReset] = useState(0), [discardConfirm, setDiscardConfirm] = useState(false);
@@ -388,7 +393,9 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const [activeQuery, setActiveQuery] = useState<{ search?: string; assetType?: AssetType; rightsStatus?: RightsStatus }>({});
   const [search, setSearch] = useState(""); const [type, setType] = useState<AssetType | "">(""); const [rights, setRights] = useState<RightsStatus | "">("");
   const [error, setError] = useState<unknown>(); const [forbidden, setForbidden] = useState<AssetsStoryboardApiError>(); const [conflict, setConflict] = useState<AssetsStoryboardApiError>();
-  const [busy, setBusy] = useState(false); const [batch, setBatch] = useState<BatchReceipt>(); const [task, setTask] = useState<TaskReceipt>(); const [taskOwnerId, setTaskOwnerId] = useState<string>(); const [message, setMessage] = useState("");
+  const [activeAction, setActiveAction] = useState<string>();
+  const busy = activeAction !== undefined;
+  const [batch, setBatch] = useState<BatchReceipt>(); const [task, setTask] = useState<TaskReceipt>(); const [taskOwnerId, setTaskOwnerId] = useState<string>(); const [message, setMessage] = useState("");
   const load = useCallback(async (query = activeQuery, append = false) => {
     loadAbort.current?.abort();
     const controller = new AbortController();
@@ -428,15 +435,19 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     return () => { window.clearTimeout(timer); loadAbort.current?.abort(); loadSequence.current += 1; };
   }, [api, scope.workspaceId, scope.projectId, activeView, targetAssetId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!task || !["queued", "running", "retrying", "cancelling"].includes(task.status)) return undefined;
+    if (!task) return;
+    const needsOutputs = task.status === "succeeded" && task.outputAssetIds === undefined;
+    if (!needsOutputs && !["queued", "running", "retrying", "cancelling"].includes(task.status)) return;
     const controller = new AbortController();
-    const timer = window.setInterval(() => {
+    const refresh = () => {
       void api.getGenerationTask(scope, task, controller.signal)
         .then((current) => { if (!controller.signal.aborted) setTask((previous) => previous?.taskId === task.taskId ? current : previous); })
         .catch((cause) => {
           if (!controller.signal.aborted) setError(cause);
         });
-    }, 2_000);
+    };
+    if (needsOutputs) { refresh(); return () => controller.abort(); }
+    const timer = window.setInterval(refresh, 2_000);
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [api, scope, task]);
   const canManage = context?.permissions.includes("asset.manage") ?? false;
@@ -453,7 +464,41 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     return saved?.targetId === currentAssetId ? saved : undefined;
   }, [taskStorageKey, currentAssetId]);
   const pendingSubmission = pendingRecovery?.key === taskStorageKey ? pendingRecovery?.operation : restoredSubmission;
-  const protection = useDraftProtection(draftBlocked || busy || Boolean(pendingSubmission));
+  const [receiptCheck, setReceiptCheck] = useState<{ id: string; missing: boolean }>();
+  const [receiptRevision, recheckReceipt] = useState(0);
+  const missingReceipt = Boolean(pendingSubmission && receiptCheck?.id === pendingSubmission.idempotencyKey && receiptCheck.missing);
+  const editingLocked = Boolean(pendingSubmission && !missingReceipt);
+  const protection = useDraftProtection(draftBlocked || busy || editingLocked);
+  const projectId = scope.projectId ?? currentAsset?.projectId;
+  const models = useAssetImageModels(api, scope.workspaceId, detailView && currentAsset && currentAsset.type !== "voice" ? projectId : undefined);
+  const generation = { models, activeAction, pending: Boolean(pendingSubmission), rejection: sourceError?.assetId && sourceError.assetId === currentAssetId ? sourceError.message : undefined };
+  const assetRevision = currentAsset?.version;
+  useEffect(() => {
+    if (busy || !taskStorageKey || !projectId || !pendingSubmission || pendingSubmission.action === "adoptGenerationOutput" || !api.getAssetGenerationReceipt) return;
+    const original = pendingSubmission;
+    const version = original.payload.sourceVersionId;
+    if (typeof version !== "string") return;
+    const controller = new AbortController();
+    const lookupScope = { workspaceId: scope.workspaceId, projectId };
+    void api.getAssetGenerationReceipt(lookupScope, original.targetId, version, original.idempotencyKey, controller.signal).then(async (receipt) => {
+      if (controller.signal.aborted) return;
+      if (!receipt) {
+        if (assetRevision !== undefined && original.version !== assetRevision) {
+          setTaskStorageUnavailable(!clearPendingAssetSubmission(taskStorageKey));
+          setPendingRecovery({ key: taskStorageKey });
+        } else setReceiptCheck({ id: original.idempotencyKey, missing: true });
+        return;
+      }
+      const detail = await api.getGenerationTask(lookupScope, receipt, controller.signal);
+      if (controller.signal.aborted) return;
+      setTask(detail); setTaskOwnerId(original.targetId);
+      if (rememberAssetTask(taskStorageKey, { ...detail, projectId })) {
+        setTaskStorageUnavailable(!clearPendingAssetSubmission(taskStorageKey));
+        setPendingRecovery({ key: taskStorageKey });
+      } else setTaskStorageUnavailable(true);
+    }).catch(() => { if (!controller.signal.aborted) setReceiptCheck({ id: original.idempotencyKey, missing: false }); });
+    return () => controller.abort();
+  }, [api, assetRevision, busy, pendingSubmission, projectId, receiptRevision, scope.workspaceId, taskStorageKey]);
   useEffect(() => {
     if (!taskStorageKey || !currentAsset) return;
     const retained = readAssetTask(taskStorageKey);
@@ -478,7 +523,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   }, [taskStorageKey, task, taskOwnerId, currentAsset, scope.projectId]);
   const navigate = (next: AssetView, id?: string) => { if (!protection.canNavigate()) return; if (onNavigate) onNavigate(next, id); else setLocalNavigation({ source: view, target: next, assetId: id }); };
   const run = async (action: string, payload: Record<string, unknown> = {}, target: Pick<AssetItem, "id" | "projectId"> & Partial<Pick<AssetItem, "version">> | undefined = currentAsset, version = target?.version, original?: PendingAssetSubmission) => {
-    if (operationLatch.current || pendingSubmission && original !== pendingSubmission) return;
+    if (operationLatch.current || pendingSubmission && original !== pendingSubmission && (!missingReceipt || isRecoverableAssetAction(action))) return;
     const ownerProjectId = !scope.projectId && target?.projectId ? { ownerProjectId: target.projectId } : {};
     const commandPayload = original?.payload ?? { ...payload, ...ownerProjectId };
     const storageKey = context && target ? assetTaskRecoveryKey(context.user.id, scope.workspaceId, scope.projectId ?? target.projectId ?? "", target.id, sessionEpoch) : undefined;
@@ -493,7 +538,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       }
       setPendingRecovery({ key: storageKey, operation: retained });
     }
-    operationLatch.current = true; setBusy(true); setError(undefined); setSourceError(undefined); setConflict(undefined); setMessage("");
+    operationLatch.current = true; setActiveAction(action); setError(undefined); setSourceError(undefined); setConflict(undefined); setMessage("");
     try {
       const result = await api.assetAction(scope, { action: action as never, targetId: retained?.targetId ?? target?.id, version: retained?.version ?? version, payload: commandPayload, ...(retained ? { idempotencyKey: retained.idempotencyKey } : {}) });
       if (retained && (action === "adoptGenerationOutput" ? result.asset?.id !== retained.targetId : !result.task?.taskId)) throw new Error(generationText("uncertain"));
@@ -517,9 +562,16 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       await load();
       return result;
     } catch (cause) {
-      const uncertain = !(cause instanceof AssetsStoryboardApiError) || cause.status === null || cause.status >= 500 || cause.status === 408;
+      const rejected = cause instanceof AssetsStoryboardApiError && typeof cause.details === "object" && cause.details !== null
+        && "submissionState" in cause.details && cause.details.submissionState === "rejected";
+      const uncertain = !rejected && (!(cause instanceof AssetsStoryboardApiError) || cause.status === null || cause.status >= 500 || cause.status === 408);
       if (retained && storageKey && !uncertain) { clearPendingAssetSubmission(storageKey); setPendingRecovery({ key: storageKey }); }
-      if (action === "extractAssets" || action === "createAsset") {
+      if (rejected && retained) {
+        models.recheck();
+        setSourceError({ message: generationText("notSubmitted"), assetId: target?.id, requestId: errorRequestId(cause) });
+      } else if (retained && uncertain) {
+        setReceiptCheck(undefined);
+      } else if (action === "extractAssets" || action === "createAsset") {
         const code = cause instanceof AssetsStoryboardApiError ? cause.code : "";
         const stale = code === "FROZEN_SCRIPT_VERSION_ID_INVALID" || code === "FROZEN_SCRIPT_VERSION_NOT_FOUND";
         const messages = { NO_EXTRACTABLE_ASSETS: "noAssets", NARRATION_REQUIRES_INTERPRETATION: "reading", SEMANTIC_EXTRACTION_MODEL_FAILED: "modelFailed", SEMANTIC_EXTRACTION_IN_PROGRESS: "inProgress", PERMISSION_DENIED: "manageDenied" } as const;
@@ -527,7 +579,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         if (stale) source.reload();
       } else if (isForbidden(cause)) { setForbidden(cause as AssetsStoryboardApiError); setAssets([]); setContext(undefined); } else if (isConflict(cause)) setConflict(cause as AssetsStoryboardApiError); else setError(cause);
       return undefined;
-    } finally { operationLatch.current = false; setBusy(false); }
+    } finally { operationLatch.current = false; setActiveAction(undefined); }
   };
   const title = activeView === "extract" ? [extractionText("title"), extractionText("intro")] : viewTitles[activeView];
   const currentError = error ?? (exactDetail && detail?.key === detailKey ? detail.error : undefined);
@@ -537,16 +589,21 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   if (exactDetail && detail?.error && !detail.asset) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title={generationText("detailFailed")} detail={errorMessage(detail.error)} requestId={errorRequestId(detail.error)} actionLabel={generationText("reloadDetail")} onAction={() => void load()} tone="danger" /></main>;
   if (!context || !assets) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title="资产数据加载失败" detail={errorMessage(error)} requestId={errorRequestId(error)} actionLabel="重新加载" onAction={() => void load()} tone="danger" /></main>;
   const hasProjectContext = Boolean(scope.projectId);
+  const pendingCapability = pendingSubmission && pendingSubmission.action !== "adoptGenerationOutput" ? assetImageCapabilities[pendingSubmission.action] : undefined;
   const actions = activeView === "library" && hasProjectContext ? <button type="button" className={button} onClick={() => navigate("extract")}>提取剧本资产</button> : null;
   return <WorkspaceShell context={context} title={title[0]} description={title[1]} eyebrow="M04 · ASSET CONTINUITY" projectName={projectName ?? context.project?.name} actions={actions}>
     {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}{draftBlocked ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { if (currentAsset) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }, "asset", currentAsset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); setConflict(undefined); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}{message ? <StatePanel title={message} tone="success" /> : null}{currentError ? <StatePanel title="操作失败" detail={errorMessage(currentError)} requestId={errorRequestId(currentError)} actionLabel="重试加载" onAction={() => void load()} tone="danger" /> : null}
-    {pendingSubmission ? <section role="status" className="mb-4 rounded-xl border border-amber-400/30 p-4"><p className="text-sm leading-6 text-amber-200">{generationText("uncertain")}</p><button type="button" className={`${button} mt-3`} disabled={busy} onClick={() => void run(pendingSubmission.action, pendingSubmission.payload, { id: pendingSubmission.targetId, projectId: pendingSubmission.projectId }, pendingSubmission.version, pendingSubmission)}>{generationText("recoverSubmission")}</button></section> : null}
+    {pendingSubmission && !busy ? <section role="status" className="mb-4 rounded-xl border border-amber-400/30 p-4">
+      <p className="text-sm leading-6 text-amber-200">{generationText(!pendingCapability ? "uncertain" : missingReceipt ? "receiptMissing" : receiptCheck?.id === pendingSubmission.idempotencyKey ? "receiptFailed" : "checkingReceipt")}</p>
+      {pendingCapability ? <button type="button" className={button + " mt-3"} onClick={() => { setReceiptCheck(undefined); recheckReceipt((value) => value + 1); }}>{generationText("checkReceipt")}</button> : null}
+      {(!pendingCapability || missingReceipt && models.supports(pendingCapability)) ? <button type="button" className={button + " ml-2 mt-3"} disabled={draftBlocked} onClick={() => void run(pendingSubmission.action, pendingSubmission.payload, { id: pendingSubmission.targetId, projectId: pendingSubmission.projectId }, pendingSubmission.version, pendingSubmission)}>{generationText(pendingCapability ? "retryOriginal" : "recoverSubmission")}</button> : null}
+    </section> : null}
     {taskStorageUnavailable ? <p role="status" className="mb-4 text-xs text-amber-200">{handoff("storageUnavailable")}</p> : null}
     {sourceError && (activeView === "extract" || activeView === "library") ? <StatePanel title={extractionText("operationFailed")} detail={sourceError.message} requestId={sourceError.requestId} tone="danger" /> : null}
     {activeView === "extract" ? <AssetExtraction {...sourceProps} api={api} scope={scope} task={taskOwnerId ? undefined : task} onLibrary={() => navigate("library")} onOpenAsset={(id) => navigate("editor", id)} onRun={(scriptVersionId, types, interpretNarration) => run("extractAssets", { scriptVersionId, assetTypes: types, ...(interpretNarration ? { interpretNarration } : {}) })} /> : null}
     {activeView === "library" || activeView === "market" ? <>{activeView === "library" && hasProjectContext ? <ManualAssetCreate key={draftReset} {...sourceProps} onDirty={setDraftBlocked} onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : null}<AssetFilters search={search} type={type} rights={rights} onSearch={setSearch} onType={setType} onRights={setRights} onApply={() => { const query = { search: search || undefined, assetType: type || undefined, rightsStatus: rights || undefined }; setActiveQuery(query); void load(query); }} />{activeView === "library" && canManage && selectedAssetIds.length > 0 ? <div className="mb-4 flex items-center justify-between rounded-[14px] border border-[#8B5CF6]/40 bg-[#8B5CF6]/10 p-3"><span className="text-sm">已选择 {selectedAssetIds.length} 项</span><button type="button" className={primaryButton} disabled={busy} onClick={() => void run("confirmAssets", { itemIds: selectedAssetIds }, undefined, undefined)}>批量确认授权</button></div> : null}{assets?.length === 0 ? <StatePanel title="当前范围没有资产" detail={activeView === "market" ? "没有符合当前筛选和授权范围的市场素材。" : hasProjectContext ? "先从冻结剧本提取主体，或从冻结剧本创建可编辑资产。" : "当前工作区还没有可复用资产。请先在项目资产库中创建或提取资产。"} actionLabel={activeView === "market" ? "清除筛选" : hasProjectContext ? "开始资产提取" : undefined} onAction={() => { if (activeView === "market") { setSearch(""); setType(""); setRights(""); setActiveQuery({}); void load({}); } else if (hasProjectContext) navigate("extract"); }} /> : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{assets?.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.includes(asset.id)} canManage={activeView === "library" && canManage} onSelect={() => setSelectedAssetIds((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])} onOpen={() => navigate(activeView === "market" ? "market-detail" : "editor", asset.id)} />)}</section>}{nextToken ? <button type="button" className={`${button} mt-4`} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}{batch ? <BatchResultPanel receipt={batch} busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : null}</> : null}
-    {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor key={`${currentAsset.id}:${draftReset}`} draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }} onDirty={setDraftBlocked} asset={currentAsset} ownerProject={!scope.projectId || currentAsset.projectId === scope.projectId} task={taskOwnerId === currentAsset.id ? task : undefined} canManage={canManage} busy={busy || Boolean(pendingSubmission) || Boolean(exactDetail && detail?.loading)} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)} onAction={(action, payload, version) => void run(action, payload, currentAsset, version)} onUploadRightsEvidence={(file) => api.uploadRightsEvidence(scope, currentAsset, file)} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next, assetId: currentAsset.id })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
-    {activeView === "turnaround" || activeView === "expressions" ? <CharacterDerivative asset={currentAsset} ownerProject={!scope.projectId || currentAsset?.projectId === scope.projectId} mode={activeView} canManage={canManage} busy={busy || Boolean(pendingSubmission) || Boolean(exactDetail && detail?.loading)} task={taskOwnerId === currentAsset?.id ? task : undefined} onGenerateReference={() => void run("generateReferenceImage", { sourceVersionId: currentAsset?.currentVersionId })} onRun={(payload) => void run(activeView === "turnaround" ? "generateTurnaround" : "generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}
+    {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor generation={generation} key={`${currentAsset.id}:${draftReset}`} draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }} onDirty={setDraftBlocked} asset={currentAsset} ownerProject={!scope.projectId || currentAsset.projectId === scope.projectId} task={taskOwnerId === currentAsset.id ? task : undefined} canManage={canManage && !editingLocked} busy={busy || Boolean(exactDetail && detail?.loading)} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)} onAction={(action, payload, version) => void run(action, payload, currentAsset, version)} onUploadRightsEvidence={(file) => api.uploadRightsEvidence(scope, currentAsset, file)} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next, assetId: currentAsset.id })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
+    {activeView === "turnaround" || activeView === "expressions" ? <CharacterDerivative generation={generation} asset={currentAsset} ownerProject={!scope.projectId || currentAsset?.projectId === scope.projectId} mode={activeView} canManage={canManage && !editingLocked} busy={busy || Boolean(exactDetail && detail?.loading)} task={taskOwnerId === currentAsset?.id ? task : undefined} onGenerateReference={() => void run("generateReferenceImage", { sourceVersionId: currentAsset?.currentVersionId })} onRun={(payload) => void run(activeView === "turnaround" ? "generateTurnaround" : "generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}
   </WorkspaceShell>;
 }
 
