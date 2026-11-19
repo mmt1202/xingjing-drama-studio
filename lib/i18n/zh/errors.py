@@ -458,6 +458,7 @@ MESSAGES = {
     "director_candidate_stale": "请先将历史方案保存为新的候选，再确认与当前冻结剧本匹配的最新方案。",
     "director_profile_incomplete": "请补全受众、节奏、视觉风格和镜头语言，再确认导演方案。",
     "director_confirmation_required": "请先在 AI 导演中确认与当前冻结剧本匹配的最新方案，再生成智能分镜。",
+    "episode_storyboard_inputs_changed": "本集使用的剧本或资产已变更。请刷新智能分镜，核对后再次生成。",
     "director_profile_invalid": "导演方案字段格式或长度不符合要求，请检查后保存。",
     "smart_storyboard_source_context_missing": "此历史请求未记录完整输入来源，请先查看已有分镜结果；不会自动重新调用模型。",
     "smart_storyboard_source_context_mismatch": "分镜请求的来源版本无法核对，请检查冻结剧本、导演确认和资产快照。",

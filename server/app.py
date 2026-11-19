@@ -771,8 +771,9 @@ else:
             project_scope_authorizer=_storyboard_runtime.project_scope_authorizer,
             upload_store=_storyboard_runtime.upload_store,
             smart_draft_generator=_storyboard_runtime.generate_smart_drafts,
+            check_episode_binding=_storyboard_runtime.check_episode_binding,
             prompt_repository=_storyboard_runtime.prompt_repository,
-            audit_repository=_storyboard_runtime.repository,
+            audit_repository=_storyboard_runtime.audit_repository,
             generation_runtime=_generation_runtime,
         )
     )

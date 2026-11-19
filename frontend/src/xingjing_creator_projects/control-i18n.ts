@@ -2,6 +2,7 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  returnToShots: "返回第 {{number}} 集分镜",
   ownerNameUnavailable: "成员姓名暂不可用",
   projectIdentity: "项目工作区", productionState: "生产状态", currentStage: "当前阶段",
   workspaceNavigationUnavailable: "工作区导航暂不可用，已停用公共入口；当前项目仍可继续查看。",
@@ -29,6 +30,7 @@ const zh = {
 };
 type Copy = { [K in keyof typeof zh]: typeof zh[K] extends string ? string : Record<keyof typeof zh[K], string> };
 const en: Copy = {
+  returnToShots: "Back to shots for episode {{number}}",
   ownerNameUnavailable: "Member name unavailable",
   projectIdentity: "Project workspace", productionState: "Production status", currentStage: "Current stage",
   workspaceNavigationUnavailable: "Workspace navigation is unavailable. Global links are disabled; you can continue viewing this project.",
@@ -55,6 +57,7 @@ const en: Copy = {
   taskState: { queued: "Queued", running: "Running", retrying: "Retrying", cancelling: "Cancelling", succeeded: "Succeeded", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled" },
 };
 const vi: Copy = {
+  returnToShots: "Quay lại phân cảnh tập {{number}}",
   ownerNameUnavailable: "Chưa có tên thành viên",
   projectIdentity: "Không gian dự án", productionState: "Trạng thái sản xuất", currentStage: "Giai đoạn hiện tại",
   workspaceNavigationUnavailable: "Điều hướng không gian tạm không khả dụng. Các lối vào chung đã tắt; vẫn có thể xem dự án hiện tại.",

@@ -502,6 +502,7 @@ MESSAGES = {
     "director_candidate_stale": "Save the historical profile as a new candidate, then confirm the latest candidate matching the frozen script.",
     "director_profile_incomplete": "Complete the audience, pacing, visual style and camera language before confirming the director profile.",
     "director_confirmation_required": "Confirm the latest director candidate matching the frozen script before generating a Smart storyboard.",
+    "episode_storyboard_inputs_changed": "The script or assets for this episode have changed. Refresh Smart Storyboard and review them before generating shots.",
     "director_profile_invalid": "Check the format and length of the director profile fields before saving.",
     "smart_storyboard_source_context_missing": "This historical request has no complete input provenance. Check existing storyboard results first; the model will not be called again automatically.",
     "smart_storyboard_source_context_mismatch": "The storyboard input versions cannot be verified. Check the frozen script, director confirmation and asset snapshot.",

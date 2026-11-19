@@ -172,6 +172,15 @@ class DirectorConfirmation:
     confirmed_at: str
     note: str = ""
 
+    def matches(self, candidate: DirectorVersion, version_id: str, content_digest: str) -> bool:
+        return (
+            self.candidate_id == candidate.id
+            and self.candidate_number == candidate.number
+            and self.script_version_id == candidate.script_version_id == version_id
+            and self.script_content_digest == candidate.script_content_digest == content_digest
+            and self.profile_digest == director_profile_digest(candidate.profile)
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RecoveryOrigin:
@@ -219,10 +228,7 @@ class ScriptDocument:
             (
                 item
                 for item in reversed(self.director_confirmations)
-                if item.candidate_id == candidate.id
-                and item.script_version_id == candidate.script_version_id
-                and item.script_content_digest == candidate.script_content_digest
-                and item.profile_digest == director_profile_digest(candidate.profile)
+                if item.matches(candidate, candidate.script_version_id, candidate.script_content_digest)
             ),
             None,
         )

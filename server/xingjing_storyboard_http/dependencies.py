@@ -29,6 +29,7 @@ class StoryboardHttpDependencies:
     prompt_repository: SqlAlchemyPromptTemplateRepository | None = None
     audit_repository: SqlAlchemyStoryboardRepository | None = None
     generation_runtime: GenerationRuntime | None = None
+    check_episode_binding: Callable[[AccessContext, str, str, str], None] | None = None
 
 
 def create_storyboard_http_dependencies(
@@ -41,6 +42,7 @@ def create_storyboard_http_dependencies(
     prompt_repository: SqlAlchemyPromptTemplateRepository | None = None,
     audit_repository: SqlAlchemyStoryboardRepository | None = None,
     generation_runtime: GenerationRuntime | None = None,
+    check_episode_binding: Callable[[AccessContext, str, str, str], None] | None = None,
 ) -> StoryboardHttpDependencies:
     return StoryboardHttpDependencies(
         service=service,
@@ -51,4 +53,5 @@ def create_storyboard_http_dependencies(
         prompt_repository=prompt_repository,
         audit_repository=audit_repository,
         generation_runtime=generation_runtime,
+        check_episode_binding=check_episode_binding,
     )

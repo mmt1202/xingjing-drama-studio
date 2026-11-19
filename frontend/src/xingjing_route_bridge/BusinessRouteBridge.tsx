@@ -387,9 +387,10 @@ function ProjectBusinessContent({
     case "assets-storyboard": {
       const selectedEpisode = projectFlow?.data.episodes.find((episode) => String(episode.episode) === complianceQuery.get("episodeId"));
       const assetSourcePage = surface.pageId === "CR-027" || surface.pageId === "M04-ASSET-LIST";
+      const smartPage = surface.pageId === "CR-103";
       const episodeSource = assetSourcePage && complianceQuery.has("episodeId");
       const staleBinding = selectedEpisode && (["scriptVersionId", "assetSnapshotId"] as const).some((key) => complianceQuery.has(key) && complianceQuery.get(key) !== (selectedEpisode[key] ?? ""));
-      if (staleBinding) return <section role="status" className="rounded-xl border border-amber-300/30 p-6"><p className="text-sm leading-7 text-amber-100">{handoff("staleBinding")}</p><button type="button" className="mt-4 rounded-lg border border-white/15 px-4 py-2 text-sm" onClick={() => go(`episodes?episodeId=${selectedEpisode.episode}`)}>{handoff("returnEpisodes")}</button></section>;
+      if (staleBinding && !smartPage) return <section role="status" className="rounded-xl border border-amber-300/30 p-6"><p className="text-sm leading-7 text-amber-100">{handoff("staleBinding")}</p><button type="button" className="mt-4 rounded-lg border border-white/15 px-4 py-2 text-sm" onClick={() => go(`episodes?episodeId=${selectedEpisode.episode}`)}>{handoff("returnEpisodes")}</button></section>;
       const route = assetsStoryboardRouteExports.find(
         (candidate) => candidate.pageId === surface.pageId,
       );
@@ -440,14 +441,22 @@ function ProjectBusinessContent({
           assetId={assetId}
           shotId={shotId}
           episodeId={complianceQuery.get("episodeId") ?? undefined}
-          scriptVersionId={episodeSource ? selectedEpisode?.scriptVersionId || undefined : complianceQuery.get("scriptVersionId") ?? selectedEpisode?.scriptVersionId ?? undefined}
+          scriptVersionId={smartPage ? complianceQuery.get("scriptVersionId") ?? undefined : episodeSource ? selectedEpisode?.scriptVersionId || undefined : complianceQuery.get("scriptVersionId") ?? selectedEpisode?.scriptVersionId ?? undefined}
           scriptId={complianceQuery.get("scriptId") ?? undefined}
           episodeBindings={projectFlow?.data.episodes}
           onReviewScripts={() => {
             const scriptId = complianceQuery.get("scriptId");
             go(episodeSource ? "episodes" : scriptId ? `versions?${new URLSearchParams({ scriptId })}` : "versions");
           }}
-          assetSnapshotId={complianceQuery.get("assetSnapshotId") ?? selectedEpisode?.assetSnapshotId ?? undefined}
+          assetSnapshotId={complianceQuery.get("assetSnapshotId") ?? (smartPage ? undefined : selectedEpisode?.assetSnapshotId ?? undefined)}
+          onOpenSmart={(target, number) => {
+            if (projectFlow) { projectFlow.go(target, number); return; }
+            const [path, raw] = target.split("?");
+            const query = new URLSearchParams(raw);
+            if (number) query.set("episodeId", String(number));
+            navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/${path}${query.size ? "?" + query.toString() : ""}`);
+          }}
+          onSmartChange={projectFlow?.refresh}
           api={assetsStoryboardApi}
           onNavigate={navigateAsset}
           onNavigateStoryboard={navigateStoryboard}

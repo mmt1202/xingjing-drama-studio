@@ -15,6 +15,7 @@ import type {
   ShotAction,
   ShotActionResult,
   ShotItem,
+  SmartStoryboardInputs,
   ShotListQuery,
   TaskReceipt,
   RightsEvidenceUpload,
@@ -298,6 +299,7 @@ export function createAssetsStoryboardApi(
     if ("hasIssues" in query && query.hasIssues !== undefined)
       search.set("hasIssues", String(query.hasIssues));
     if (scope.episodeId) search.set("episodeId", scope.episodeId);
+    if ("storyboardId" in query && query.storyboardId) search.set("storyboardId", query.storyboardId);
     const response = await request<readonly T[]>(
       scope,
       `${path}?${search}`,
@@ -382,6 +384,11 @@ export function createAssetsStoryboardApi(
     async getFrozenScriptSources(scope, signal) {
       const path = `/projects/${requireProject(scope)}/assets/sources/frozen-scripts`;
       return (await request<FrozenScriptSources>(scope, path, {}, signal)).data;
+    },
+    async getSmartInputs(scope, signal) {
+      const query = scope.episodeId ? "?" + new URLSearchParams({ episode: scope.episodeId }).toString() : "";
+      const path = `/projects/${requireProject(scope)}/episodes/storyboard-inputs${query}`;
+      return (await request<SmartStoryboardInputs>(scope, path, { cache: "no-store" }, signal)).data;
     },
     async getExtractionHistory(scope, version, operationId, signal) {
       const query = new URLSearchParams({ scriptVersionId: version });

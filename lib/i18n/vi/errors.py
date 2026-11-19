@@ -504,6 +504,7 @@ MESSAGES = {
     "director_candidate_stale": "Lưu phương án cũ thành ứng viên mới, rồi xác nhận ứng viên mới nhất khớp với kịch bản đã khóa.",
     "director_profile_incomplete": "Điền đủ khán giả, nhịp điệu, phong cách hình ảnh và ngôn ngữ máy quay trước khi xác nhận.",
     "director_confirmation_required": "Xác nhận phương án đạo diễn mới nhất khớp với kịch bản đã khóa trước khi tạo phân cảnh thông minh.",
+    "episode_storyboard_inputs_changed": "Kịch bản hoặc tài sản của tập này đã thay đổi. Hãy tải lại phân cảnh thông minh và kiểm tra trước khi tạo cảnh quay.",
     "director_profile_invalid": "Kiểm tra định dạng và độ dài các trường của phương án đạo diễn trước khi lưu.",
     "smart_storyboard_source_context_missing": "Yêu cầu cũ này chưa lưu đầy đủ nguồn đầu vào. Hãy kiểm tra phân cảnh đã có; hệ thống không tự gọi lại mô hình.",
     "smart_storyboard_source_context_mismatch": "Không thể xác minh phiên bản đầu vào của phân cảnh. Hãy kiểm tra kịch bản đã khóa, xác nhận đạo diễn và bản chụp tài sản.",

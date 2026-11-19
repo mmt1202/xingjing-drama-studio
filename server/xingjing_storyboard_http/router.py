@@ -269,8 +269,13 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
     @result.get("/projects/{project_id}/shots")
     async def list_shots(request: Request, project_id: str):
         context = await _access_context(request, project_id, dependencies)
-        storyboards = _all_storyboards(dependencies, context)
         episode_id = request.query_params.get("episodeId")
+        board_id = request.query_params.get("storyboardId")
+        if board_id:
+            board = dependencies.service.get_storyboard(context, board_id)
+            storyboards = (board,) if episode_id is None or board.episode_id == episode_id else ()
+        else:
+            storyboards = _all_storyboards(dependencies, context)
         search = (request.query_params.get("search") or "").casefold()
         status = request.query_params.get("status")
         has_issues = _optional_bool(request.query_params.get("hasIssues"))
@@ -376,13 +381,20 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             )
         if action == "generateShots":
             _require_manage(context)
+            episode_id = _required_text(payload, "episodeId")
+            script_version_id = _required_text(payload, "scriptVersionId")
+            asset_snapshot_id = _required_text(payload, "assetSnapshotId")
             if dependencies.smart_draft_generator is None:
                 raise HttpContractError("SMART_STORYBOARD_SOURCE_UNAVAILABLE", status_code=503)
+            if dependencies.check_episode_binding is not None:
+                await asyncio.to_thread(
+                    dependencies.check_episode_binding, context, episode_id, script_version_id, asset_snapshot_id
+                )
             try:
                 drafts = dependencies.smart_draft_generator(
                     context,
-                    _required_text(payload, "scriptVersionId"),
-                    _required_text(payload, "assetSnapshotId"),
+                    script_version_id,
+                    asset_snapshot_id,
                     request.headers.get("Idempotency-Key", ""),
                 )
             except ContractViolation as error:
@@ -404,7 +416,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                     raise
             result_value = dependencies.service.create_storyboard(
                 context,
-                episode_id=_required_text(payload, "episodeId"),
+                episode_id=episode_id,
                 shots=drafts.drafts if isinstance(drafts, SmartDraftResult) else drafts,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
                 source_context=drafts.source_context if isinstance(drafts, SmartDraftResult) else None,
@@ -1370,7 +1382,7 @@ def _storyboard_error_response(request: Request, error: StoryboardError) -> JSON
         return _error_response(request, error.code, 403, {})
     if isinstance(error, StoryboardNotFound):
         return _error_response(request, error.code, 404, {})
-    if isinstance(error, (VersionConflict, IdempotencyConflict)):
+    if isinstance(error, (VersionConflict, IdempotencyConflict)) or error.code == "EPISODE_STORYBOARD_INPUTS_CHANGED":
         return _error_response(request, error.code, 409, error.details)
     if isinstance(error, ContractViolation):
         return _error_response(request, error.code, 400, error.details)
@@ -1396,6 +1408,7 @@ def _error_response(
     request_id = (request.headers.get("X-Request-Id") or "").strip() or str(uuid.uuid4())
     translated = {
         "DIRECTOR_CONFIRMATION_REQUIRED": "director_confirmation_required",
+        "EPISODE_STORYBOARD_INPUTS_CHANGED": "episode_storyboard_inputs_changed",
         "SMART_STORYBOARD_SOURCE_CONTEXT_MISSING": "smart_storyboard_source_context_missing",
         "SMART_STORYBOARD_SOURCE_CONTEXT_MISMATCH": "smart_storyboard_source_context_mismatch",
     }

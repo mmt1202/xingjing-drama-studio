@@ -364,6 +364,7 @@ export interface AssetListQuery extends PageQuery {
 }
 
 export interface ShotListQuery extends PageQuery {
+  readonly storyboardId?: string;
   readonly includeQualityPolicy?: boolean;
   readonly status?: WorkStatus;
   readonly hasIssues?: boolean;
@@ -382,7 +383,24 @@ export interface RightsEvidenceUpload {
   readonly mediaType: string;
 }
 
+export interface SmartEpisodeInputs {
+  number: number; title: string; canManage: boolean; scriptId: string | null;
+  scriptState: "ready" | "missing" | "bind" | "stale" | "invalid" | "denied";
+  directorState: "ready" | "waiting" | "missing" | "unconfirmed" | "denied";
+  assetState: "ready" | "waiting" | "missing" | "bind" | "stale" | "denied";
+  scriptTitle: string | null; version: number | null; sceneCount: number; candidateNumber: number | null;
+  scriptVersionId: string | null; assetSnapshotId: string | null; confirmationId: string | null;
+  assetCount: number; assetNames: Record<string, string>;
+  boards: { id: string; version: number; shots: number; frozen: boolean }[];
+  command: { key: string; payload: { episodeId: string; scriptVersionId: string; assetSnapshotId: string } } | null;
+}
+export interface SmartStoryboardInputs {
+  episodes: { number: number; title: string; bound: boolean }[];
+  selected: SmartEpisodeInputs | null;
+}
+
 export interface AssetsStoryboardPort {
+  getSmartInputs?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<SmartStoryboardInputs>;
   getFrozenScriptSources?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<FrozenScriptSources>;
   getExtractionHistory?(scope: WorkspaceProjectScope, version: string, operationId?: string, signal?: AbortSignal): Promise<ExtractionHistory>;
   getAsset?(

@@ -155,15 +155,24 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
     navigate(`${workspaceBase}/${path}${query ? `?${query}` : ""}`);
   }
   const active = activeStage(slug);
+  const hasShots = episode ? Boolean(episode.shots) : validData?.episodes.some((item) => Boolean(item.shots));
   const stages = validData?.stages.map((stage) => {
+    if (stage.id === "storyboard" && (stage.reason === "shots" || (!stage.reason && episode && !episode.shots))) {
+      return { ...stage, reason: "shots", recovery: "shots-smart" };
+    }
     if (stage.reason || !episode) return stage;
     if (stage.id === "assets" && !episode.scriptVersionId) return { ...stage, reason: "frozen", recovery: "episodes" };
     if (["review", "export", "compliance"].includes(stage.id) && !episode.finalVersionId) return { ...stage, reason: "finals", recovery: "postproduction" };
     if (stage.id === "shots" && !episode.assetsReady && !episode.shots) return { ...stage, reason: "assets", recovery: "episodes" };
-    if (stage.id === "storyboard" && !episode.shots) return { ...stage, reason: "shots", recovery: "shots" };
     return stage;
   }) ?? [];
   const selectedGate = stages.find((s) => s.id === gate && s.reason);
+  const navigationStages = stages.map((stage) => {
+    if (stage.id === "shots" && (stage.reason === "assets" || stage.reason === "frozen" || (!stage.reason && !hasShots))) {
+      return { ...stage, reason: null, target: "shots-smart" };
+    }
+    return stage;
+  });
   const isCover = slug === "cover-generate" || slug === "cover-title-ab-test";
   const coverReason = !validData ? null
     : !["project.view", "final.view", "settings.view"].every((permission) => validData.permissions.includes(permission)) ? "permission"
@@ -172,7 +181,8 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
           : episode ? !episode.finalVersionId ? "finals" : null
             : !validData.episodes.some((item) => item.finalVersionId) ? "finals" : null;
   const pageGate = isCover ? coverReason ? { id: "export", reason: coverReason, recovery: coverReason === "setup" ? "guided-create" : coverReason === "finals" ? "postproduction" : null } : undefined
-    : stages.find((s) => s.id === active && s.reason && !(slug === "assets-extract" && s.reason === "frozen"));
+    : stages.find((s) => s.id === active && s.reason && !(slug === "assets-extract" && s.reason === "frozen")
+      && !(slug === "shots-smart" && (s.reason === "assets" || s.reason === "frozen")));
   return <CreatorShell active="projects" title={t(`stage.${active}`)} workspaceLabel={workspaceAccess?.workspaceName ?? workspaceId} permissions={workspaceAccess?.permissions ?? []} notifications={workspaceAccess ? <NotificationCenter workspaceId={workspaceId} actorId={workspaceAccess.actorId} token={token} permissions={workspaceAccess.permissions} onNavigate={goWorkspace} registerNavigationGuard={registerGuard} /> : undefined} onNavigate={goWorkspace} onWorkspace={() => { if (canLeave()) navigate("/workspace-select"); }}>
     <div className="xj-project-layout">
       <section className="xj-project-card" aria-label={t("projectIdentity")}>
@@ -196,7 +206,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
               const target = slug === "generation" && itemId ? `${slug}/${itemId}` : slug === "collaboration" && itemId ? `${slug}/${itemId}` : slug;
               go(target, event.target.value ? Number(event.target.value) : null);
             }} title={validData.episodes.find((item) => String(item.episode) === episodeId)?.title}><option value="">{t("allEpisodes")}</option>{invalidEpisode ? <option value={episodeId ?? ""}>{t("invalidEpisode")}</option> : null}{validData.episodes.map((item) => <option key={item.episode} value={item.episode} title={item.title}>{t("episode", { number: item.episode })} · {compactEpisodeTitle(item.title)}</option>)}</select></label></div>
-            <nav aria-label={t("flow")} className="flex flex-wrap gap-2">{stages.map((stage) => <button key={stage.id} className="xj-project-stage" aria-current={stage.id === active ? "step" : undefined} aria-disabled={Boolean(stage.reason)} title={stage.reason ? t(`gate.${stage.reason}`) : t(`stage.${stage.id}`)} onClick={() => stage.reason ? setGate(stage.id) : go(stage.target)}>{t(`stage.${stage.id}`)}{stage.reason ? <LockKeyhole size={12} /> : null}</button>)}</nav>
+            <nav aria-label={t("flow")} className="flex flex-wrap gap-2">{navigationStages.map((stage) => <button key={stage.id} className="xj-project-stage" aria-current={stage.id === active ? "step" : undefined} aria-disabled={Boolean(stage.reason)} title={stage.reason ? t(`gate.${stage.reason}`) : t(`stage.${stage.id}`)} onClick={() => stage.reason ? setGate(stage.id) : go(stage.target)}>{t(`stage.${stage.id}`)}{stage.reason ? <LockKeyhole size={12} /> : null}</button>)}</nav>
             {objectId ? <p className="mt-3 truncate text-[11px] text-slate-500" title={objectId}>{t("object")}: {objectId}</p> : null}
             {selectedGate ? <div role="status" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-600/30 bg-amber-500/5 p-3 text-sm text-amber-200"><span>{t(`stage.${selectedGate.id}`)} · {t(`gate.${selectedGate.reason}`)}</span>{selectedGate.recovery ? <button className={controlButton} onClick={() => go(selectedGate.recovery!)}>{t("recovery")}<ChevronRight size={14} /></button> : null}</div> : null}
           </div>
@@ -205,6 +215,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
       {workspaceUnavailable ? <p role="status" className="mt-4 text-xs leading-6 text-amber-200">{t("workspaceNavigationUnavailable")} <button className="underline underline-offset-4" onClick={() => setWorkspaceReload((value) => value + 1)}>{t("retry")}</button></p> : null}
       {navigationBlocked ? <p role="status" className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/[.04] p-3 text-sm text-amber-200">{t("saveBeforeNavigate")}</p> : null}
       <div className="xj-project-surface">
+        {episode && slug !== "shots-smart" && params.get("returnTo") === "shots-smart" ? <button type="button" className={controlButton + " mb-4"} onClick={() => go("shots-smart", episode.episode)}><ArrowLeft size={15}/>{t("returnToShots", {number:episode.episode})}</button> : null}
         {error ? <section role="alert" className="rounded-xl border border-red-400/30 p-6"><h1>{t("failed")}</h1><p className="my-3 text-sm text-slate-400">{t(apiError?.status === 403 ? "forbidden" : apiError?.status === 404 ? "missing" : "notSaved")}</p>{apiError?.requestId ? <p className="mb-3 font-mono text-xs">{apiError.requestId}</p> : null}<button className={controlButton} onClick={refresh}><RefreshCw size={14} />{t("retry")}</button></section>
           : data?.project.id === projectId && data.workspaceId !== workspaceId ? <section role="alert" className="p-6"><p>{t("missing")}</p><button className={controlButton + " mt-4"} disabled={!workspaceAccess?.permissions.includes("project.view")} onClick={() => goWorkspace("projects")}>{t("library")}</button></section>
           : !validData ? <p role="status" className="p-12 text-center text-slate-400">{t("loading")}</p>

@@ -28,6 +28,7 @@ from .episode_production import (
     validate_production_edits,
 )
 from .episode_sources import create_working_script, enrich_working_scripts, source_context, sources
+from .storyboard_inputs import storyboard_inputs
 
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
@@ -167,6 +168,17 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             catalog = await production_catalog(session, context, project_id)
         data = project_production(current_snapshot, catalog)
         data["permissions"] = sorted(context.permissions)
+        return {"data": data, "meta": {"requestId": context.request_id}}
+
+    @router.get("/projects/{project_id}/episodes/storyboard-inputs")
+    async def read_storyboard_inputs(request: Request, project_id: str, episode: int | None = Query(None, ge=1)):
+        context = await source_context(runtime, request, project_id)
+        await ready(context, project_id)
+        if "shot.view" not in context.permissions:
+            raise EpisodeEditError("FORBIDDEN", 403)
+        current = await snapshot(context, project_id)
+        async with runtime._require_sessions()() as session:
+            data = await storyboard_inputs(session, context, project_id, current, episode)
         return {"data": data, "meta": {"requestId": context.request_id}}
 
     @router.post("/projects/{project_id}/episodes/production/prepare")

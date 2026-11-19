@@ -16,13 +16,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from lib.episode_ledger import ordered_episode_entries
+from lib.project_manager import get_project_manager
 from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
 from lib.text_utils import strip_json_code_fences
 from server.xingjing_assets_persistence import AssetScope, SqlAlchemyAssetRepository
 from server.xingjing_content.models import (
     director_confirmation_from_dict,
-    director_profile_digest,
     director_version_from_dict,
 )
 from server.xingjing_content.parser import parse_script
@@ -150,6 +151,7 @@ class StoryboardRuntime:
     ) -> None:
         self.service = StoryboardService(repository, asset_validator, quality_policy=quality_policy)
         self.repository = repository
+        self.audit_repository = repository if isinstance(repository, SqlAlchemyStoryboardRepository) else None
         self._context_resolver = context_resolver
         self.upload_store = upload_store
         self.prompt_repository = SqlAlchemyPromptTemplateRepository(session_factory)
@@ -191,6 +193,19 @@ class StoryboardRuntime:
                 )
         except Exception as error:
             raise StoryboardRuntimeConfigurationError("PROJECT_SCOPE_AUTHORIZATION_UNAVAILABLE") from error
+
+    @staticmethod
+    def check_episode_binding(
+        context: AccessContext, episode_id: str, script_version_id: str, asset_snapshot_id: str
+    ) -> None:
+        project = get_project_manager().load_project(context.project_id, read_only=True)
+        entry = next((item for item in ordered_episode_entries(project) if str(item["episode"]) == episode_id), None)
+        binding = entry.get("production") if entry else None
+        if not isinstance(binding, dict) or (binding.get("scriptVersionId"), binding.get("assetSnapshotId")) != (
+            script_version_id,
+            asset_snapshot_id,
+        ):
+            raise ContractViolation("EPISODE_STORYBOARD_INPUTS_CHANGED")
 
     async def generate_smart_drafts(
         self,
@@ -314,12 +329,7 @@ class StoryboardRuntime:
                 if (
                     candidate is None
                     or confirmation is None
-                    or candidate.script_version_id != script_version_id
-                    or candidate.script_content_digest != source_digest
-                    or confirmation.script_version_id != script_version_id
-                    or confirmation.script_content_digest != source_digest
-                    or confirmation.candidate_number != candidate.number
-                    or confirmation.profile_digest != director_profile_digest(candidate.profile)
+                    or not confirmation.matches(candidate, script_version_id, source_digest)
                 ):
                     raise ContractViolation("DIRECTOR_CONFIRMATION_REQUIRED")
                 source_context = StoryboardSourceContext(

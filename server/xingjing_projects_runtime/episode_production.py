@@ -31,7 +31,12 @@ def _scope(model: Any, context: TrustedWorkspaceContext, project_id: str):
 
 
 async def production_catalog(
-    session: AsyncSession, context: TrustedWorkspaceContext, project_id: str, *, enforce_visibility: bool = True
+    session: AsyncSession,
+    context: TrustedWorkspaceContext,
+    project_id: str,
+    *,
+    enforce_visibility: bool = True,
+    storyboard_only: bool = False,
 ) -> dict[str, Any]:
     """Return references and counts only; source text and media keys stay in their modules."""
     scripts, snapshots, finals, boards, reviews, deliveries = [], {}, [], [], [], []
@@ -90,7 +95,7 @@ async def production_catalog(
                 and frozen.get("content_sha256") == item["digest"]
             )
             item["assets"].append({"id": asset.asset_id, "versionId": asset.current_version_id})
-    if not enforce_visibility or "final.view" in context.permissions:
+    if not storyboard_only and (not enforce_visibility or "final.view" in context.permissions):
         final_rows = await session.execute(
             select(FinalVideoVersionRow, TimelineHeadRow.episode_id)
             .join(
@@ -131,13 +136,13 @@ async def production_catalog(
             }
             for row in board_rows
         ]
-    if not enforce_visibility or "compliance.view" in context.permissions:
+    if not storyboard_only and (not enforce_visibility or "compliance.view" in context.permissions):
         review_rows = await session.scalars(select(ReviewRow).where(*_scope(ReviewRow, context, project_id)))
         reviews = [
             {"versionId": row.project_version, "status": row.manual_review_status, "conclusion": row.conclusion}
             for row in review_rows
         ]
-    if not enforce_visibility or "export.view" in context.permissions:
+    if not storyboard_only and (not enforce_visibility or "export.view" in context.permissions):
         delivery_rows = await session.scalars(
             select(DeliveryRow)
             .where(*_scope(DeliveryRow, context, project_id))
