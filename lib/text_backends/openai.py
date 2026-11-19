@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import replace
+from urllib.parse import urlsplit
 
 from openai import AsyncOpenAI, BadRequestError
 
@@ -42,6 +45,7 @@ class OpenAITextBackend:
         # 禁用 SDK 内置重试，由本层 generate() 统一管理重试策略
         self._client = create_openai_client(api_key=api_key, base_url=base_url, max_retries=0)
         self._model = model or DEFAULT_MODEL
+        self._deepseek_api = urlsplit((base_url or "").strip()).hostname == "api.deepseek.com"
         # 复用 OpenAI 兼容协议的 provider（如 dashscope）须用真实 provider 记账，
         # 否则计费查表会命中 OpenAI 的 USD 费率而非自身定价。
         self._provider_name = provider_name
@@ -76,8 +80,13 @@ class OpenAITextBackend:
         失败会连带重放已成功的原生调用（重试叠乘），且降级异常消息含模型侧动态文本，
         可能误中重试判定的字符串模式。
         """
+        schema = resolve_schema(request.response_schema) if request.response_schema else None
+        if self._deepseek_api and schema is not None:
+            schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+            instruction = f"Return only JSON matching this schema:\n{schema_text}"
+            request = replace(request, system_prompt="\n\n".join(filter(None, (request.system_prompt, instruction))))
         messages = _build_messages(request)
-        native = await self._generate_native(request, messages)
+        native = await self._generate_native(request, messages, schema)
         if native is None:
             # 原生 response_format 通道不兼容（schema 错误），结构化输出整体降级
             return await _instructor_fallback(
@@ -114,7 +123,7 @@ class OpenAITextBackend:
 
     @with_retry_async(max_attempts=4, backoff_seconds=(2, 4, 8), retryable_errors=OPENAI_RETRYABLE_ERRORS)
     async def _generate_native(
-        self, request: TextGenerationRequest, messages: list[dict]
+        self, request: TextGenerationRequest, messages: list[dict], schema: dict | None
     ) -> TextGenerationResult | None:
         """单次原生调用：构造 kwargs、发请求、解析与截断告警，瞬态错误重试。
 
@@ -126,8 +135,11 @@ class OpenAITextBackend:
         if request.max_output_tokens is not None:
             kwargs[self._max_tokens_param] = request.max_output_tokens
 
-        if request.response_schema:
-            schema = resolve_schema(request.response_schema)
+        if schema is not None and self._deepseek_api:
+            # DeepSeek accepts JSON Object mode for object roots. Other roots use the schema in the prompt.
+            if schema.get("type") == "object":
+                kwargs["response_format"] = {"type": "json_object"}
+        elif schema is not None:
             kwargs["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {

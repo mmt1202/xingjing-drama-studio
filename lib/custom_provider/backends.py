@@ -45,7 +45,9 @@ class CustomTextBackend:
         return self._delegate.capabilities
 
     async def generate(self, request: TextGenerationRequest) -> TextGenerationResult:
-        return await self._delegate.generate(request)
+        result = await self._delegate.generate(request)
+        result.provider = self._provider_id
+        return result
 
 
 class CustomImageBackend:
