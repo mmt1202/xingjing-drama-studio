@@ -47,6 +47,7 @@ export interface FrozenScriptSources {
 }
 
 export interface PageResult<T> {
+  readonly total?: number;
   readonly items: readonly T[];
   readonly nextToken: string | null;
   readonly collectionVersion?: number;
@@ -318,6 +319,7 @@ export type AssetAction =
   | "setPrimaryVersion"
   | "restoreVersion"
   | "saveRights"
+  | "confirmRights"
   | "bindReference"
   | "generateReferenceImage"
   | "generateTurnaround"
@@ -461,6 +463,7 @@ export interface AssetsStoryboardPort {
     task: TaskReceipt,
     signal?: AbortSignal,
   ): Promise<TaskReceipt>;
+  downloadRightsEvidence?(scope: WorkspaceProjectScope, asset: AssetItem, recordId: string, signal?: AbortSignal): Promise<Blob>;
   uploadRightsEvidence(
     scope: WorkspaceProjectScope,
     asset: AssetItem,

@@ -4,7 +4,7 @@ import { useAssetExtractionTranslation } from "./asset-extraction-i18n";
 import type { AssetsStoryboardPort, FrozenScriptSources, WorkspaceProjectScope } from "./contracts";
 import { button } from "./ui";
 
-export interface EpisodeScriptBinding { readonly episode: number; readonly scriptVersionId?: string | null }
+export interface EpisodeScriptBinding { readonly episode: number; readonly title?: string; readonly scriptVersionId?: string | null }
 
 export function useFrozenScriptSource(
   api: AssetsStoryboardPort, { workspaceId, projectId, episodeId }: WorkspaceProjectScope,

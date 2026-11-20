@@ -49,7 +49,7 @@ interface MarketPagePayload {
 
 interface ResponseMeta {
   readonly requestId?: string;
-  readonly page?: { readonly nextToken?: string | null };
+  readonly page?: { readonly nextToken?: string | null; readonly total?: number };
   readonly collectionVersion?: number;
   readonly qualityPolicy?: import("./contracts").QualityPolicyDescriptor;
 }
@@ -309,6 +309,7 @@ export function createAssetsStoryboardApi(
     return {
       items: response.data,
       nextToken: response.meta?.page?.nextToken ?? null,
+      total: response.meta?.page?.total,
       collectionVersion: response.meta?.collectionVersion,
       qualityPolicy: response.meta?.qualityPolicy,
       requestId: response.meta?.requestId,
@@ -599,13 +600,26 @@ export function createAssetsStoryboardApi(
         signal,
       );
     },
+    async downloadRightsEvidence(scope, asset, recordId, signal) {
+      const projectId = scope.projectId ?? asset.projectId;
+      if (!projectId) throw new AssetsStoryboardApiError(404, "ASSET_NOT_FOUND", "");
+      const headers = new Headers({ "X-Request-Id": createId() });
+      const token = await options.getAccessToken?.();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const path = [projectId, asset.id, recordId].map(encodeURIComponent);
+      const response = await fetcher(`${baseUrl}/projects/${path[0]}/assets/${path[1]}/rights-evidence/${path[2]}`,
+        { headers, signal, credentials: "include" });
+      if (!response.ok) throw new AssetsStoryboardApiError(response.status, "RIGHTS_EVIDENCE_UNAVAILABLE", "",
+        response.headers.get("X-Request-Id") ?? undefined);
+      return response.blob();
+    },
     async uploadRightsEvidence(scope, asset, file, signal) {
       const projectId = scope.projectId ?? asset.projectId;
       if (!projectId?.trim())
         throw new Error("asset owner project is required for rights evidence");
       const body = new FormData();
       body.set("file", file);
-      const idempotencyKey = `rights-evidence:${asset.id}:${file.name}:${file.size}:${file.lastModified}`;
+      const idempotencyKey = createId();
       const response = await request<RightsEvidenceUpload>(
         scope,
         `/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(asset.id)}/rights-evidence`,

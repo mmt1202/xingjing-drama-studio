@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any, Self
 
@@ -45,6 +45,15 @@ class AssetSource:
         return cls(**value)
 
 
+def rights_expiry(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    if len(value) == 10:
+        return datetime.combine(date.fromisoformat(value), time.min, UTC) + timedelta(days=1)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class RightsEvidence:
     rights_id: str
@@ -59,13 +68,20 @@ class RightsEvidence:
     def __post_init__(self) -> None:
         _validate_sha256(self.evidence_sha256)
 
+    @property
+    def effective_status(self) -> RightsStatus:
+        if self.status in (RightsStatus.PENDING, RightsStatus.VERIFIED):
+            try:
+                expiry = rights_expiry(self.valid_until)
+            except (ValueError, OverflowError):
+                return RightsStatus.EXPIRED
+            if expiry is not None and expiry <= datetime.now(UTC):
+                return RightsStatus.EXPIRED
+        return self.status
+
     def permits(self, project_id: str) -> bool:
-        if self.status is not RightsStatus.VERIFIED:
+        if self.effective_status is not RightsStatus.VERIFIED:
             return False
-        if self.valid_until is not None:
-            expires_at = datetime.fromisoformat(self.valid_until.replace("Z", "+00:00"))
-            if expires_at <= datetime.now(UTC):
-                return False
         return self.reuse_scope is ReuseScope.WORKSPACE or (
             self.reuse_scope is ReuseScope.PROJECT_ALLOWLIST and project_id in self.allowed_project_ids
         )

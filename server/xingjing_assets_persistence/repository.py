@@ -14,6 +14,8 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    case,
+    func,
     select,
     update,
 )
@@ -29,6 +31,7 @@ from server.xingjing_assets.contracts import (
     AssetVersion,
     FrozenScriptSnapshotRef,
     RightsEvidence,
+    rights_expiry,
 )
 from server.xingjing_assets.errors import VersionConflict
 
@@ -95,12 +98,15 @@ class RightsRow(Base):
             ],
             ondelete="RESTRICT",
         ),
+        Index("ix_xj_rights_sequence", "tenant_id", "workspace_id", "asset_id", "sequence", unique=True),
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     asset_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     rights_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
@@ -280,16 +286,18 @@ class SqlAlchemyAssetRepository:
                 key = (scope.tenant_id, scope.workspace_id, operation_kind, idempotency_key)
                 row = session.get(IdempotencyRow, key, with_for_update=True)
                 if row is None:
-                    session.add(IdempotencyRow(
-                        tenant_id=scope.tenant_id,
-                        workspace_id=scope.workspace_id,
-                        operation_kind=operation_kind,
-                        idempotency_key=idempotency_key,
-                        fingerprint=fingerprint,
-                        asset_id=owner_id,
-                        result_payload={"status": "running", "attempts": 1, "updatedAt": now.isoformat()},
-                        created_at=now,
-                    ))
+                    session.add(
+                        IdempotencyRow(
+                            tenant_id=scope.tenant_id,
+                            workspace_id=scope.workspace_id,
+                            operation_kind=operation_kind,
+                            idempotency_key=idempotency_key,
+                            fingerprint=fingerprint,
+                            asset_id=owner_id,
+                            result_payload={"status": "running", "attempts": 1, "updatedAt": now.isoformat()},
+                            created_at=now,
+                        )
+                    )
                     return OperationClaim(True, "running")
                 return self._operation_claim(row, fingerprint, now)
         except IntegrityError:
@@ -386,31 +394,7 @@ class SqlAlchemyAssetRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[Asset, ...]:
-        """Return assets owned by, or explicitly referenced from, one project.
-
-        The project predicate is deliberately evaluated in the database.  A
-        caller cannot list a workspace's other project assets merely by
-        supplying a project ID in the URL.
-        """
-        if limit < 1 or limit > 201 or offset < 0:
-            raise ValueError("invalid asset page")
-        with self._session_factory() as session:
-            references = select(ReferenceRow.asset_id).where(
-                ReferenceRow.tenant_id == scope.tenant_id,
-                ReferenceRow.workspace_id == scope.workspace_id,
-                ReferenceRow.project_id == project_id,
-            )
-            query = select(AssetRow).where(
-                AssetRow.tenant_id == scope.tenant_id,
-                AssetRow.workspace_id == scope.workspace_id,
-                (AssetRow.owner_project_id == project_id) | AssetRow.asset_id.in_(references),
-            )
-            if search:
-                query = query.where(AssetRow.name.ilike(f"%{search.strip()}%"))
-            if kind is not None:
-                query = query.where(AssetRow.kind == kind.value)
-            rows = session.scalars(query.order_by(AssetRow.asset_id).offset(offset).limit(limit)).all()
-            return tuple(self._load_asset(session, scope, row) for row in rows)
+        return self.library_page(scope, project_id=project_id, search=search, kind=kind, limit=limit, offset=offset)[0]
 
     def list_for_workspace(
         self,
@@ -421,22 +405,71 @@ class SqlAlchemyAssetRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[Asset, ...]:
-        """List all assets the current trusted workspace is entitled to see."""
-        if limit < 1 or limit > 201 or offset < 0:
+        return self.library_page(scope, search=search, kind=kind, limit=limit, offset=offset)[0]
+
+    def library_page(
+        self,
+        scope: AssetScope,
+        *,
+        project_id: str | None = None,
+        search: str | None = None,
+        kind: AssetKind | None = None,
+        rights: str | None = None,
+        episode_versions: tuple[str, ...] | None = None,
+        shot_assets: tuple[str, ...] = (),
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[tuple[Asset, ...], int]:
+        if not 1 <= limit <= 201 or offset < 0:
             raise ValueError("invalid asset page")
-        with self._session_factory() as session:
-            query = select(AssetRow).where(
-                AssetRow.tenant_id == scope.tenant_id,
-                AssetRow.workspace_id == scope.workspace_id,
+        query = select(AssetRow).where(
+            AssetRow.tenant_id == scope.tenant_id, AssetRow.workspace_id == scope.workspace_id
+        )
+        if project_id is not None:
+            referenced = select(ReferenceRow.asset_id).where(
+                ReferenceRow.tenant_id == scope.tenant_id,
+                ReferenceRow.workspace_id == scope.workspace_id,
+                ReferenceRow.project_id == project_id,
             )
-            if search:
-                query = query.where(AssetRow.name.ilike(f"%{search.strip()}%"))
-            if kind is not None:
-                query = query.where(AssetRow.kind == kind.value)
-            rows = session.scalars(
-                query.order_by(AssetRow.owner_project_id, AssetRow.asset_id).offset(offset).limit(limit)
-            ).all()
-            return tuple(self._load_asset(session, scope, row) for row in rows)
+            query = query.where((AssetRow.owner_project_id == project_id) | AssetRow.asset_id.in_(referenced))
+        if episode_versions is not None:
+            query = query.where(
+                (
+                    (AssetRow.owner_project_id == project_id)
+                    & AssetRow.frozen_snapshot["script_version_id"].as_string().in_(episode_versions)
+                )
+                | AssetRow.asset_id.in_(shot_assets)
+            )
+        if search and search.strip():
+            query = query.where(AssetRow.name.icontains(search.strip(), autoescape=True))
+        if kind is not None:
+            query = query.where(AssetRow.kind == kind.value)
+        if rights:
+            status = RightsRow.payload["status"].as_string()
+            latest = (
+                select(
+                    case(
+                        (status.in_(("pending", "verified")) & (RightsRow.expires_at <= datetime.now(UTC)), "expired"),
+                        (status == "rejected", "blocked"),
+                        else_=status,
+                    )
+                )
+                .where(
+                    RightsRow.tenant_id == AssetRow.tenant_id,
+                    RightsRow.workspace_id == AssetRow.workspace_id,
+                    RightsRow.asset_id == AssetRow.asset_id,
+                )
+                .order_by(RightsRow.sequence.desc())
+                .limit(1)
+                .correlate(AssetRow)
+                .scalar_subquery()
+            )
+            query = query.where(func.coalesce(latest, "missing") == rights)
+        with self._session_factory() as session:
+            total = session.scalar(select(func.count()).select_from(query.subquery())) or 0
+            order = (AssetRow.asset_id,) if project_id else (AssetRow.owner_project_id, AssetRow.asset_id)
+            rows = session.scalars(query.order_by(*order).offset(offset).limit(limit)).all()
+            return tuple(self._load_asset(session, scope, row) for row in rows), total
 
     def extraction_history(
         self, scope: AssetScope, project_id: str, script_version_id: str, operation_id: str | None
@@ -512,7 +545,10 @@ class SqlAlchemyAssetRepository:
                 }
                 for asset_id, name, kind, revision, description in rows
             ]
-            return {"runs": runs, "batch": {"operationId": selected, "succeeded": len(items), "failed": 0, "items": items}}
+            return {
+                "runs": runs,
+                "batch": {"operationId": selected, "succeeded": len(items), "failed": 0, "items": items},
+            }
 
     def list_audit(
         self,
@@ -596,16 +632,18 @@ class SqlAlchemyAssetRepository:
         )
 
     @staticmethod
-    def _append_children(session: Session, scope: AssetScope, asset: Asset) -> None:
+    def _append_children(session: Session, scope: AssetScope, asset: Asset, rights_offset: int = 0) -> None:
         for version in asset.versions:
             session.add(SqlAlchemyAssetRepository._version_row(scope, asset.asset_id, version))
-        for rights in asset.rights:
+        for sequence, rights in enumerate(asset.rights, start=rights_offset + 1):
             session.add(
                 RightsRow(
                     tenant_id=scope.tenant_id,
                     workspace_id=scope.workspace_id,
                     asset_id=asset.asset_id,
                     rights_id=rights.rights_id,
+                    sequence=sequence,
+                    expires_at=rights_expiry(rights.valid_until),
                     payload=rights.to_dict(),
                 )
             )
@@ -641,6 +679,7 @@ class SqlAlchemyAssetRepository:
                 asset.rights[len(stored.rights) :],
                 asset.references[len(stored.references) :],
             ),
+            rights_offset=len(stored.rights),
         )
 
     @staticmethod
@@ -720,7 +759,7 @@ class SqlAlchemyAssetRepository:
                 RightsRow.workspace_id == scope.workspace_id,
                 RightsRow.asset_id == row.asset_id,
             )
-            .order_by(RightsRow.rights_id)
+            .order_by(RightsRow.sequence)
         ).all()
         references = session.scalars(
             select(ReferenceRow)

@@ -16,11 +16,13 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
+from lib.episode_ledger import ordered_episode_entries
 from lib.i18n import get_translator
+from lib.project_manager import get_project_manager
 from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
 from lib.text_utils import strip_json_code_fences
@@ -32,6 +34,7 @@ from server.xingjing_assets.contracts import (
     ReuseScope,
     RightsEvidence,
     RightsStatus,
+    rights_expiry,
 )
 from server.xingjing_assets.errors import AssetDomainError, AssetNotFound, CrossProjectReuseDenied, VersionConflict
 from server.xingjing_assets.ports import AssetRepository, ShotImpactQuery
@@ -186,34 +189,12 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
     @router.get("/workspaces/{workspace_id}/assets")
     async def list_workspace_assets(request: Request, workspace_id: str) -> JSONResponse:
         context = await _workspace_context(runtime, request, workspace_id, "asset.view")
-        scope = AssetScope(context.tenant_id, context.workspace_id)
-        query = request.query_params
-        offset = _page_offset(query)
-        limit = _integer(query.get("pageSize"), default=50, minimum=1, maximum=200, code="INVALID_PAGE_SIZE")
-        kind_value = query.get("assetType")
-        kind = _kind(kind_value) if kind_value else None
-        assets = _repository(runtime).list_for_workspace(
-            scope, search=query.get("search"), kind=kind, offset=offset, limit=limit + 1
-        )
-        return _asset_page(context, runtime, assets, offset=offset, limit=limit)
+        return _asset_page(context, runtime, request.query_params)
 
     @router.get("/projects/{project_id}/assets")
     async def list_assets(request: Request, project_id: str) -> JSONResponse:
         context = await _context(runtime, request, project_id, "asset.view")
-        scope = AssetScope(context.tenant_id, context.workspace_id)
-        repository = _repository(runtime)
-        query = request.query_params
-        offset = _page_offset(query)
-        limit = _integer(query.get("pageSize"), default=50, minimum=1, maximum=200, code="INVALID_PAGE_SIZE")
-        kind_value = query.get("assetType")
-        kind = _kind(kind_value) if kind_value else None
-        assets = repository.list_for_project(
-            scope, project_id, search=query.get("search"), kind=kind, offset=offset, limit=limit + 1
-        )
-        rights = query.get("rightsStatus")
-        if rights:
-            assets = tuple(item for item in assets if _rights_status(item) == rights)
-        return _asset_page(context, runtime, assets, offset=offset, limit=limit)
+        return _asset_page(context, runtime, request.query_params, project_id)
 
     @router.get("/projects/{project_id}/assets/sources/frozen-scripts")
     async def frozen_scripts(request: Request, project_id: str) -> JSONResponse:
@@ -307,11 +288,10 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         if not request.headers.get("Idempotency-Key", "").strip():
             raise AssetHttpError("IDEMPOTENCY_KEY_REQUIRED")
         scope = AssetScope(context.tenant_id, context.workspace_id)
-        if _repository(runtime).get(scope, asset_id) is None:
-            raise AssetHttpError("ASSET_NOT_FOUND", 404)
+        _owned_asset(_repository(runtime), scope, project_id, asset_id)
         if file.content_type not in {"application/pdf", "image/jpeg", "image/png", "image/webp"}:
             raise AssetHttpError("RIGHTS_EVIDENCE_MEDIA_TYPE_INVALID")
-        content = await file.read()
+        content = await file.read(25 * 1024 * 1024 + 1)
         if len(content) > 25 * 1024 * 1024:
             raise AssetHttpError("RIGHTS_EVIDENCE_TOO_LARGE")
         key, digest = runtime.store_rights_evidence(context, project_id, content)
@@ -322,6 +302,40 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 "sha256": digest,
                 "fileName": file.filename or "rights-evidence",
                 "mediaType": file.content_type,
+            },
+        )
+
+    @router.get("/projects/{project_id}/assets/{asset_id}/rights-evidence/{rights_id}")
+    async def download_rights_evidence(request: Request, project_id: str, asset_id: str, rights_id: str) -> Response:
+        context = await _context(runtime, request, project_id, "asset.manage")
+        asset = _owned_asset(
+            _repository(runtime), AssetScope(context.tenant_id, context.workspace_id), project_id, asset_id
+        )
+        record = next((record for record in asset.rights if record.rights_id == rights_id), None)
+        if record is None:
+            raise AssetHttpError("RIGHTS_EVIDENCE_NOT_FOUND", 404)
+        content = runtime.read_rights_evidence(context, project_id, record.evidence_object_key, record.evidence_sha256)
+        if content is None:
+            raise AssetHttpError("RIGHTS_EVIDENCE_NOT_FOUND", 404)
+        media, ext = "application/octet-stream", "bin"
+        for prefix, mime, suffix in (
+            (b"%PDF-", "application/pdf", "pdf"),
+            (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
+            (b"\xff\xd8\xff", "image/jpeg", "jpg"),
+        ):
+            if content.startswith(prefix):
+                media, ext = mime, suffix
+                break
+        if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+            media, ext = "image/webp", "webp"
+        return Response(
+            content,
+            media_type=media,
+            headers={
+                "Content-Disposition": f'attachment; filename="evidence.{ext}"',
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-Request-Id": context.request_id,
             },
         )
 
@@ -388,8 +402,43 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
             )
             asset = service.get(context.workspace_id, reference.asset_id)
             return _success(context, {"asset": _asset_item(runtime, context, project_id, asset)})
-        if action == "saveRights":
+        if action in {"saveRights", "confirmRights"}:
             asset_id = _required_target(target_id)
+            current = _owned_asset(repository, scope, project_id, asset_id)
+            replay = repository.replay(
+                scope, idempotency_key=key, fingerprint=_digest({"action": action, "payload": body})
+            )
+            if replay is not None:
+                if replay.asset_id != asset_id:
+                    raise VersionConflict("VERSION_CONFLICT")
+                return _success(context, {"asset": _asset_item(runtime, context, project_id, current)})
+            if current.revision != _if_match(request):
+                raise VersionConflict("VERSION_CONFLICT")
+            if action == "confirmRights":
+                latest = current.rights[-1] if current.rights else None
+                if not latest or latest.rights_id != _text(payload, "rightsRecordId"):
+                    raise VersionConflict("VERSION_CONFLICT")
+                if not runtime.verify_rights_evidence(
+                    context, project_id, latest.evidence_object_key, latest.evidence_sha256
+                ):
+                    raise AssetHttpError("RIGHTS_EVIDENCE_NOT_VERIFIED", 409)
+                service.confirm_rights(
+                    workspace_id=context.workspace_id, asset_id=asset_id, expected_revision=current.revision
+                )
+                return _success(
+                    context,
+                    {
+                        "asset": _asset_item(
+                            runtime, context, project_id, _owned_asset(repository, scope, project_id, asset_id)
+                        )
+                    },
+                )
+            try:
+                expires = rights_expiry(_optional_text(payload.get("validTo")))
+            except (ValueError, OverflowError) as error:
+                raise AssetHttpError("RIGHTS_EXPIRY_INVALID") from error
+            if expires is not None and expires <= datetime.now(UTC):
+                raise AssetHttpError("RIGHTS_EVIDENCE_EXPIRED")
             object_key = _text(payload, "proofObjectKey")
             evidence_sha256 = _text(payload, "proofSha256")
             if not runtime.verify_rights_evidence(context, project_id, object_key, evidence_sha256):
@@ -418,13 +467,20 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 holder=_optional_text(payload.get("holder")),
                 valid_until=_optional_text(payload.get("validTo")),
             )
-            changed = service.record_rights(
+            service.record_rights(
                 workspace_id=context.workspace_id,
                 asset_id=asset_id,
                 expected_revision=_if_match(request),
                 evidence=evidence,
             )
-            return _success(context, {"asset": _asset_item(runtime, context, project_id, changed)})
+            return _success(
+                context,
+                {
+                    "asset": _asset_item(
+                        runtime, context, project_id, _owned_asset(repository, scope, project_id, asset_id)
+                    )
+                },
+            )
         if action == "adoptGenerationOutput":
             asset_id = _required_target(target_id)
             current = service.get(context.workspace_id, asset_id)
@@ -522,25 +578,52 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
             item_ids = tuple(dict.fromkeys(_text_list(payload.get("itemIds"), "ASSET_IDS_REQUIRED")))
             if len(item_ids) > 100:
                 raise AssetHttpError("ASSET_BATCH_TOO_LARGE")
+            records = _mapping(payload["records"], "INVALID_RIGHTS_SELECTION") if "records" in payload else {}
             items: list[dict[str, object]] = []
             for asset_id in item_ids:
                 try:
+                    expected = records.get(asset_id)
+                    selection = {"assetId": asset_id, **({"record": expected} if expected is not None else {})}
+                    item_key = f"{key}:{asset_id}"
                     item_repository = ContextAssetRepository(
                         repository,
                         scope,
                         context,
                         action="confirmRights",
-                        idempotency_key=f"{key}:{asset_id}",
-                        request_payload={"assetId": asset_id},
+                        idempotency_key=item_key,
+                        request_payload=selection,
                     )
                     item_service = AssetService(item_repository, StoryboardImpactQuery(runtime, context, project_id))
                     current = item_service.get(context.workspace_id, asset_id)
+                    if current.owner_project_id != project_id:
+                        raise AssetNotFound("ASSET_NOT_FOUND")
+                    replay = repository.replay(
+                        scope,
+                        idempotency_key=item_key,
+                        fingerprint=_digest({"action": "confirmRights", "payload": selection}),
+                    )
+                    if replay is not None:
+                        items.append({"id": asset_id, "name": current.name, "status": "succeeded"})
+                        continue
+                    if records and (
+                        not isinstance(expected, Mapping)
+                        or not current.rights
+                        or (expected.get("version"), expected.get("rightsId"))
+                        != (current.revision, current.rights[-1].rights_id)
+                    ):
+                        raise ValueError("RIGHTS_SELECTION_CHANGED")
+                    if current.rights and current.rights[-1].effective_status is RightsStatus.PENDING:
+                        latest = current.rights[-1]
+                        if not runtime.verify_rights_evidence(
+                            context, project_id, latest.evidence_object_key, latest.evidence_sha256
+                        ):
+                            raise ValueError("RIGHTS_EVIDENCE_NOT_VERIFIED")
                     item_service.confirm_rights(
                         workspace_id=context.workspace_id,
                         asset_id=asset_id,
                         expected_revision=current.revision,
                     )
-                    items.append({"id": asset_id, "status": "succeeded"})
+                    items.append({"id": asset_id, "name": current.name, "status": "succeeded"})
                 except (AssetDomainError, ValueError) as error:
                     code = str(error) or type(error).__name__
                     items.append(
@@ -650,14 +733,26 @@ def _snapshot(
     )
 
 
+def _owned_asset(repository: SqlAlchemyAssetRepository, scope: AssetScope, project_id: str, asset_id: str) -> Asset:
+    asset = repository.get(scope, asset_id)
+    if asset is None or asset.owner_project_id != project_id:
+        raise AssetHttpError("ASSET_NOT_FOUND", 404)
+    return asset
+
+
 def _asset_item(
-    runtime: AssetRuntime, context: TrustedWorkspaceContext, project_id: str, asset: Asset
+    runtime: AssetRuntime,
+    context: TrustedWorkspaceContext,
+    project_id: str,
+    asset: Asset,
+    impacted: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     rights = asset.rights[-1] if asset.rights else None
-    rights_status = rights.status.value if rights else "missing"
-    impacted = StoryboardImpactQuery(runtime, context, project_id).affected_shot_ids(
-        workspace_id=context.workspace_id, project_id=project_id, asset_id=asset.asset_id
-    )
+    rights_status = _rights_status(asset)
+    if impacted is None:
+        impacted = StoryboardImpactQuery(runtime, context, project_id).affected_shot_ids(
+            workspace_id=context.workspace_id, project_id=project_id, asset_id=asset.asset_id
+        )
     content = dict(asset.current_version.content)
     tags = content.get("tags", [])
     return {
@@ -671,7 +766,7 @@ def _asset_item(
         "rightsStatus": rights_status,
         "currentVersionId": asset.current_version_id,
         "version": asset.revision,
-        "referenceCount": len(asset.references),
+        "referenceCount": len(impacted),
         "updatedAt": asset.current_version.created_at,
         "description": content.get("description") if isinstance(content.get("description"), str) else None,
         "metadata": content,
@@ -704,14 +799,17 @@ def _asset_item(
             "licenseScope": rights.reuse_scope.value,
             "proofUploadId": rights.evidence_object_key,
             "validTo": rights.valid_until,
-            "status": rights.status.value,
+            "status": rights_status,
         },
         "affectedShotIds": list(impacted),
     }
 
 
 def _rights_status(asset: Asset) -> str:
-    return asset.rights[-1].status.value if asset.rights else "missing"
+    if not asset.rights:
+        return "missing"
+    status = asset.rights[-1].effective_status
+    return "blocked" if status is RightsStatus.REJECTED else status.value
 
 
 async def _submit_character_derivative(
@@ -969,20 +1067,64 @@ async def _extract_assets_from_frozen_script(
 
 
 def _asset_page(
-    context: TrustedWorkspaceContext,
-    runtime: AssetRuntime,
-    assets: tuple[Asset, ...],
-    *,
-    offset: int,
-    limit: int,
+    context: TrustedWorkspaceContext, runtime: AssetRuntime, query: Mapping[str, str], project_id: str | None = None
 ) -> JSONResponse:
-    page = assets[:limit]
+    offset = _page_offset(query)
+    limit = _integer(query.get("pageSize"), default=50, minimum=1, maximum=200, code="INVALID_PAGE_SIZE")
+    kind_value = query.get("assetType")
+    episode = query.get("episodeId") if project_id else None
+    storyboards = runtime.storyboards
+    if storyboards is None:
+        raise AssetHttpError("STORYBOARD_DEPENDENCY_UNAVAILABLE", 503)
+    impacts: dict[str, dict[str, list[str]]] = {}
+
+    def shots(owner: str) -> dict[str, list[str]]:
+        if owner not in impacts:
+            grouped: dict[str, list[str]] = {}
+            for board in storyboards.list(StoryboardScope(context.tenant_id, context.workspace_id, owner)):
+                if episode and board.episode_id != episode:
+                    continue
+                for shot in board.shots:
+                    for asset_id in {ref.asset_id for ref in shot.asset_references}:
+                        grouped.setdefault(asset_id, []).append(shot.shot_id)
+            impacts[owner] = grouped
+        return impacts[owner]
+
+    versions = None
+    if episode and project_id:
+        project = get_project_manager().load_project(project_id, read_only=True)
+        entry = next((entry for entry in ordered_episode_entries(project) if str(entry["episode"]) == episode), None)
+        if entry is None:
+            raise AssetHttpError("EPISODE_NOT_FOUND", 404)
+        binding = entry.get("production") or {}
+        version = binding.get("scriptVersionId")
+        versions = (version,) if isinstance(version, str) and version else ()
+    assets, total = _repository(runtime).library_page(
+        AssetScope(context.tenant_id, context.workspace_id),
+        project_id=project_id,
+        kind=_kind(kind_value) if kind_value else None,
+        search=query.get("search"),
+        rights=query.get("rightsStatus"),
+        episode_versions=versions,
+        shot_assets=tuple(shots(project_id)) if episode and project_id else (),
+        offset=offset,
+        limit=limit,
+    )
     return JSONResponse(
         {
-            "data": [_asset_item(runtime, context, item.owner_project_id, item) for item in page],
+            "data": [
+                _asset_item(
+                    runtime,
+                    context,
+                    project_id or item.owner_project_id,
+                    item,
+                    tuple(shots(project_id or item.owner_project_id).get(item.asset_id, ())),
+                )
+                for item in assets
+            ],
             "meta": {
                 "requestId": context.request_id,
-                "page": {"nextToken": str(offset + limit) if len(assets) > limit else None},
+                "page": {"total": total, "nextToken": str(offset + limit) if offset + limit < total else None},
             },
         },
         headers={"X-Request-Id": context.request_id},
@@ -1085,6 +1227,10 @@ def _error(request: Request, code: str, status_code: int, details: Mapping[str, 
     request_id = (request.headers.get("X-Request-Id") or str(uuid4())).strip()
     translated = {
         "ASSET_NOT_FOUND",
+        "RIGHTS_EVIDENCE_NOT_FOUND",
+        "RIGHTS_EXPIRY_INVALID",
+        "RIGHTS_EVIDENCE_EXPIRED",
+        "RIGHTS_EVIDENCE_NOT_VERIFIED",
         "ASSET_REFERENCE_IMAGE_UNSUPPORTED",
         "GENERATION_INPUT_ASSET_VERSION_REQUIRED",
         "GENERATION_INPUT_ASSET_VERSION_NOT_FOUND",

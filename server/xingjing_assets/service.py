@@ -134,14 +134,13 @@ class AssetService:
         if not asset.rights:
             raise ValueError("RIGHTS_EVIDENCE_REQUIRED")
         latest = asset.rights[-1]
-        if latest.status is RightsStatus.VERIFIED:
+        status = latest.effective_status
+        if status is RightsStatus.EXPIRED:
+            raise ValueError("RIGHTS_EVIDENCE_EXPIRED")
+        if status is RightsStatus.VERIFIED:
             return asset
-        if latest.status is not RightsStatus.PENDING:
+        if status is not RightsStatus.PENDING:
             raise ValueError("RIGHTS_STATUS_NOT_CONFIRMABLE")
-        if latest.valid_until is not None:
-            expires_at = datetime.fromisoformat(latest.valid_until.replace("Z", "+00:00"))
-            if expires_at <= datetime.now(UTC):
-                raise ValueError("RIGHTS_EVIDENCE_EXPIRED")
         verified = replace(latest, rights_id=uuid7(), status=RightsStatus.VERIFIED)
         changed = replace(asset, revision=asset.revision + 1, rights=(*asset.rights, verified))
         self._repository.save(changed, expected_revision=expected_revision)

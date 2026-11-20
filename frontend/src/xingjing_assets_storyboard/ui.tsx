@@ -23,6 +23,7 @@ export function WorkspaceShell({
   projectName,
   children,
   actions,
+  libraryHeader,
 }: {
   readonly context: SessionContext;
   readonly title: string;
@@ -31,13 +32,14 @@ export function WorkspaceShell({
   readonly projectName?: string;
   readonly children: ReactNode;
   readonly actions?: ReactNode;
+  readonly libraryHeader?: boolean;
 }) {
   return (
     <main
       className="min-h-full bg-[#07080C] p-4 text-[#F5F6FA] sm:p-6"
       style={{ colorScheme: "dark" }}
     >
-      <header className="mb-5 overflow-hidden rounded-[22px] border border-[#2A2E3A] bg-[#0d0f15]">
+      {libraryHeader ? <header className="xj-lib-header"><div><h1>{title}</h1><p>{description}</p></div>{actions}</header> : <header className="mb-5 overflow-hidden rounded-[22px] border border-[#2A2E3A] bg-[#0d0f15]">
         <div className="h-1 bg-[linear-gradient(90deg,#8B5CF6_0%,#8B5CF6_55%,#FF6B4A_55%,#FF6B4A_100%)]" />
         <div className="flex flex-col gap-4 p-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
@@ -60,7 +62,7 @@ export function WorkspaceShell({
             <div className="flex flex-wrap gap-2">{actions}</div>
           ) : null}
         </div>
-      </header>
+      </header>}
       {children}
     </main>
   );
@@ -198,12 +200,14 @@ export function BatchResultPanel({
   onRetry,
   busy = false,
   successTitle,
+  hideOperationId,
   onOpenItem,
 }: {
   readonly receipt: BatchReceipt;
   readonly onRetry?: (ids: readonly string[]) => void;
   readonly busy?: boolean;
   readonly successTitle?: string;
+  readonly hideOperationId?: boolean;
   readonly onOpenItem?: (id: string) => void;
 }) {
   const retryIds = failedBatchItemIds(receipt.items);
@@ -219,9 +223,7 @@ export function BatchResultPanel({
               ? `${receipt.succeeded} 项成功，${receipt.failed} 项失败`
               : (successTitle ?? `${receipt.succeeded} 项处理成功`)}
           </h3>
-          <p className="mt-1 font-mono text-xs text-[#7E8494]">
-            {receipt.operationId}
-          </p>
+          {!hideOperationId && <p className="mt-1 font-mono text-xs text-[#7E8494]">{receipt.operationId}</p>}
         </div>
         {retryIds.length && onRetry ? (
           <button

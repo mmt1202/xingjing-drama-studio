@@ -70,14 +70,17 @@ class LocalAssetEvidenceStorage:
             raise
         return key, digest
 
-    def verify(self, context: TrustedWorkspaceContext, project_id: str, key: str, expected_sha256: str) -> bool:
-        if not re.fullmatch(r"rights/[0-9a-f]{64}/content", key) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
-            return False
+    def read(self, context: TrustedWorkspaceContext, project_id: str, key: str, digest: str) -> bytes | None:
+        if not re.fullmatch(r"[0-9a-f]{64}", digest) or key != f"rights/{digest}/content":
+            return None
         try:
-            actual = hashlib.sha256(self._path(context, project_id, key).read_bytes()).hexdigest()
+            data = self._path(context, project_id, key).read_bytes()
         except FileNotFoundError:
-            return False
-        return actual == expected_sha256
+            return None
+        return data if hashlib.sha256(data).hexdigest() == digest else None
+
+    def verify(self, context: TrustedWorkspaceContext, project_id: str, key: str, expected_sha256: str) -> bool:
+        return self.read(context, project_id, key, expected_sha256) is not None
 
     def _path(self, context: TrustedWorkspaceContext, project_id: str, key: str) -> Path:
         segments = (context.tenant_id, context.workspace_id, project_id)
@@ -217,6 +220,11 @@ class AssetRuntime:
         if self._evidence_storage is None:
             raise AssetRuntimeConfigurationError("ASSET_EVIDENCE_STORAGE_UNAVAILABLE")
         return self._evidence_storage.put(context, project_id, content)
+
+    def read_rights_evidence(
+        self, context: TrustedWorkspaceContext, project_id: str, key: str, sha256: str
+    ) -> bytes | None:
+        return self._evidence_storage.read(context, project_id, key, sha256) if self._evidence_storage else None
 
     def verify_rights_evidence(self, context: TrustedWorkspaceContext, project_id: str, key: str, sha256: str) -> bool:
         return self._evidence_storage is not None and self._evidence_storage.verify(context, project_id, key, sha256)

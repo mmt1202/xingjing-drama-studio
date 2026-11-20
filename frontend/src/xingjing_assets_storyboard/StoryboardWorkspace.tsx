@@ -1476,7 +1476,7 @@ export function StoryboardWorkspace({
           }),
           append
             ? Promise.resolve(undefined)
-            : api.listAssets(scope, { pageSize: 100 }),
+            : api.listAssets({ ...scope, episodeId: undefined }, { pageSize: 100 }),
         ]);
         setContext(session);
         setShots((current) =>
