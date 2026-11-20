@@ -1,10 +1,10 @@
+import { generationServicesPath, type GenerationService } from "@/xingjing_generation_center/services";
 import { createAuthenticatedFetcher } from "@/utils/auth";
 import i18n from "@/i18n";
 import type {
   ActionInput,
   AssetAction,
   AssetActionResult,
-  AssetGenerationModels,
   AssetItem,
   AssetListQuery,
   AssetsStoryboardPort,
@@ -632,8 +632,9 @@ export function createAssetsStoryboardApi(
       );
       return response.data;
     },
-    async getGenerationModels(scope, signal) {
-      return (await request<AssetGenerationModels>(scope, `/generation-models?projectId=${requireProject(scope)}`, {}, signal)).data;
+    async getGenerationServices(scope, capabilities, signal) {
+      if (!scope.projectId) throw new Error("PROJECT_REQUIRED");
+      return (await request<{ services: GenerationService[] }>(scope, generationServicesPath(scope.projectId, "image", capabilities), {}, signal)).data.services;
     },
     async getAssetGenerationReceipt(scope, assetId, sourceVersionId, idempotencyKey, signal) {
       const query = new URLSearchParams({ sourceVersionId });

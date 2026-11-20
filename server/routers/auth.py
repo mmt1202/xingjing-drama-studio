@@ -80,6 +80,7 @@ class VerifyResponse(BaseModel):
 
 class AuthStatusResponse(BaseModel):
     enabled: bool
+    platformManaged: bool = False
 
 
 # ==================== 路由 ====================
@@ -94,7 +95,7 @@ async def auth_status():
     登录链路。本接口本身**不要求认证**——一个 boolean 比 401 探针更直观，
     且实际"是否需要登录"通过 401/200 也能从外部观察到，因此不增量泄露。
     """
-    return AuthStatusResponse(enabled=is_auth_enabled())
+    return AuthStatusResponse(enabled=is_auth_enabled(), platformManaged=bool(os.environ.get("PLATFORM_IDENTITY_URL")))
 
 
 @public_router.post("/auth/register")

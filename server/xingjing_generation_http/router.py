@@ -8,6 +8,7 @@ from dataclasses import asdict
 from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,6 +18,7 @@ from lib.i18n import get_translator
 from server.xingjing_budget import BudgetError
 from server.xingjing_generation import GenerationRequest
 from server.xingjing_generation_persistence import GenerationBillingError, TaskScopeNotFound, VersionConflict
+from server.xingjing_generation_persistence.repository import GeneratedAsset
 from server.xingjing_generation_runtime.runtime import GenerationRuntime, GenerationRuntimeUnavailable
 
 
@@ -38,7 +40,12 @@ class GenerationContractRoute(APIRoute):
             except GenerationHttpError as error:
                 return _error(request, error.code, error.status_code, error.details)
             except GenerationRuntimeUnavailable as error:
-                return _error(request, error.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+                return _error(
+                    request,
+                    error.code,
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    {"submissionState": "rejected"} if error.submission_rejected else None,
+                )
             except BudgetError as error:
                 response_status = 503 if error.code.endswith("UNAVAILABLE") else error.status_code
                 return _error(request, error.code, response_status)
@@ -92,10 +99,26 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
     async def list_generation_tasks_by_query(request: Request):
         return await _list_generation_tasks(runtime, request, _project_query(request))
 
+    @router.get("/generation-services")
+    async def generation_services(request: Request):
+        context = await runtime.context_for(request, _project_query(request), "generation.view")
+        media = _optional_choice(request.query_params.get("mediaType"), {"image", "video"}, "INVALID_MEDIA_TYPE")
+        capabilities = list(dict.fromkeys(request.query_params.getlist("capability")))
+        if (
+            not media
+            or not 1 <= len(capabilities) <= 16
+            or not all(_optional_identifier(c, "INVALID_CAPABILITY") == c and c for c in capabilities)
+        ):
+            raise GenerationHttpError("INVALID_GENERATION_REQUEST")
+        offers = await runtime.creator_services(context, media, capabilities)
+        response = _success(context.request_id, {"services": offers})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
     @router.get("/generation-models")
     async def generation_models(request: Request):
         project_id = _project_query(request)
-        context = await runtime.context_for(request, project_id, "generation.view")
+        context = await runtime.context_for(request, project_id, "admin.model.view")
         return _success(
             context.request_id,
             {
@@ -122,7 +145,7 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
     @router.get("/generation-model-usage")
     async def generation_model_usage(request: Request):
         project_id = _project_query(request)
-        context = await runtime.context_for(request, project_id, "generation.view")
+        context = await runtime.context_for(request, project_id, "admin.model.view")
         usage = await runtime.model_usage_report(context, project_id)
         return _success(context.request_id, {"usage": [asdict(item) for item in usage]})
 
@@ -144,8 +167,8 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
             {
                 "candidates": [
                     {
-                        "task": item.task.model_dump(mode="json"),
-                        "assets": [asdict(asset) for asset in item.assets],
+                        "task": item.task.creator_payload(),
+                        "assets": [_creator_asset(asset) for asset in item.assets],
                         "selectedCandidate": asdict(item.selected_candidate) if item.selected_candidate else None,
                     }
                     for item in candidates
@@ -275,7 +298,7 @@ async def _list_generation_tasks(runtime: GenerationRuntime, request: Request, p
         media_type=media_type,
         capability=capability,
     )
-    return _success(context.request_id, {"tasks": [task.model_dump(mode="json") for task in tasks]}, total=total)
+    return _success(context.request_id, {"tasks": [task.creator_payload() for task in tasks]}, total=total)
 
 
 async def _get_generation_task(
@@ -288,14 +311,29 @@ async def _get_generation_task(
     costs = await runtime.cost_evidence(context, project_id, task_id)
     billing = await runtime.billing_for_task(context, project_id, task_id)
     progress = await runtime.task_progress(context, project_id, task_id)
+    if isinstance(native := progress.get("nativeExecution"), dict):
+        progress["nativeExecution"] = {"status": native.get("status")}
+    if isinstance(latest := progress.get("latest"), dict):
+        progress["latest"] = {key: latest.get(key) for key in ("percent", "eta_seconds", "occurred_at")}
     return _success(
         context.request_id,
         {
-            "task": task.model_dump(mode="json"),
-            "generatedAssets": [asdict(asset) for asset in assets],
+            "task": task.creator_payload(),
+            "generatedAssets": [_creator_asset(asset) for asset in assets],
             "selectedCandidate": asdict(selected_candidate) if selected_candidate else None,
-            "costEvidence": [asdict(cost) for cost in costs],
-            "billing": billing,
+            "costEvidence": [
+                {
+                    "evidence_id": cost.evidence_id,
+                    "currency": cost.currency,
+                    "estimated_minor": cost.estimated_minor,
+                    "actual_minor": cost.actual_minor,
+                    "recorded_at": cost.recorded_at,
+                }
+                for cost in costs
+            ],
+            "billing": {k: v for k, v in billing.items() if k not in {"pricing_version", "terminal_event_id"}}
+            if billing
+            else None,
             "progress": progress,
         },
     )
@@ -315,6 +353,8 @@ async def _submit_generation_task(runtime: GenerationRuntime, request: Request, 
         generation_request = GenerationRequest.model_validate(
             {
                 **body,
+                "requested_provider_id": None,
+                "requested_model_id": None,
                 "workspace_id": context.workspace_id,
                 "project_id": project_id,
             }
@@ -322,7 +362,7 @@ async def _submit_generation_task(runtime: GenerationRuntime, request: Request, 
     except ValueError as error:
         raise GenerationHttpError("INVALID_GENERATION_REQUEST", status.HTTP_422_UNPROCESSABLE_CONTENT) from error
     task = await runtime.submit(context, project_id, generation_request, idempotency_key=idempotency_key)
-    return _success(context.request_id, {"task": task.model_dump(mode="json")})
+    return _success(context.request_id, {"task": task.creator_payload()})
 
 
 async def _generation_task_actions(
@@ -338,7 +378,7 @@ async def _generation_task_actions(
         task_id,
         expected_version=_if_match(request),
     )
-    return _success(context.request_id, {"task": task.model_dump(mode="json")})
+    return _success(context.request_id, {"task": task.creator_payload()})
 
 
 async def _select_generation_candidate(
@@ -367,7 +407,7 @@ async def _retry_generation_task(
     if not idempotency_key:
         raise GenerationHttpError("IDEMPOTENCY_KEY_REQUIRED")
     task = await runtime.retry_task(context, project_id, task_id, idempotency_key=idempotency_key)
-    return _success(context.request_id, {"task": task.model_dump(mode="json")})
+    return _success(context.request_id, {"task": task.creator_payload()})
 
 
 async def _json_object(request: Request) -> Mapping[str, object]:
@@ -431,11 +471,29 @@ def _suffix_for_media(media_type: str) -> str:
     return ".mp4" if media_type == "video" else ".png"
 
 
+def _creator_asset(asset: GeneratedAsset) -> dict[str, object]:
+    return {
+        "asset_id": asset.asset_id,
+        "workspace_id": asset.workspace_id,
+        "project_id": asset.project_id,
+        "task_id": asset.task_id,
+        "media_type": asset.media_type,
+        "size_bytes": asset.size_bytes,
+        "content_sha256": asset.content_sha256,
+        "created_at": asset.created_at,
+        "metadata": {
+            key: value
+            for key, value in asset.metadata.items()
+            if key in {"width", "height", "duration_ms", "mime_type"}
+        },
+    }
+
+
 def _success(request_id: str, data: Mapping[str, object], *, total: int | None = None) -> JSONResponse:
     meta: dict[str, object] = {"requestId": request_id}
     if total is not None:
         meta["total"] = total
-    return JSONResponse({"data": dict(data), "meta": meta})
+    return JSONResponse(jsonable_encoder({"data": dict(data), "meta": meta}))
 
 
 def _error(request: Request, code: str, status_code: int, details: Mapping[str, object] | None = None) -> JSONResponse:

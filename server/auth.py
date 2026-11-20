@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Request
 from fastapi.security import OAuth2PasswordBearer
 from pwdlib import PasswordHash
 from pydantic import BaseModel, ConfigDict
@@ -528,3 +528,15 @@ async def get_current_user_flexible(
 # Type aliases for FastAPI dependency injection
 CurrentUser = Annotated[CurrentUserInfo, Depends(get_current_user)]
 CurrentUserFlexible = Annotated[CurrentUserInfo, Depends(get_current_user_flexible)]
+
+
+async def require_model_operator(request: Request, user: CurrentUser) -> None:
+    if os.environ.get("PLATFORM_IDENTITY_URL"):
+        from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
+
+        context = await TrustedWorkspaceContextResolver(PlatformSessionGateway())(request)
+        if context.role != "API_KEY" and "admin.model.manage" in context.permissions:
+            return
+    elif user.role == "admin":
+        return
+    raise HTTPException(status_code=403, detail={"code": "PERMISSION_DENIED"})

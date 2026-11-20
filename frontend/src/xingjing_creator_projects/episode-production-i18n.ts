@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 
 const zh = {
   operationFailed: "操作未完成，请检查前置材料或稍后重试。",
-  SMART_STORYBOARD_SOURCE_UNAVAILABLE: "分镜生成服务尚未就绪，请完成模型配置后重试。",
-  SMART_STORYBOARD_MODEL_FAILED: "分镜模型生成失败，请检查模型服务后重试。",
+  SMART_STORYBOARD_SOURCE_UNAVAILABLE: "分镜生成暂时不可用，请稍后再试。",
+  SMART_STORYBOARD_MODEL_FAILED: "本次未能生成分镜。请稍后重试。",
   COMPLIANCE_RUNTIME_NOT_CONFIGURED: "合规与交付服务尚未配置，请完成配置后重试。",
   FORMAL_EXPORT_BLOCKED: "正式导出未通过检查，请进入本集交付页处理审核、授权或结算问题。",
 
@@ -14,7 +14,7 @@ const zh = {
   assets: "{{count}} 个资产", shots: "{{count}} 个分镜", target: "发布目标", targetExample: "例如 douyin、bilibili、commercial",
   bindingHelp: "每个冻结剧本只能绑定一集；成片仅列出属于本集的已渲染版本。绑定随剧集自动保存。",
   locked: "本集已有分镜，剧本和资产来源已锁定。成片可切换到本集的其他渲染版本。",
-  selected: "已选 {{count}} 集", batchHelp: "按所选顺序调用生成模型创建分镜草案，可能产生模型费用。已有分镜会跳过；缺少输入或生成失败会逐集显示结果。",
+  selected: "已选 {{count}} 集", batchHelp: "按所选顺序生成分镜草案，可能产生费用。已有分镜的剧集会跳过，每集的结果可单独查看。",
   generate: "批量生成分镜草案", createPackages: "批量创建发布包",
   packageHelp: "使用每集绑定的成片，逐集检查审核、授权、结算和 AIGC 标识后生成发布包。发布包成功不代表已对外发布。",
   openBoards: "查看本集分镜", openDelivery: "查看本集交付", saveFirst: "请先完成当前剧集的保存。", limit: "每批最多选择 50 集。",
@@ -32,8 +32,8 @@ const zh = {
 };
 const en: Record<keyof typeof zh, string> = {
   operationFailed: "The operation did not complete. Check prerequisites or retry later.",
-  SMART_STORYBOARD_SOURCE_UNAVAILABLE: "Storyboard generation is unavailable. Configure the model service and retry.",
-  SMART_STORYBOARD_MODEL_FAILED: "The storyboard model failed. Check the model service and retry.",
+  SMART_STORYBOARD_SOURCE_UNAVAILABLE: "Storyboard generation is temporarily unavailable. Try again later.",
+  SMART_STORYBOARD_MODEL_FAILED: "The storyboard could not be generated. Try again later.",
   COMPLIANCE_RUNTIME_NOT_CONFIGURED: "Compliance and delivery services are not configured. Complete setup and retry.",
   FORMAL_EXPORT_BLOCKED: "Export checks failed. Open this episode's delivery page to resolve review, rights or billing issues.",
 
@@ -43,7 +43,7 @@ const en: Record<keyof typeof zh, string> = {
   assets: "{{count}} assets", shots: "{{count}} shots", target: "Release target", targetExample: "For example douyin, bilibili, commercial",
   bindingHelp: "Each frozen script belongs to one episode. Only renders belonging to this episode are listed. Bindings save with episode edits.",
   locked: "This episode has storyboards. Script and asset inputs are locked; another render of this episode may be selected.",
-  selected: "{{count}} episodes selected", batchHelp: "Create storyboard drafts in selection order using the generation model; model charges may apply. Existing storyboards are skipped. Missing inputs and failures appear per episode.",
+  selected: "{{count}} episodes selected", batchHelp: "Create storyboard drafts in the selected order. Charges may apply. Episodes with storyboards are skipped and each result is shown separately.",
   generate: "Generate storyboard drafts", createPackages: "Create release packages",
   packageHelp: "Create packages from each bound render after review, rights, billing and AIGC checks. A completed package does not mean external publication.",
   openBoards: "Episode storyboards", openDelivery: "Episode delivery", saveFirst: "Finish saving episode edits first.", limit: "Select up to 50 episodes per batch.",
@@ -61,8 +61,8 @@ const en: Record<keyof typeof zh, string> = {
 };
 const vi: Record<keyof typeof zh, string> = {
   operationFailed: "Thao tác chưa hoàn tất. Kiểm tra điều kiện hoặc thử lại sau.",
-  SMART_STORYBOARD_SOURCE_UNAVAILABLE: "Dịch vụ tạo phân cảnh chưa sẵn sàng. Cấu hình mô hình rồi thử lại.",
-  SMART_STORYBOARD_MODEL_FAILED: "Mô hình tạo phân cảnh gặp lỗi. Kiểm tra dịch vụ rồi thử lại.",
+  SMART_STORYBOARD_SOURCE_UNAVAILABLE: "Tạm thời chưa thể tạo bảng phân cảnh. Hãy thử lại sau.",
+  SMART_STORYBOARD_MODEL_FAILED: "Chưa tạo được bảng phân cảnh. Hãy thử lại sau.",
   COMPLIANCE_RUNTIME_NOT_CONFIGURED: "Chưa cấu hình dịch vụ kiểm duyệt và bàn giao. Hoàn tất cấu hình rồi thử lại.",
   FORMAL_EXPORT_BLOCKED: "Xuất bản chưa qua kiểm tra. Mở trang bàn giao của tập để xử lý duyệt, bản quyền hoặc thanh toán.",
 
@@ -72,7 +72,7 @@ const vi: Record<keyof typeof zh, string> = {
   assets: "{{count}} tài sản", shots: "{{count}} cảnh", target: "Đích phát hành", targetExample: "Ví dụ douyin, bilibili, commercial",
   bindingHelp: "Mỗi kịch bản đóng băng chỉ thuộc một tập. Chỉ hiển thị bản dựng của tập này. Liên kết được tự lưu cùng tập phim.",
   locked: "Tập này đã có phân cảnh. Nguồn kịch bản và tài sản đã khóa; có thể chọn bản dựng khác của cùng tập.",
-  selected: "Đã chọn {{count}} tập", batchHelp: "Tạo bản nháp phân cảnh theo thứ tự đã chọn bằng mô hình, có thể phát sinh phí. Bỏ qua tập đã có phân cảnh; hiển thị thiếu dữ liệu và lỗi cho từng tập.",
+  selected: "Đã chọn {{count}} tập", batchHelp: "Tạo bản nháp phân cảnh theo thứ tự đã chọn, có thể phát sinh phí. Bỏ qua tập đã có phân cảnh và xem riêng kết quả từng tập.",
   generate: "Tạo phân cảnh hàng loạt", createPackages: "Tạo gói phát hành hàng loạt",
   packageHelp: "Tạo gói từ bản dựng từng tập sau khi kiểm tra duyệt, bản quyền, thanh toán và nhãn AIGC. Có gói thành công không có nghĩa là đã đăng ra ngoài.",
   openBoards: "Phân cảnh của tập", openDelivery: "Bàn giao của tập", saveFirst: "Lưu các chỉnh sửa tập phim trước.", limit: "Chọn tối đa 50 tập mỗi lần.",

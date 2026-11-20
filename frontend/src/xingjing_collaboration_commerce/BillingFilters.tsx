@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { collaborationCommerceNamespace } from "./i18n";
 import type { CommercePageQuery } from "./types";
 
-const dimensions = ["projectId", "modelId", "actorId", "episodeId", "shotId"] as const;
+const dimensions = ["projectId", "actorId", "episodeId", "shotId"] as const;
 
 function localTime(value: string | undefined): string {
   if (!value) return "";

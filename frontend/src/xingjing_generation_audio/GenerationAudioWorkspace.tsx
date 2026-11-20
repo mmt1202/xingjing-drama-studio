@@ -622,8 +622,7 @@ function GenerationAudioWorkspaceContent({
         </p>
         <h1 className="text-2xl font-semibold">{page.title}</h1>
         <p className="mt-1 text-sm text-slate-400">
-          {page.description} 展示内容均来自服务端；媒体任务仅在已配置 Provider
-          时提交。
+          {page.description}
         </p>
       </header>
       {message ? (
@@ -921,8 +920,7 @@ function GenerationAudioWorkspaceContent({
         >
           <h2>保存对口型结果</h2>
           <p className="mt-1 text-sm text-slate-400">
-            Provider 成功回调已将产物对象 key
-            写入任务结果。选择对应候选后，用该任务和对象 key 保存不可变版本。
+            {budgetText("saveLipResult")}
           </p>
           <p className="mt-3 text-sm text-cyan-300">
             {selectedLipSync
@@ -1129,8 +1127,7 @@ function GenerationAudioWorkspaceContent({
         >
           <h2>请求媒体任务</h2>
           <p className="mt-1 text-sm text-slate-400">
-            不生成本地占位媒体；Provider
-            未配置时会显示服务端实际失败原因。每项任务默认最多尝试两次。
+            {budgetText("taskHelp")}
           </p>
           <label className="block mt-3">
             任务 ID
@@ -1252,7 +1249,7 @@ function GenerationAudioWorkspaceContent({
           }}
         >
           <label>
-            搜索任务/资源/Provider ID
+            {budgetText("searchTasks")}
             <input
               className="block w-full"
               value={taskQuery}

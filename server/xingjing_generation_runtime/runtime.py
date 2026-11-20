@@ -92,6 +92,7 @@ class GenerationModelDefinition:
     active: bool
     successful_output_minor: int | None = None
     billing_currency: str | None = None
+    native_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -173,7 +174,7 @@ class GenerationRuntime:
         if self.unavailable_code or self._context_resolver is None:
             raise GenerationRuntimeUnavailable(self.unavailable_code or "GENERATION_RUNTIME_UNAVAILABLE")
         context = await self._context_resolver(request)
-        if permission not in context.permissions:
+        if permission not in context.permissions or (permission.startswith("admin.") and context.role == "API_KEY"):
             raise PermissionError(permission)
         if not await self._project_exists(context, project_id):
             raise LookupError("PROJECT_NOT_FOUND")
@@ -310,6 +311,7 @@ class GenerationRuntime:
                 replace(
                     item,
                     active=True,
+                    native_ready=True,
                     media_types=("image",),
                     capabilities=tuple(
                         cap
@@ -360,6 +362,73 @@ class GenerationRuntime:
             configuration_errors=native_errors,
             successful_output_minor=cast(int | None, pricing.get("successfulOutputMinor")),
         )
+
+    async def creator_services(
+        self, context: TrustedWorkspaceContext, media_type: str, capabilities: list[str]
+    ) -> list[dict[str, object]]:
+        availability = await self.read_model_availability(context)
+        services: list[dict[str, object]] = []
+        for capability in capabilities:
+            offer: dict[str, object] = {
+                "capability": capability,
+                "available": False,
+                "acceptsReferences": False,
+                "canViewBilling": "billing.view" in context.permissions,
+                "canManageBilling": {"billing.view", "billing.manage"}.issubset(context.permissions),
+            }
+            services.append(offer)
+            if (
+                not availability.submission_available
+                or not availability.callback_available
+                or not self._model_route_resolver
+            ):
+                continue
+            try:
+                route = await self._model_route_resolver.resolve(
+                    tenant_id=context.tenant_id,
+                    workspace_id=context.workspace_id,
+                    media_type=media_type,
+                    capability=capability,
+                    requested_provider_id=None,
+                    requested_model_id=None,
+                    parameters={},
+                    acquire=False,
+                )
+            except (ValueError, LookupError):
+                continue
+            selected = next(
+                (
+                    item
+                    for item in availability.models
+                    if item.active
+                    and item.provider_id == route.provider_id
+                    and item.model_id == route.model_id
+                    and media_type in item.media_types
+                    and capability in item.capabilities
+                ),
+                None,
+            )
+            if selected is None:
+                continue
+            native = bool(self._native_images and self._native_images.enabled and self._native_images.supports(route))
+            if native and not selected.native_ready:
+                continue
+            gateway = self.model_availability()
+            if not native and not (
+                gateway.callback_available
+                and self._billing_policy
+                and self._provider_gateway
+                and self._provider_gateway.provider_id == route.provider_id
+            ):
+                continue
+            offer.update(
+                available=True,
+                acceptsReferences=native or gateway.input_contract_available,
+                estimatedMinor=route.estimated_minor,
+                currency=route.currency,
+                successfulOutputMinor=route.successful_output_minor if native else None,
+            )
+        return services
 
     async def get_task(self, context: TrustedWorkspaceContext, project_id: str, task_id: str) -> GenerationTask:
         task = await self._repository_or_raise().get(context.workspace_id, project_id, task_id)
@@ -663,11 +732,14 @@ class GenerationRuntime:
             if replay != existing.request:
                 raise ValueError("IDEMPOTENCY_KEY_REUSED")
             return existing
+        if _has_routing_parameter(request.parameters):
+            raise ValueError("INVALID_GENERATION_REQUEST")
         gateway = self._provider_gateway
         native_enabled = bool(self._native_images and self._native_images.enabled)
         if gateway is None and not native_enabled:
             raise GenerationRuntimeUnavailable("GENERATION_PROVIDER_SUBMISSION_UNAVAILABLE", submission_rejected=True)
-        request = await self._project_model_default(context, project_id, request)
+        if self._session_factory is not None and not await self._project_exists(context, project_id):
+            raise LookupError("PROJECT_NOT_FOUND")
         request = await self._resolve_input_assets(context, project_id, request)
         if self._model_route_resolver is None:
             raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE", submission_rejected=True)
@@ -677,8 +749,8 @@ class GenerationRuntime:
                 workspace_id=context.workspace_id,
                 capability=request.capability,
                 media_type=request.media_type.value,
-                requested_provider_id=request.requested_provider_id,
-                requested_model_id=request.requested_model_id,
+                requested_provider_id=None,
+                requested_model_id=None,
                 parameters=_route_parameters(request),
                 acquire=self._route_admission is None,
             )
@@ -1389,46 +1461,6 @@ class GenerationRuntime:
             recorded_at=at,
         )
 
-    async def _project_model_default(
-        self,
-        context: TrustedWorkspaceContext,
-        project_id: str,
-        request: GenerationRequest,
-    ) -> GenerationRequest:
-        if self._session_factory is None:
-            return request
-        async with self._session_factory() as session:
-            project = await session.scalar(
-                select(ProjectRow).where(
-                    ProjectRow.id == project_id,
-                    ProjectRow.tenant_id == context.tenant_id,
-                    ProjectRow.workspace_id == context.workspace_id,
-                    ProjectRow.deleted_at.is_(None),
-                    ProjectRow.setup_state == "ready",
-                )
-            )
-            if project is None:
-                raise LookupError("PROJECT_NOT_FOUND")
-            if request.requested_provider_id or request.requested_model_id:
-                return request
-            key = project.configuration.get(f"{request.media_type.value}ModelKey") if project.configuration else None
-            if not isinstance(key, str) or not key:
-                return request
-        if self._model_route_resolver is None:
-            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE")
-        try:
-            models = await self._model_route_resolver.catalog(key)
-        except SQLAlchemyError as error:
-            raise GenerationRuntimeUnavailable("MODEL_ROUTE_CONTROL_UNAVAILABLE") from error
-        if not models or request.media_type.value not in cast(list[str], models[0]["mediaTypes"]):
-            raise ValueError("PROJECT_MODEL_UNAVAILABLE")
-        return request.model_copy(
-            update={
-                "requested_provider_id": models[0]["providerId"],
-                "requested_model_id": models[0]["providerModelName"],
-            }
-        )
-
     async def _project_exists(self, context: TrustedWorkspaceContext, project_id: str) -> bool:
         if self._session_factory is None:
             raise GenerationRuntimeUnavailable(self.unavailable_code or "GENERATION_RUNTIME_UNAVAILABLE")
@@ -1598,6 +1630,29 @@ def _unavailable_runtime(code: str) -> GenerationRuntime:
         context_resolver=None,
         unavailable_code=code,
     )
+
+
+def _has_routing_parameter(value: object) -> bool:
+    if isinstance(value, dict):
+        reserved = {
+            "model",
+            "modelid",
+            "modelkey",
+            "requestedmodelid",
+            "provider",
+            "providerid",
+            "requestedproviderid",
+            "backend",
+            "modelstrategy",
+            "routingpolicy",
+        }
+        return any(
+            str(key).replace("_", "").lower() in reserved or _has_routing_parameter(child)
+            for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_routing_parameter(child) for child in value)
+    return False
 
 
 def _route_parameters(request: GenerationRequest) -> dict[str, object]:

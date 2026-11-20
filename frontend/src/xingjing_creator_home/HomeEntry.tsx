@@ -9,7 +9,7 @@ export function CreatorHomeLink() {
   const { t } = useHomeTranslation();
   return <Link href="/app/home" className={homeButton}><House size={15} />{t("home")}</Link>;
 }
-export function CreatorHomeEntry() {
+export function CreatorHomeEntry({ surface = "home" }: { surface?: "home" | "settings" }) {
   const { t } = useHomeTranslation(); const [, navigate] = useLocation();
   const [failed, setFailed] = useState(false); const [reload, setReload] = useState(0);
   useEffect(() => {
@@ -17,9 +17,9 @@ export function CreatorHomeEntry() {
     void authenticatedFetch("/api/v1/session/context", { signal: abort.signal }).then(async (response) => {
       if (!response.ok) throw new Error("SESSION_UNAVAILABLE");
       const body = await response.json() as { data: SessionContext };
-      if (!abort.signal.aborted) navigate(body.data.currentWorkspace ? `/app/workspaces/${encodeURIComponent(body.data.currentWorkspace.id)}/home` : "/workspace-select", { replace: true });
+      if (!abort.signal.aborted) navigate(body.data.currentWorkspace ? `/app/workspaces/${encodeURIComponent(body.data.currentWorkspace.id)}/${surface}` : "/workspace-select", { replace: true });
     }).catch(() => { if (!abort.signal.aborted) setFailed(true); });
     return () => abort.abort();
-  }, [navigate, reload]);
+  }, [navigate, reload, surface]);
   return <main className="grid min-h-screen place-content-center gap-4 bg-[#05060A] p-6 text-slate-200"><p role={failed ? "alert" : "status"}>{t(failed ? "failed" : "loading")}</p>{failed && <button className={homeButton} onClick={() => { setFailed(false); setReload((value) => value + 1); }}>{t("retry")}</button>}</main>;
 }

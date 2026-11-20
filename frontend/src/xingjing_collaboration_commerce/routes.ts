@@ -131,7 +131,6 @@ const costColumns: readonly CommerceColumnDefinition[] = [
   { key: "episodeId", labelKey: "columns.episode" },
   { key: "shotId", labelKey: "columns.shot" },
   { key: "source", labelKey: "columns.type" },
-  { key: "modelId", labelKey: "columns.model" },
   { key: "actorId", labelKey: "columns.member" },
   { key: "estimatedMinor", labelKey: "billing.estimated", format: "minor" },
   { key: "actualMinor", labelKey: "columns.amount", format: "minor" },

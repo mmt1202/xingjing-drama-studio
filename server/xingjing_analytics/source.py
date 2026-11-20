@@ -107,11 +107,6 @@ def _str(value: object) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else UNKNOWN
 
 
-def _model(provider: object, model: object) -> str:
-    provider_id, model_id = _str(provider), _str(model)
-    return f"{provider_id}/{model_id}" if provider_id != UNKNOWN and model_id != UNKNOWN else UNKNOWN
-
-
 def _duration(created, completed) -> int | None:
     start, end = timestamp(created), timestamp(completed)
     return round((end - start).total_seconds() * 1000) if start and end and end >= start else None
@@ -188,10 +183,9 @@ async def load(session: AsyncSession, context: TrustedWorkspaceContext, project_
             snapshot = row.snapshot
             request = _mapping(snapshot.get("request"))
             params = _mapping(request.get("parameters"))
-            model = _model(
-                snapshot.get("resolved_provider_id") or request.get("requested_provider_id"),
-                snapshot.get("resolved_model_id") or request.get("requested_model_id"),
-            )
+            model = request.get("media_type")
+            if model not in ("image", "video"):
+                model = UNKNOWN
             fact = Fact(
                 "task",
                 row.project_id,
@@ -220,7 +214,7 @@ async def load(session: AsyncSession, context: TrustedWorkspaceContext, project_
             mappings=True,
         )
         for row in audio_rows:
-            model = f"audio/{row['provider_name']}" if row["provider_name"] else UNKNOWN
+            model = "audio"
             episode = _str(row["resource_id"]) if row["resource_type"] == "episode" else UNKNOWN
             fact = Fact(
                 "task",
@@ -236,7 +230,6 @@ async def load(session: AsyncSession, context: TrustedWorkspaceContext, project_
             tasks[("audio", str(row["project_id"]), str(row["id"]))] = fact
             data.models.setdefault(model, model)
         data.sources.append("audio")
-        data.notes.add("audio_provider_not_model")
     else:
         data.notes.add("audio_restricted")
     finals = []
@@ -302,7 +295,7 @@ async def load(session: AsyncSession, context: TrustedWorkspaceContext, project_
                 row.project_id,
                 utc(row.created_at),
                 episode,
-                "editing/renderer",
+                "editing",
                 render_actors.get((row.project_id, row.task_id), UNKNOWN),
                 row.status,
                 row.attempt > 1,

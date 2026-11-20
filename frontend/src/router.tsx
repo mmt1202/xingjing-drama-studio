@@ -1,6 +1,6 @@
 // router.tsx — Route definitions for the studio layout
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Route, Switch, Redirect, useParams } from "wouter";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
@@ -38,6 +38,7 @@ import { useConfigStatusStore } from "@/stores/config-status-store";
 import { type GenerationWorkbenchView } from "@/xingjing_generation_center";
 import { AdminBusinessRoute, CollaborationBusinessRoute, ProjectBusinessRoute, WorkspaceAssetsRoute, WorkspaceProjectsRoute, WorkspaceLandingRoute } from "@/xingjing_route_bridge";
 import { CreatorHomeEntry } from "@/xingjing_creator_home/HomeEntry";
+import { authenticatedFetch, getRefreshToken, getToken } from "@/utils/auth";
 import { errMsg } from "@/utils/async";
 import {
   ROUTE_APP,
@@ -58,9 +59,10 @@ import {
  */
 function ConfigStatusLoader() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const managed = useAuthStore((s) => s.platformManaged);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || managed || getRefreshToken()) return;
     let cancelled = false;
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -77,7 +79,7 @@ function ConfigStatusLoader() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, managed]);
 
   return null;
 }
@@ -85,6 +87,28 @@ function ConfigStatusLoader() {
 // ---------------------------------------------------------------------------
 // AuthGuard — redirects to /login when not authenticated
 // ---------------------------------------------------------------------------
+
+function StudioSettingsEntry({ project = false }: { project?: boolean }) {
+  const { t } = useTranslation("common");
+  const managed = useAuthStore((state) => state.platformManaged);
+  const [platform, setPlatform] = useState<boolean | undefined>(() => {
+    if (getRefreshToken() || managed) return true;
+    return getToken() ? undefined : false;
+  });
+  useEffect(() => {
+    if (platform !== undefined) return;
+    const abort = new AbortController();
+    void authenticatedFetch("/api/v1/auth/status", { signal: abort.signal }).then(async (response) => {
+      if (!response.ok) throw new Error("STATUS_UNAVAILABLE");
+      const data: unknown = await response.json();
+      if (!abort.signal.aborted) setPlatform(typeof data !== "object" || data === null || !("platformManaged" in data) || data.platformManaged !== false);
+    }).catch(() => { if (!abort.signal.aborted) setPlatform(true); });
+    return () => abort.abort();
+  }, [platform]);
+  if (platform === undefined) return <p role="status">{t("loading")}</p>;
+  if (platform) return <CreatorHomeEntry surface="settings" />;
+  return project ? <ProjectSettingsPage /> : <SystemConfigPage />;
+}
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -298,7 +322,7 @@ export function AppRoutes() {
         {/* System settings */}
         <Route path={ROUTE_APP_SETTINGS}>
           <AuthGuard>
-            <SystemConfigPage />
+            <StudioSettingsEntry />
           </AuthGuard>
         </Route>
 
@@ -376,7 +400,7 @@ export function AppRoutes() {
         {/* Project settings — full-screen, must be before the nested workspace route */}
         <Route path={`${ROUTE_APP_PROJECTS}/:projectName/${WORKSPACE_ROUTE_SETTINGS}`}>
           <AuthGuard>
-            <ProjectSettingsPage />
+            <StudioSettingsEntry project />
           </AuthGuard>
         </Route>
 

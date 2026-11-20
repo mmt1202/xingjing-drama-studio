@@ -12,10 +12,10 @@ const zh = {
   readingHeading: "场景：原文朗读", narrationPrefix: "旁白：", readingSave: "保存旁白稿为新版本", readingSummary: "按原文段落整理旁白稿",
   formatSummary: "识别已有剧本的场景格式", cancel: "收起预览", retry: "重新读取识别结果", failed: "暂时无法读取这份原文的识别结果。",
   loading: "正在识别当前文档…", wrong: "文档已更新，请重新读取后继续。", saved: "已保存新的工作版本。",
-  automatic: "导入后自动用 AI 改编短篇原文", automaticHelp: "适用于单次处理上限内的叙事原文，会调用已配置的文本模型。长篇先分集，已有分场的剧本直接识别。",
-  autoUnavailable: "当前文本模型尚未就绪。章节和剧本格式仍会自动识别。", processing: "原文已保存，AI 正在改编这份原文…",
+  automatic: "导入后自动用 AI 改编短篇原文", automaticHelp: "适用于短篇原文。长篇可先分集，已有分场的剧本会直接识别。",
+  autoUnavailable: "AI 改编暂时不可用。你仍可以导入原文并自动识别章节和场次。", processing: "原文已保存，AI 正在改编这份原文…",
   fileSource: "导入文件", identified: "导入时会自动识别章节、常见场次编号和标准场景标题。",
-  simpleNext: "可把原文整理为旁白稿，也可以使用已配置的文本模型改编为分场剧本。",
+  simpleNext: "可把原文整理为旁白稿，也可以用 AI 改编为分场剧本。",
   originalRanges: "分集取材使用导入时保存的原文。当前工作版本另行保留。",
 };
 type Copy = Record<keyof typeof zh, string>;
@@ -30,10 +30,10 @@ const en: Copy = {
   readingHeading: "Scene: Reading the original text", narrationPrefix: "Narration: ", readingSave: "Save the narrated script as a new version", readingSummary: "Prepared narration from original paragraphs",
   formatSummary: "Recognized scene headings in the existing screenplay", cancel: "Close preview", retry: "Reload recognition", failed: "Source recognition could not be loaded.",
   loading: "Recognizing this document…", wrong: "This document changed. Reload it to continue.", saved: "A new working version was saved.",
-  automatic: "Automatically adapt short prose with AI after importing", automaticHelp: "Calls the configured text model for narrative text within its input limit. Long texts go to episode planning. Existing screenplays are recognized directly.",
-  autoUnavailable: "The text model is not ready. Chapter and screenplay recognition are available.", processing: "Source saved. AI adaptation is in progress…",
+  automatic: "Automatically adapt short prose with AI after importing", automaticHelp: "Use this for short texts. Split longer works into episodes first. Existing scene headings are recognised automatically.",
+  autoUnavailable: "AI adaptation is temporarily unavailable. Importing text and recognising chapters and scenes are still available.", processing: "Source saved. AI adaptation is in progress…",
   fileSource: "Imported file", identified: "Import recognizes chapters, numbered scenes and standard scene headings.",
-  simpleNext: "Prepare a narrated script from this text or adapt it into a screenplay with a configured text model.",
+  simpleNext: "Prepare a narration script or use AI to adapt the text into scenes.",
   originalRanges: "Episode planning uses the original imported text. The current working version is saved separately.",
 };
 const vi: Copy = {
@@ -47,10 +47,10 @@ const vi: Copy = {
   readingHeading: "Cảnh: Đọc nguyên văn", narrationPrefix: "Lời dẫn: ", readingSave: "Lưu bản lời dẫn thành phiên bản mới", readingSummary: "Sắp xếp lời dẫn theo đoạn nguyên văn",
   formatSummary: "Nhận diện tiêu đề cảnh của kịch bản hiện có", cancel: "Đóng bản xem trước", retry: "Tải lại kết quả nhận diện", failed: "Chưa tải được kết quả nhận diện nguyên văn.",
   loading: "Đang nhận diện tài liệu…", wrong: "Tài liệu đã thay đổi. Hãy tải lại để tiếp tục.", saved: "Đã lưu phiên bản làm việc mới.",
-  automatic: "Tự động chuyển thể văn xuôi ngắn bằng AI sau khi nhập", automaticHelp: "Gọi mô hình văn bản cho văn xuôi trong giới hạn đầu vào. Văn bản dài được chia tập trước, kịch bản có cảnh được nhận diện trực tiếp.",
-  autoUnavailable: "Mô hình văn bản chưa sẵn sàng. Vẫn có thể nhận diện chương và định dạng kịch bản.", processing: "Đã lưu nguyên văn. AI đang chuyển thể…",
+  automatic: "Tự động chuyển thể văn xuôi ngắn bằng AI sau khi nhập", automaticHelp: "Dùng cho văn bản ngắn. Chia tác phẩm dài thành tập trước. Các tiêu đề cảnh sẵn có được nhận diện tự động.",
+  autoUnavailable: "Tạm thời chưa thể chuyển thể bằng AI. Bạn vẫn có thể nhập văn bản để tự nhận diện chương và cảnh.", processing: "Đã lưu nguyên văn. AI đang chuyển thể…",
   fileSource: "Tệp đã nhập", identified: "Tự động nhận diện chương, số cảnh và tiêu đề cảnh khi nhập.",
-  simpleNext: "Tạo bản lời dẫn từ nguyên văn hoặc dùng mô hình văn bản đã cấu hình để chuyển thể thành kịch bản phân cảnh.",
+  simpleNext: "Bạn có thể soạn lời dẫn hoặc dùng AI chuyển văn bản thành kịch bản phân cảnh.",
   originalRanges: "Chia tập dùng nguyên văn khi nhập. Phiên bản làm việc hiện tại được lưu riêng.",
 };
 for (const [locale, copy] of Object.entries({ zh, en, vi })) i18n.addResourceBundle(locale, "scriptRecognition", copy, true, false);

@@ -9,7 +9,7 @@ import inspect
 import json
 import os
 from collections.abc import Callable
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from server.xingjing_editing_persistence.models import FinalVideoVersionRow, TimelineVersionRow
-from server.xingjing_generation import GenerationRequest, TaskStatus
+from server.xingjing_generation import GenerationRequest, GenerationTask, TaskStatus
 from server.xingjing_generation_runtime.runtime import GenerationRuntime, GenerationRuntimeUnavailable
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
@@ -40,6 +40,13 @@ RATIOS = ["9:16", "3:4", "1:1", "16:9"]
 
 def _iso(value: datetime) -> str:
     return value.replace(tzinfo=UTC).isoformat() if value.tzinfo is None else value.astimezone(UTC).isoformat()
+
+
+def _creator_receipt(response: dict) -> dict:
+    task = response.get("task")
+    if isinstance(task, dict) and "request_fingerprint" in task:
+        return {**response, "task": GenerationTask.model_validate(task).creator_payload()}
+    return response
 
 
 def _scope(model, context: TrustedWorkspaceContext):
@@ -238,7 +245,7 @@ class CoverRuntime:
         availability = None
         if "generation.view" in context.permissions:
             try:
-                availability = asdict(await self.generation.read_model_availability(context=context))
+                availability = (await self.generation.creator_services(context, "image", ["image_generation"]))[0]
             except GenerationRuntimeUnavailable:
                 pass
         return {**value, "generationAvailability": availability}
@@ -329,7 +336,7 @@ class CoverRuntime:
             for task_id in task_ids:
                 try:
                     task = await self.generation.get_task(context, project_id, task_id)
-                    tasks.append(task.model_dump(mode="json"))
+                    tasks.append(task.creator_payload())
                     if task.status is TaskStatus.SUCCEEDED:
                         for asset in await self.generation.generated_assets(context, project_id, task_id):
                             if asset.media_type == "image":
@@ -496,7 +503,7 @@ class CoverRuntime:
             self._lock_project(session, context, project_id)
             receipt = self._receipt(session, context, project_id, key, fingerprint)
             if receipt and receipt.response:
-                return receipt.response
+                return _creator_receipt(receipt.response)
             final = self._final(session, context, project_id, payload.finalVersionId)
             now = datetime.now(UTC)
             row = CoverPlanRow(
@@ -560,7 +567,7 @@ class CoverRuntime:
             row = self._plan(session, context, project_id, plan_id)
             receipt = self._receipt(session, context, project_id, key, fingerprint)
             if receipt and receipt.response:
-                return receipt.response
+                return _creator_receipt(receipt.response)
             if row.version != command.version:
                 raise CoverFailure("COVER_VERSION_CONFLICT", 409)
             if row.pending_command and row.pending_command != self._claim_id(context, key):
@@ -593,7 +600,7 @@ class CoverRuntime:
             row = self._plan(session, context, project_id, plan_id)
             receipt = self._receipt(session, context, project_id, key, fingerprint)
             if receipt and receipt.response:
-                return receipt.response
+                return _creator_receipt(receipt.response)
             if row.version != command.version or row.pending_command:
                 raise CoverFailure("COVER_VERSION_CONFLICT", 409)
             before = self._snapshot(row)
@@ -726,7 +733,7 @@ class CoverRuntime:
             row = self._plan(session, context, project_id, plan_id)
             receipt = self._receipt(session, context, project_id, key, fingerprint)
             if receipt and receipt.response:
-                return receipt.response
+                return _creator_receipt(receipt.response)
             if row.version != command.version or row.pending_command not in {None, claim_id}:
                 raise CoverFailure("COVER_VERSION_CONFLICT", 409)
             if len(row.generation_task_ids) >= 30:
@@ -746,8 +753,6 @@ class CoverRuntime:
                     "parameters": parameters,
                     "input_asset_ids": payload["inputAssetIds"],
                     "input_asset_references": payload.get("inputAssetReferences", []),
-                    "requested_provider_id": payload["providerId"],
-                    "requested_model_id": payload["modelId"],
                 }
             )
             row.pending_command = claim_id
@@ -781,10 +786,6 @@ class CoverRuntime:
             or task.request.parameters != request.parameters
             or task.request.input_asset_ids != request.input_asset_ids
             or task.request.input_asset_references != request.input_asset_references
-            or request.requested_provider_id is not None
-            and task.request.requested_provider_id != request.requested_provider_id
-            or request.requested_model_id is not None
-            and task.request.requested_model_id != request.requested_model_id
         ):
             await asyncio.to_thread(self._release_claim, context, project_id, plan_id, key, fingerprint)
             raise CoverFailure("COVER_GENERATION_IDEMPOTENCY_CONFLICT", 409)
@@ -803,7 +804,7 @@ class CoverRuntime:
             row = self._plan(session, context, project_id, plan_id)
             receipt = self._receipt(session, context, project_id, key, fingerprint)
             if receipt and receipt.response:
-                return receipt.response
+                return _creator_receipt(receipt.response)
             if row.version != command.version or row.pending_command != claim_id:
                 raise CoverFailure("COVER_VERSION_CONFLICT", 409)
             before = self._snapshot(row)
@@ -812,7 +813,7 @@ class CoverRuntime:
             row.pending_command = None
             row.version += 1
             row.updated_by, row.updated_at = context.actor_id, now
-            result = {"plan": plan_dto(row), "task": task.model_dump(mode="json")}
+            result = {"plan": plan_dto(row), "task": task.creator_payload()}
             self._evidence(session, context, row, "generate", before, now)
             self._write_receipt(session, context, project_id, row, key, fingerprint, result, now)
             return result

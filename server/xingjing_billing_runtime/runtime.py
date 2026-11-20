@@ -727,9 +727,9 @@ def _enrich_cost_dimensions(
         request: dict[str, Any] = request_value if isinstance(request_value, dict) else {}
         parameters_value = request.get("parameters")
         parameters: dict[str, Any] = parameters_value if isinstance(parameters_value, dict) else {}
-        model_id = snapshot.get("resolved_model_id") or request.get("requested_model_id")
+        media_type = request.get("media_type")
         generation_dimensions[task.task_id] = (
-            str(model_id) if isinstance(model_id, str) and model_id else None,
+            str(media_type) if media_type in ("image", "video") else None,
             generation_actors.get(task.task_id),
             _dimension_value(parameters, "episode_id", "episodeId"),
             _dimension_value(parameters, "shot_id", "shotId"),
@@ -737,7 +737,7 @@ def _enrich_cost_dimensions(
 
     audio_dimensions = {
         str(task["id"]): (
-            str(task["provider_name"]) if task.get("provider_name") else None,
+            "audio",
             str(task["created_by"]),
             str(task["resource_id"]) if task.get("resource_type") == "episode" else None,
             str(task["resource_id"]) if task.get("resource_type") == "shot" else None,
@@ -754,7 +754,7 @@ def _enrich_cost_dimensions(
     }
     editing_dimensions = {
         task.task_id: (
-            "editing-renderer",
+            "editing",
             editing_actors.get(task.task_id),
             editing_episodes.get((task.timeline_id, task.timeline_version_id)),
             None,

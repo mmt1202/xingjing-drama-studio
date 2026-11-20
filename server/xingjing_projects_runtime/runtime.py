@@ -26,7 +26,6 @@ from lib.i18n import get_translator
 from lib.project_manager import get_project_manager
 from server.xingjing_budget import BudgetError
 from server.xingjing_identity_context import PlatformSessionGateway, TrustedWorkspaceContextResolver
-from server.xingjing_model_control.runtime import ModelDefinitionRow
 from server.xingjing_platform_persistence import OptimisticConflict, PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import Project, ProjectRow
 from server.xingjing_script_recovery.router import register_recovery_routes
@@ -39,7 +38,7 @@ from .control_actions import transition
 from .episodes import register_episode_routes
 from .home import register_home_routes
 from .initialization import initialize_source
-from .setup import ProjectSetup, SetupInvalid, create_projection, creation_digest, parse_setup
+from .setup import ProjectSetup, SetupInvalid, create_projection, creation_digest, creator_configuration, parse_setup
 
 
 class ProjectsRuntime:
@@ -79,23 +78,11 @@ class ProjectsRuntime:
                         .order_by(MemberRow.email)
                     )
                 ).all()
-                models = (
-                    await session.scalars(
-                        select(ModelDefinitionRow)
-                        .where(
-                            ModelDefinitionRow.active.is_(True),
-                        )
-                        .order_by(ModelDefinitionRow.display_name)
-                    )
-                ).all()
             return {
                 "data": {
                     "permissions": sorted(context.permissions),
                     "members": [{"id": member.member_id, "name": member.email} for member in members],
-                    "models": [
-                        {"key": model.registry_key, "name": model.display_name, "mediaTypes": model.media_types}
-                        for model in models
-                    ],
+                    "models": [],
                 },
                 "meta": {"requestId": context.request_id},
             }
@@ -146,7 +133,11 @@ class ProjectsRuntime:
             if row.setup_state == "ready" and await asyncio.to_thread(manager.project_exists, row.id):
                 legacy_project = await asyncio.to_thread(manager.load_project, row.id)
             return {
-                "data": {**data, "configuration": row.configuration or {}, "episodes": _episodes(legacy_project)},
+                "data": {
+                    **data,
+                    "configuration": creator_configuration(row.configuration or {}),
+                    "episodes": _episodes(legacy_project),
+                },
                 "project": legacy_project,
                 "scripts": {},
                 "asset_fingerprints": {},
@@ -250,11 +241,6 @@ class ProjectsRuntime:
                 )
                 if member is None:
                     raise SetupInvalid(["ownerId"])
-            for kind, key in (("image", setup.image_model_key), ("video", setup.video_model_key)):
-                if key:
-                    model = await session.get(ModelDefinitionRow, key)
-                    if model is None or not model.active or kind not in model.media_types:
-                        raise SetupInvalid([f"{kind}ModelKey"])
 
     async def _create(self, context, key: str, payload: Mapping[str, object], *, draft: bool = False) -> Project:
         name = _text(payload.get("name"))
@@ -325,7 +311,8 @@ class ProjectsRuntime:
         setup = parse_setup(payload.get("configuration"), actor_id=context.actor_id, draft=draft)
         digest = hashlib.sha256(
             json.dumps(
-                {"action": action, "version": expected, "name": name, "configuration": setup.payload()}, sort_keys=True
+                {"action": action, "version": expected, "name": name, "configuration": setup.model_dump(by_alias=True)},
+                sort_keys=True,
             ).encode()
         ).hexdigest()
         scope = Scope(context.tenant_id, context.workspace_id)
@@ -566,7 +553,9 @@ def _summary(row: ProjectRow) -> dict[str, object]:
         "version": row.version,
         "updatedAt": _iso(row.updated_at),
         "setupState": row.setup_state,
-        "configuration": {key: value for key, value in (row.configuration or {}).items() if key != "sourceText"},
+        "configuration": {
+            key: value for key, value in creator_configuration(row.configuration or {}).items() if key != "sourceText"
+        },
     }
 
 
@@ -583,7 +572,7 @@ def _project(project: Project) -> dict[str, object]:
         "updatedAt": _iso(project.created_at),
         "episodes": [],
         "setupState": project.setup_state,
-        "configuration": project.configuration,
+        "configuration": creator_configuration(project.configuration or {}),
     }
 
 

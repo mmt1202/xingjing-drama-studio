@@ -17,7 +17,7 @@ export function readDashboardQuery(raw: string, defaults: DashboardDefaults): Da
   return {
     range: range && ranges.includes(range) ? range : defaults.range,
     groupBy: groupBy && groups.includes(groupBy) ? groupBy : defaults.groupBy,
-    q: params.get("q") ?? "", projectId: params.get("projectId") ?? "", episodeId: params.get("episodeId") ?? "", modelId: params.get("modelId") ?? "", memberId: params.get("memberId") ?? "",
+    q: params.get("q") ?? "", projectId: params.get("projectId") ?? "", episodeId: params.get("episodeId") ?? "", modelId: ["image", "video", "audio", "editing", "unknown"].includes(params.get("modelId") ?? "") ? params.get("modelId")! : "", memberId: params.get("memberId") ?? "",
     offset: Number.isSafeInteger(offset) && offset >= 0 ? offset : 0, limit: 20,
   };
 }

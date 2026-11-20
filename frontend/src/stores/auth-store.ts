@@ -5,6 +5,7 @@ interface AuthState {
   token: string | null;
   sessionEpoch: string;
   username: string | null;
+  platformManaged: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   initialize: () => void;
@@ -13,7 +14,7 @@ interface AuthState {
   setLoading: (loading: boolean) => void;
 }
 export const useAuthStore = create<AuthState>((set) => ({
-  token: null, sessionEpoch: getSessionEpoch(), username: null, isAuthenticated: false, isLoading: true,
+  platformManaged: false, token: null, sessionEpoch: getSessionEpoch(), username: null, isAuthenticated: false, isLoading: true,
   initialize: () => {
     const epoch = getSessionEpoch();
     if (getToken()) {
@@ -32,7 +33,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       if (!response.ok) throw new Error("AUTH_STATUS_UNAVAILABLE");
       const value: unknown = await response.json();
       if (!value || typeof value !== "object" || !("enabled" in value) || typeof value.enabled !== "boolean") throw new Error("AUTH_STATUS_INVALID");
-      if (getSessionEpoch() === epoch && !getToken() && !value.enabled) set({ sessionEpoch: epoch, isAuthenticated: true });
+      if (getSessionEpoch() === epoch && !getToken() && !value.enabled) set({ sessionEpoch: epoch, isAuthenticated: true, platformManaged: "platformManaged" in value && value.platformManaged === true });
     }).catch(() => undefined).finally(() => { clearTimeout(timeoutId); if (getSessionEpoch() === epoch) set({ isLoading: false }); });
   },
   login: (token, username, refreshToken, accessExpiresAt) => {

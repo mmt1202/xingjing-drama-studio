@@ -1,6 +1,7 @@
+import { generationServicesPath, type GenerationService } from "./services";
 import { createAuthenticatedFetcher } from "@/utils/auth";
 import i18n from "@/i18n";
-import type { GeneratedCandidateSelection, GenerationCandidatePage, GenerationCostEvidence, GenerationModelAvailability, GenerationModelUsageReport, GenerationSubmission, GenerationTask, GenerationTaskDetail, GenerationTaskFilters, GenerationTaskPage } from "./contracts";
+import type { GeneratedCandidateSelection, GenerationCandidatePage, GenerationCostEvidence, GenerationSubmission, GenerationTask, GenerationTaskDetail, GenerationTaskFilters, GenerationTaskPage } from "./contracts";
 
 export class GenerationCenterApiError extends Error {
   constructor(
@@ -8,6 +9,7 @@ export class GenerationCenterApiError extends Error {
     public readonly code: string,
     public readonly requestId: string | null,
     message: string,
+    public readonly rejected = false,
   ) {
     super(message);
     this.name = "GenerationCenterApiError";
@@ -16,7 +18,7 @@ export class GenerationCenterApiError extends Error {
 
 interface Envelope<T> { readonly data: T; readonly meta?: { readonly requestId?: string; readonly total?: number } }
 interface ErrorEnvelope { readonly error?: { readonly code?: string; readonly message?: string; readonly details?: unknown }; readonly meta?: { readonly requestId?: string } }
-export interface GenerationCenterApi { list(scope: string, offset?: number, limit?: number, signal?: AbortSignal, filters?: GenerationTaskFilters): Promise<GenerationTaskPage>; models(scope: string, signal?: AbortSignal): Promise<GenerationModelAvailability>; usage(scope: string, signal?: AbortSignal): Promise<readonly GenerationModelUsageReport[]>; candidates(scope: string, options?: { readonly mediaType?: "image" | "video"; readonly capability?: string; readonly offset?: number; readonly limit?: number; readonly signal?: AbortSignal }): Promise<GenerationCandidatePage>; detail(scope: string, taskId: string, signal?: AbortSignal): Promise<GenerationTaskDetail>; submit(scope: string, payload: GenerationSubmission, idempotencyKey: string): Promise<GenerationTask>; cancel(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; retry(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; selectCandidate(scope: string, taskId: string, assetId: string, expectedVersion: number, idempotencyKey: string): Promise<GeneratedCandidateSelection> }
+export interface GenerationCenterApi { list(scope: string, offset?: number, limit?: number, signal?: AbortSignal, filters?: GenerationTaskFilters): Promise<GenerationTaskPage>; services(scope: string, mediaType: "image" | "video", capabilities: readonly string[], signal?: AbortSignal): Promise<readonly GenerationService[]>; candidates(scope: string, options?: { readonly mediaType?: "image" | "video"; readonly capability?: string; readonly offset?: number; readonly limit?: number; readonly signal?: AbortSignal }): Promise<GenerationCandidatePage>; detail(scope: string, taskId: string, signal?: AbortSignal): Promise<GenerationTaskDetail>; submit(scope: string, payload: GenerationSubmission, idempotencyKey: string): Promise<GenerationTask>; cancel(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; retry(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; selectCandidate(scope: string, taskId: string, assetId: string, expectedVersion: number, idempotencyKey: string): Promise<GeneratedCandidateSelection> }
 
 export interface GenerationCenterApiOptions {
   readonly fetcher?: typeof fetch;
@@ -42,7 +44,7 @@ export function createGenerationCenterApi({ fetcher: providedFetcher, getAccessT
     catch (cause) { throw new GenerationCenterApiError(null, "NETWORK_ERROR", null, cause instanceof Error ? cause.message : "网络请求失败"); }
     const body = await response.json().catch(() => ({})) as Envelope<T> & ErrorEnvelope;
     const requestId = body.meta?.requestId ?? response.headers.get("X-Request-Id");
-    if (!response.ok) throw new GenerationCenterApiError(response.status, body.error?.code ?? "GENERATION_REQUEST_FAILED", requestId, body.error?.message ?? "生成服务暂不可用");
+    if (!response.ok) throw new GenerationCenterApiError(response.status, body.error?.code ?? "GENERATION_REQUEST_FAILED", requestId, body.error?.message ?? "生成服务暂不可用", Boolean(body.error?.details && typeof body.error.details === "object" && "submissionState" in body.error.details && body.error.details.submissionState === "rejected"));
     return { value: body.data, requestId, total: body.meta?.total };
   }
   const query = (projectId: string) => `projectId=${encodeURIComponent(projectId)}`;
@@ -55,13 +57,9 @@ export function createGenerationCenterApi({ fetcher: providedFetcher, getAccessT
       const response = await request<{ tasks: readonly GenerationTask[] }>(`/generation-tasks?${params.toString()}`, { signal });
       return { tasks: response.value.tasks, total: response.total ?? response.value.tasks.length, requestId: response.requestId };
     },
-    async models(projectId, signal) {
-      const response = await request<{ model: GenerationModelAvailability }>(`/generation-models?${query(projectId)}`, { signal });
-      return response.value.model;
-    },
-    async usage(projectId, signal) {
-      const response = await request<{ usage: readonly GenerationModelUsageReport[] }>(`/generation-model-usage?${query(projectId)}`, { signal });
-      return response.value.usage;
+    async services(projectId, mediaType, capabilities, signal) {
+      const response = await request<{ services: GenerationService[] }>(generationServicesPath(projectId, mediaType, capabilities), { signal });
+      return response.value.services;
     },
     async candidates(projectId, options = {}) {
       const params = new URLSearchParams({ projectId, offset: String(options.offset ?? 0), limit: String(options.limit ?? 20) });

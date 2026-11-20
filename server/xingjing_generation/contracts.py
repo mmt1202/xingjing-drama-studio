@@ -166,6 +166,38 @@ class GenerationTask(BaseModel):
     updated_at: datetime
     timeout_at: datetime
 
+    def creator_payload(self) -> dict[str, Any]:
+        """Return the production task without internal routing or provider diagnostics."""
+        data = self.model_dump(
+            mode="json",
+            exclude={
+                "resolved_provider_id": True,
+                "resolved_model_id": True,
+                "provider_job_id": True,
+                "processed_callback_event_ids": True,
+                "request_fingerprint": True,
+                "idempotency_scope": True,
+                "request": {"requested_provider_id", "requested_model_id", "resolved_input_assets"},
+                "failure": {"message", "details"},
+            },
+        )
+
+        creative_fields = {
+            "aspect_ratio",
+            "duration_ms",
+            "duration",
+            "width",
+            "height",
+            "resolution",
+            "negative_prompt",
+        }
+        data["request"]["parameters"] = {
+            key: value
+            for key, value in self.request.parameters.items()
+            if key in creative_fields and isinstance(value, (str, int, float, bool))
+        }
+        return data
+
     @classmethod
     def create(
         cls,

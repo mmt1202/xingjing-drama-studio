@@ -92,8 +92,8 @@ def project_shot(storyboard: Storyboard, shot: Shot) -> dict[str, object]:
         "prompt": shot.prompt,
         "negativePrompt": shot.negative_prompt,
         "promptTemplateId": shot.prompt_template_id,
+        "promptModelAdapterVersion": None,
         "promptVariables": shot.prompt_variables or {},
-        "promptModelAdapterVersion": shot.prompt_model_adapter_version,
         "assetReferences": [
             {
                 "id": reference.asset_id,

@@ -19,6 +19,7 @@ from server.xingjing_team_persistence.repository import MemberRow
 from .budget import apply_project_budget
 from .control import production_facts
 from .episode_sources import authorize, sources
+from .setup import creator_configuration
 
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
@@ -75,7 +76,9 @@ async def sync_overview_projection(uow: PersistenceUnitOfWork, context, project_
 
     def apply(project):
         project["title"] = row.name
-        project["xingjing_setup"] = {k: v for k, v in row.configuration.items() if k != "sourceText"}
+        project["xingjing_setup"] = {
+            k: v for k, v in creator_configuration(row.configuration).items() if k != "sourceText"
+        }
 
     await asyncio.to_thread(get_project_manager().update_project, row.id, apply)
 
@@ -141,7 +144,7 @@ async def update_overview(
             last_setup_digest=digest,
         )
     )
-    result["configuration"] = {k: v for k, v in configuration.items() if k != "sourceText"}
+    result["configuration"] = {k: v for k, v in creator_configuration(configuration).items() if k != "sourceText"}
     details = {
         "requestId": context.request_id,
         "before": before,
@@ -161,7 +164,9 @@ async def update_overview(
 
 
 def visible_result(result: dict[str, Any], permissions: frozenset[str]):
-    configuration = {k: v for k, v in result.get("configuration", {}).items() if k != "sourceText"}
+    configuration = {
+        k: v for k, v in creator_configuration(result.get("configuration", {})).items() if k != "sourceText"
+    }
     if "billing.view" not in permissions:
         configuration.pop("budgetMinor", None)
     return {**result, "configuration": configuration}
@@ -287,7 +292,9 @@ async def transition(
         result = _project(
             await uow.projects.set_production_status(project_id, option["target"], expected_version=expected)
         )
-        result["configuration"] = {k: v for k, v in row.configuration.items() if k != "sourceText"}
+        result["configuration"] = {
+            k: v for k, v in creator_configuration(row.configuration).items() if k != "sourceText"
+        }
         details = {
             "requestId": context.request_id,
             "from": before,

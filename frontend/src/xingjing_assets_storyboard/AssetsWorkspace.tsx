@@ -357,7 +357,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const { t: handoff } = useProductionHandoffTranslation();
   const { t: generationText } = useAssetGenerationTranslation();
   const { t: extractionText } = useAssetExtractionTranslation();
-  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string; assetId?: string }>();
+  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string; assetId?: string; insufficient?: boolean }>();
   const [pendingRecovery, setPendingRecovery] = useState<{ key: string; operation?: PendingAssetSubmission }>();
   const [taskStorageUnavailable, setTaskStorageUnavailable] = useState(false);
   const [draftBlocked, setDraftBlocked] = useState(false), [draftReset, setDraftReset] = useState(0), [discardConfirm, setDiscardConfirm] = useState(false);
@@ -470,7 +470,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const protection = useDraftProtection(draftBlocked || busy || editingLocked);
   const projectId = scope.projectId ?? currentAsset?.projectId;
   const models = useAssetImageModels(api, scope.workspaceId, detailView && currentAsset && currentAsset.type !== "voice" ? projectId : undefined);
-  const generation = { models, activeAction, pending: Boolean(pendingSubmission), rejection: sourceError?.assetId && sourceError.assetId === currentAssetId ? sourceError.message : undefined };
+  const generation = { models, activeAction, pending: Boolean(pendingSubmission), canManageBilling: Boolean(context?.permissions.includes("billing.manage")), billingHref: sourceError?.assetId === currentAssetId && sourceError?.insufficient && context?.permissions.includes("billing.view") ? `/app/workspaces/${encodeURIComponent(scope.workspaceId)}/billing` : undefined, rejection: sourceError?.assetId && sourceError.assetId === currentAssetId ? sourceError.message : undefined };
   const assetRevision = currentAsset?.version;
   useEffect(() => {
     if (busy || !taskStorageKey || !projectId || !pendingSubmission || pendingSubmission.action === "adoptGenerationOutput" || !api.getAssetGenerationReceipt) return;
@@ -565,7 +565,9 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         && "submissionState" in cause.details && cause.details.submissionState === "rejected";
       const uncertain = !rejected && (!(cause instanceof AssetsStoryboardApiError) || cause.status === null || cause.status >= 500 || cause.status === 408);
       if (retained && storageKey && !uncertain) { clearPendingAssetSubmission(storageKey); setPendingRecovery({ key: storageKey }); }
-      if (rejected && retained) {
+      if (retained && cause instanceof AssetsStoryboardApiError && cause.code === "GENERATION_INSUFFICIENT_CREDITS") {
+        setSourceError({ message: generationText(context?.permissions.includes("billing.manage") ? "insufficient" : "askOwner"), assetId: target?.id, insufficient: true });
+      } else if (retained && !uncertain && (rejected || cause instanceof AssetsStoryboardApiError && /^(MODEL_|GENERATION_(NATIVE_|MODEL_|PROVIDER_))/.test(cause.code))) {
         models.recheck();
         setSourceError({ message: generationText("notSubmitted"), assetId: target?.id, requestId: errorRequestId(cause) });
       } else if (retained && uncertain) {

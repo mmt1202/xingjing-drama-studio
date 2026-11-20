@@ -11,7 +11,6 @@ export function ProjectSetupPreview({ name, value }: { name: string; value: Proj
     ...(["novel", "script"].includes(value.sourceKind) || value.rightsBasis !== "original" ? ["rightsWarning"] : []),
     ...(value.candidateCount > 3 ? ["candidateWarning"] : []),
     ...(value.subtitleLanguages.length > 1 ? ["languageWarning"] : []),
-    ...(!value.imageModelKey || !value.videoModelKey ? ["modelWarning"] : []),
   ];
   return <aside className="space-y-5 lg:sticky lg:top-5 lg:self-start">
     <section className="rounded-2xl border border-orange-300/25 bg-orange-300/[.04] p-5">
@@ -33,7 +32,7 @@ export function ProjectSetupPreview({ name, value }: { name: string; value: Proj
       </ul>
     </section>
     <section className="rounded-2xl border border-white/10 bg-[#12141b] p-5">
-      <h2 className="text-sm font-semibold">{t("deliverables")}</h2><ul className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-300">{["masters", "subtitles", "covers", "platforms", "modelRecords", "compliance"].map((key) => <li key={key} className="flex items-center gap-2"><FolderOpen size={14} className="shrink-0 text-orange-300/80" />{t(key)}</li>)}</ul>
+      <h2 className="text-sm font-semibold">{t("deliverables")}</h2><ul className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-300">{["masters", "subtitles", "covers", "platforms", "compliance"].map((key) => <li key={key} className="flex items-center gap-2"><FolderOpen size={14} className="shrink-0 text-orange-300/80" />{t(key)}</li>)}</ul>
       <p className="mt-4 text-xs leading-5 text-slate-500">{t("directoriesHelp")}</p>
     </section>
   </aside>;

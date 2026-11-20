@@ -92,11 +92,7 @@ export function ProjectSetupFields({ step, name, onName, value, patch, context, 
       <fieldset className="sm:col-span-2"><legend className="text-sm font-medium">{t("secondaryPlatforms")}</legend><div className="mt-3 flex flex-wrap gap-4">{(["douyin", "kuaishou", "wechat", "bilibili", "web"] as const).filter((platform) => platform !== value.primaryPlatform).map((platform) => <label key={platform} className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={value.secondaryPlatforms.includes(platform)} onChange={(event) => patch({ secondaryPlatforms: event.target.checked ? [...value.secondaryPlatforms, platform] : value.secondaryPlatforms.filter((item) => item !== platform) })} />{t(platform)}</label>)}</div></fieldset>
       {select("deliveryType", ["final", "proposal"])}{select("generationMode", ["storyboard", "reference_video"], t("immutable"))}
       {text("directorStyle", 200)}{text("visualStyle", 1000)}
-      {select("modelStrategy", ["balanced", "quality", "economy"])}{number("candidateCount", 1, 12)}
-      {(["image", "video"] as const).map((kind) => { const key = `${kind}ModelKey` as const; return <Field key={key} label={t(key)}><select className={setupInput} value={value[key]} aria-invalid={invalidFields.includes(key)} onChange={(event) => patch({ [key]: event.target.value })}>
-        <option value="">{t("automatic")}</option>{options?.models.filter((model) => model.mediaTypes.includes(kind)).map((model) => <option key={model.key} value={model.key}>{model.name}</option>)}
-        {value[key] && !options?.models.some((model) => model.key === value[key]) && <option value={value[key]}>{value[key]}</option>}
-      </select></Field>; })}
+      {number("candidateCount", 1, 12)}
       <fieldset><legend className="text-sm font-medium">{t("subtitleLanguages")}</legend><div className="mt-3 flex flex-wrap gap-4">{languages.map((language) => <label key={language} className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={value.subtitleLanguages.includes(language)} onChange={(event) => patch({ subtitleLanguages: event.target.checked ? [...value.subtitleLanguages, language] : value.subtitleLanguages.filter((item) => item !== language) })} />{t(language)}</label>)}</div></fieldset>
       {select("reviewLanguage", [...languages])}
     </div>}

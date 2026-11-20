@@ -375,7 +375,7 @@ class ModelControlRuntime:
 
         @router.get("/model-catalog", operation_id="list_model_catalog")
         async def catalog(request: Request):
-            context = await self._context(request, "generation.view")
+            context = await self._context(request, "admin.model.view")
             async with self._session() as session:
                 rows = list(
                     (
@@ -390,7 +390,7 @@ class ModelControlRuntime:
 
         @router.post("/model-routing/resolve", operation_id="resolve_model_route")
         async def resolve_route(request: Request):
-            context = await self._context(request, "generation.manage")
+            context = await self._context(request, "admin.model.manage")
             body = await _body(request)
             try:
                 decision = await cast(ModelRouteResolver, self.route_resolver()).resolve(

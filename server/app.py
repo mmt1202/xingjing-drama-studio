@@ -41,7 +41,7 @@ from lib.logging_config import attach_file_handler, migrate_legacy_log_dir, setu
 from lib.path_safety import try_safe_join
 from lib.project_migrations import cleanup_stale_backups, run_project_migrations
 from lib.source_loader.migration import migrate_project_source_encoding
-from server.auth import ensure_auth_password, get_current_user
+from server.auth import ensure_auth_password, get_current_user, require_model_operator
 from server.error_handlers import register_error_handlers
 from server.routers import (
     agent_chat,
@@ -905,14 +905,18 @@ app.include_router(
     tags=["助手会话"],
 )
 app.include_router(tasks.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["任务队列"])
-app.include_router(providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["供应商管理"])
+app.include_router(
+    providers.router, prefix="/api/v1", dependencies=[Depends(require_model_operator)], tags=["供应商管理"]
+)
 app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统配置"])
 app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
 app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])
 app.include_router(agent_chat.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 对话"])
-app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])
 app.include_router(
-    custom_providers.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["自定义供应商"]
+    agent_config.router, prefix="/api/v1", dependencies=[Depends(require_model_operator)], tags=["Agent 配置"]
+)
+app.include_router(
+    custom_providers.router, prefix="/api/v1", dependencies=[Depends(require_model_operator)], tags=["自定义供应商"]
 )
 app.include_router(
     cost_estimation.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["费用估算"]

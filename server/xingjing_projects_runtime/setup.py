@@ -15,6 +15,10 @@ from lib.project_manager import ProjectManager
 from server.xingjing_content.recognition import path_only
 
 
+def creator_configuration(configuration: Mapping[str, object]) -> dict[str, object]:
+    return {k: v for k, v in configuration.items() if k not in {"modelStrategy", "imageModelKey", "videoModelKey"}}
+
+
 class ProjectSetup(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid", strict=True)
 
@@ -64,7 +68,7 @@ class ProjectSetup(BaseModel):
         return self
 
     def payload(self) -> dict[str, object]:
-        return self.model_dump(by_alias=True)
+        return creator_configuration(self.model_dump(by_alias=True))
 
     @property
     def content_mode(self) -> Literal["drama", "narration", "ad"]:
@@ -99,7 +103,7 @@ def parse_setup(value: object, *, actor_id: str, draft: bool) -> ProjectSetup:
 
 
 def creation_digest(name: str, setup: ProjectSetup | None, draft: bool) -> str:
-    payload = {"name": name, "configuration": setup.payload() if setup else None, "draft": draft}
+    payload = {"name": name, "configuration": setup.model_dump(by_alias=True) if setup else None, "draft": draft}
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 

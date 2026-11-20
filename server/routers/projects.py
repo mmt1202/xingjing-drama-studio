@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 if TYPE_CHECKING:
     from server.services.jianying_draft_service import JianyingDraftService
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as FastAPIPath
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
@@ -42,7 +42,7 @@ from lib.project_manager import EmptySourceError, EpisodeScriptReboundError, Sou
 from lib.speech_rate import MAX_SPEECH_RATE_UPS, MIN_SPEECH_RATE_UPS, SPEECH_RATE_FIELD, is_valid_speech_rate
 from lib.status_calculator import StatusCalculator
 from lib.style_templates import is_known_template, resolve_template_prompt
-from server.auth import CurrentUser, create_download_token, verify_download_token
+from server.auth import CurrentUser, create_download_token, require_model_operator, verify_download_token
 from server.routers._reorder import full_permutation_error
 from server.routers._validators import validate_backend_value
 from server.services.project_archive import (
@@ -220,7 +220,7 @@ def _cleanup_temp_dir(dir_path: str) -> None:
     shutil.rmtree(dir_path, ignore_errors=True)
 
 
-@router.post("/projects/import")
+@router.post("/projects/import", dependencies=[Depends(require_model_operator)])
 async def import_project_archive(
     _t: Translator,
     file: UploadFile = File(...),
@@ -521,8 +521,12 @@ async def list_projects(_user: CurrentUser):
 async def create_project(
     req: CreateProjectRequest,
     _t: Translator,
+    request: Request,
+    current_user: CurrentUser,
 ):
     """创建新项目"""
+    if req.model_fields_set.intersection((*_PROJECT_BACKEND_FIELDS, "model_settings", "audio_backend")):
+        await require_model_operator(request, current_user)
     try:
 
         def _sync():
@@ -718,8 +722,12 @@ async def get_project(
 
 
 @router.patch("/projects/{name}")
-async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
+async def update_project(
+    name: str, req: UpdateProjectRequest, _t: Translator, request: Request, current_user: CurrentUser
+):
     """更新项目元数据"""
+    if req.model_fields_set.intersection((*_PROJECT_BACKEND_FIELDS, "model_settings", "audio_backend")):
+        await require_model_operator(request, current_user)
     try:
 
         def _sync():

@@ -1,3 +1,4 @@
+import { useSmartShotsTranslation } from "./smart-i18n";
 import { useCallback, useEffect, useState } from "react";
 
 import { AssetsStoryboardApiError, createAssetsStoryboardApi } from "./api";
@@ -63,7 +64,7 @@ const defaultApi = createAssetsStoryboardApi();
 const viewTitles: Record<StoryboardView, [string, string]> = {
   prompts: [
     "提示词中心",
-    "管理图片与视频提示词、负面词、变量和模型适配版本，并追踪镜头使用记录。",
+    "",
   ],
   list: [
     "分镜列表",
@@ -71,7 +72,7 @@ const viewTitles: Record<StoryboardView, [string, string]> = {
   ],
   batch: [
     "分镜批量编辑",
-    "一次版本变更批量修改景别、时长、资产绑定、模型策略与成本档位。",
+    "",
   ],
   quality: [
     "分镜质量检测",
@@ -268,8 +269,6 @@ function BatchEditor({
   const [cameraMove, setCameraMove] = useState("");
   const [dialogue, setDialogue] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [modelPolicy, setModelPolicy] = useState("");
-  const [costTier, setCostTier] = useState("");
   const [assetIds, setAssetIds] = useState<string[]>([]);
   const [assetSelectionChanged, setAssetSelectionChanged] = useState(false);
   const changes = {
@@ -278,8 +277,6 @@ function BatchEditor({
     cameraMove: cameraMove || undefined,
     dialogue: dialogue || undefined,
     prompt: prompt || undefined,
-    modelPolicy: modelPolicy || undefined,
-    costTier: costTier || undefined,
     assetReferences: assetSelectionChanged
       ? assets
           .filter(
@@ -351,22 +348,6 @@ function BatchEditor({
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               rows={2}
-              className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
-            />
-          </label>
-          <label className="text-xs text-[#B8BECC]">
-            模型策略
-            <input
-              value={modelPolicy}
-              onChange={(event) => setModelPolicy(event.target.value)}
-              className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
-            />
-          </label>
-          <label className="text-xs text-[#B8BECC]">
-            成本档位
-            <input
-              value={costTier}
-              onChange={(event) => setCostTier(event.target.value)}
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
             />
           </label>
@@ -1056,6 +1037,7 @@ function PromptView({
   readonly busy: boolean;
   readonly onSave: (shot: ShotItem, payload: Record<string, unknown>) => void;
 }) {
+  const { t: storyboardText } = useSmartShotsTranslation();
   const [templates, setTemplates] = useState<readonly PromptTemplateItem[]>();
   const [loadError, setLoadError] = useState("");
   const [shotId, setShotId] = useState(shots[0]?.id ?? "");
@@ -1068,9 +1050,7 @@ function PromptView({
   const [templateText, setTemplateText] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [variablesText, setVariablesText] = useState("");
-  const [adaptersText, setAdaptersText] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
-  const [adapter, setAdapter] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState(false);
   const refresh = useCallback(
@@ -1091,13 +1071,11 @@ function PromptView({
     setTemplateText(item.template);
     setNegativePrompt(item.negativePrompt);
     setVariablesText(item.variables.join(", "));
-    setAdaptersText(item.modelAdapterVersions.join(", "));
     setValues(
       Object.fromEntries(
         item.variables.map((key) => [key, shot?.promptVariables?.[key] ?? ""]),
       ),
     );
-    setAdapter(item.modelAdapterVersions[0] ?? "");
   };
   const input = (): PromptTemplateInput => ({
     name: name.trim(),
@@ -1108,10 +1086,7 @@ function PromptView({
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean),
-    modelAdapterVersions: adaptersText
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
+    modelAdapterVersions: selectedTemplate?.modelAdapterVersions ?? [],
   });
   const saveTemplate = async () => {
     setSavingTemplate(true);
@@ -1148,7 +1123,7 @@ function PromptView({
       setTemplateText("");
       setNegativePrompt("");
       setVariablesText("");
-      setAdaptersText("");
+
       await refresh();
     } catch (cause) {
       setLoadError(message(cause));
@@ -1163,7 +1138,7 @@ function PromptView({
           <div>
             <h2 className="font-semibold">提示词模板库</h2>
             <p className="mt-1 text-xs text-[#7E8494]">
-              模板、变量、负面词和模型适配版本均由服务端持久化并保留版本。
+              {storyboardText("templateHelp")}
             </p>
           </div>
           <button
@@ -1175,7 +1150,7 @@ function PromptView({
               setTemplateText("");
               setNegativePrompt("");
               setVariablesText("");
-              setAdaptersText("");
+
             }}
           >
             新建模板
@@ -1257,14 +1232,6 @@ function PromptView({
             <input
               value={variablesText}
               onChange={(event) => setVariablesText(event.target.value)}
-              className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
-            />
-          </label>
-          <label className="text-xs">
-            模型适配版本（逗号分隔）
-            <input
-              value={adaptersText}
-              onChange={(event) => setAdaptersText(event.target.value)}
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
             />
           </label>
@@ -1357,20 +1324,6 @@ function PromptView({
             />
           </label>
         ))}
-        {selectedTemplate?.modelAdapterVersions.length ? (
-          <label className="mt-3 block text-xs">
-            模型适配版本
-            <select
-              value={adapter}
-              onChange={(event) => setAdapter(event.target.value)}
-              className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
-            >
-              {selectedTemplate.modelAdapterVersions.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
         {shot && selectedTemplate ? (
           <button
             type="button"
@@ -1386,7 +1339,6 @@ function PromptView({
                 negativePrompt: selectedTemplate.negativePrompt,
                 templateId: selectedTemplate.id,
                 variables: values,
-                modelAdapterVersion: adapter || undefined,
               })
             }
           >
@@ -1444,6 +1396,7 @@ export function StoryboardWorkspace({
     useState<AssetsStoryboardApiError>();
   const [busy, setBusy] = useState(false);
   const { t: handoff } = useProductionHandoffTranslation();
+  const { t: storyboardText } = useSmartShotsTranslation();
   const protection = useDraftProtection(busy);
   const [batch, setBatch] = useState<BatchReceipt>();
   const [task, setTask] = useState<TaskReceipt>();
@@ -1677,7 +1630,7 @@ export function StoryboardWorkspace({
     <WorkspaceShell
       context={context}
       title={title[0]}
-      description={title[1]}
+      description={activeView === "prompts" ? storyboardText("promptHelp") : activeView === "batch" ? storyboardText("batchHelp") : title[1]}
       eyebrow="M05 · SHOT CONTINUITY"
       projectName={projectName ?? context.project?.name}
       actions={actions}

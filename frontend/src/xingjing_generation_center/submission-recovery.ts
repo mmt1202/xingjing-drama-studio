@@ -8,7 +8,6 @@ export interface SubmissionRecovery {
   prompt: string;
   inputs: readonly SelectedGenerationInput[];
   parameters: string;
-  modelChoice: string;
   budgetScope?: BudgetScope;
   operation?: SubmissionOperation;
   created?: string;
@@ -32,7 +31,6 @@ export function readSubmissionRecovery(key: string, capability: string, media: s
     const value: unknown = JSON.parse(raw);
     if (!record(value) || typeof value.prompt !== "string" || value.prompt.length > 12000
       || typeof value.parameters !== "string" || value.parameters.length > 32000
-      || typeof value.modelChoice !== "string" || value.modelChoice.length > 2000
       || !Array.isArray(value.inputs) || value.inputs.length > 12 || !value.inputs.every(input)
       || (value.created !== undefined && !identifier(value.created))) return undefined;
     if (value.budgetScope !== undefined && (!record(value.budgetScope)
@@ -43,14 +41,17 @@ export function readSubmissionRecovery(key: string, capability: string, media: s
         || typeof op.payload.prompt !== "string" || !op.payload.prompt.trim() || op.payload.prompt.length > 12000
         || !record(op.payload.parameters) || !Array.isArray(op.payload.input_asset_ids) || op.payload.input_asset_ids.length > 12
         || !op.payload.input_asset_ids.every(identifier) || (op.payload.input_asset_references !== undefined && !Array.isArray(op.payload.input_asset_references))) return undefined;
+      delete op.payload.requested_provider_id;
+      delete op.payload.requested_model_id;
     }
+    delete value.modelChoice;
     return value as unknown as SubmissionRecovery;
   } catch { return undefined; }
 }
 /** Persist request identity before submission; restoring never sends a request automatically. */
 export function rememberSubmission(key: string, value: SubmissionRecovery): boolean {
   try {
-    if (!value.operation && !value.created && !value.prompt && !value.inputs.length && value.parameters === "{}" && !value.modelChoice && !value.budgetScope) {
+    if (!value.operation && !value.created && !value.prompt && !value.inputs.length && value.parameters === "{}" && !value.budgetScope) {
       sessionStorage.removeItem(key);
     } else {
       const serialized = JSON.stringify(value);

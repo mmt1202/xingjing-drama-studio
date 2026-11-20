@@ -117,7 +117,8 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         }
         items = dependencies.prompt_repository.list(context.scope)
         return _data_response(
-            context.request_id, [item.to_dict(usage_count=usages.get(item.prompt_id, 0)) for item in items]
+            context.request_id,
+            [{**item.to_dict(usage_count=usages.get(item.prompt_id, 0)), "modelAdapterVersions": []} for item in items],
         )
 
     @result.post("/projects/{project_id}/prompt-templates")
@@ -135,9 +136,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             template=_required_text(body, "template"),
             negative_prompt=str(body.get("negativePrompt") or ""),
             variables=_optional_string_list(body.get("variables"), code="INVALID_PROMPT_VARIABLES"),
-            model_adapter_versions=_optional_string_list(
-                body.get("modelAdapterVersions"), code="INVALID_MODEL_ADAPTERS"
-            ),
+            model_adapter_versions=(),
             idempotency_key=request.headers.get("Idempotency-Key", ""),
             audit=AuditEvent(
                 context.tenant_id,
@@ -153,7 +152,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 {},
             ),
         )
-        return _data_response(context.request_id, template.to_dict(), replayed=replayed)
+        return _data_response(context.request_id, {**template.to_dict(), "modelAdapterVersions": []}, replayed=replayed)
 
     @result.put("/projects/{project_id}/prompt-templates/{prompt_id}")
     async def update_prompt_template(request: Request, project_id: str, prompt_id: str):
@@ -174,9 +173,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             template=_required_text(body, "template"),
             negative_prompt=str(body.get("negativePrompt") or ""),
             variables=_optional_string_list(body.get("variables"), code="INVALID_PROMPT_VARIABLES"),
-            model_adapter_versions=_optional_string_list(
-                body.get("modelAdapterVersions"), code="INVALID_MODEL_ADAPTERS"
-            ),
+            model_adapter_versions=current.model_adapter_versions,
             version=expected + 1,
             updated_at=datetime.now(UTC),
         )
@@ -199,7 +196,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 updated.to_dict(),
             ),
         )
-        return _data_response(context.request_id, stored.to_dict(), replayed=replayed)
+        return _data_response(context.request_id, {**stored.to_dict(), "modelAdapterVersions": []}, replayed=replayed)
 
     @result.delete("/projects/{project_id}/prompt-templates/{prompt_id}")
     async def archive_prompt_template(request: Request, project_id: str, prompt_id: str):
@@ -233,7 +230,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                 archived.to_dict(),
             ),
         )
-        return _data_response(context.request_id, stored.to_dict(), replayed=replayed)
+        return _data_response(context.request_id, {**stored.to_dict(), "modelAdapterVersions": []}, replayed=replayed)
 
     @result.get("/projects/{project_id}/storyboard-audit")
     async def query_storyboard_audit(request: Request, project_id: str):
@@ -448,14 +445,15 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             target_shot = next(item for item in storyboard.shots if item.shot_id == _required_text(body, "targetId"))
             if len({item.asset_id for item in target_shot.asset_references}) != len(target_shot.asset_references):
                 raise HttpContractError("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
+            prior = target_shot.generation_submission or {}
             prepared = dependencies.service.prepare_shot_generation(
                 context,
                 storyboard_id=storyboard.storyboard_id,
                 expected_version=expected,
                 shot_id=_required_text(body, "targetId"),
                 media_type=media_type,
-                provider_id=_optional_text(payload, "providerId"),
-                model_id=_optional_text(payload, "modelId"),
+                provider_id=cast(str | None, prior.get("provider_id")) if prior.get("state") == "pending" else None,
+                model_id=cast(str | None, prior.get("model_id")) if prior.get("state") == "pending" else None,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
             )
             shot = prepared.shot
@@ -489,8 +487,6 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                     GenerationAssetReference(asset_id=item.asset_id, asset_version_id=item.asset_version_id)
                     for item in shot.asset_references
                 ),
-                requested_provider_id=cast(str | None, submission["provider_id"]),
-                requested_model_id=cast(str | None, submission["model_id"]),
             )
             submission_key = cast(str, submission["idempotency_key"])
             task = await generation.repository.get_by_idempotency_scope(
@@ -661,12 +657,13 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             negative_prompt = str(payload.get("negativePrompt") or "")
             template_id = str(payload.get("templateId") or "") or None
             variables = _string_mapping(payload.get("variables"))
-            adapter_version = str(payload.get("modelAdapterVersion") or "") or None
+            adapter_version = None
             if template_id:
                 repository = dependencies.prompt_repository
                 template = None if repository is None else repository.get(context.scope, template_id)
                 if template is None or template.archived_at is not None:
                     raise HttpContractError("PROMPT_TEMPLATE_NOT_FOUND", status_code=404)
+                adapter_version = next(iter(template.model_adapter_versions), None)
                 prompt_text, negative_prompt = template.render(variables, adapter_version=adapter_version)
             result_value = dependencies.service.batch_edit(
                 context,
@@ -1115,15 +1112,17 @@ def _expected_version(request: Request, payload: Mapping[str, object]) -> int:
 
 
 def _batch_edits(payload: Mapping[str, object]) -> tuple[ShotEdit, ...]:
-    changes = _object(payload.get("changes"), code="CHANGES_REQUIRED")
+    changes = {
+        key: value
+        for key, value in _object(payload.get("changes"), code="CHANGES_REQUIRED").items()
+        if key not in {"modelPolicy", "costTier"}
+    }
     permitted = {
         "shotSize": "shot_size",
         "durationMs": "duration_ms",
         "dialogue": "dialogue",
         "cameraMove": "camera_movement",
         "prompt": "prompt",
-        "modelPolicy": "model_strategy",
-        "costTier": "cost_tier",
         "assetReferences": "asset_references",
     }
     unexpected = set(changes) - set(permitted)

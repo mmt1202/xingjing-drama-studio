@@ -65,9 +65,7 @@ export interface ProjectSetup {
   generationMode: "storyboard" | "reference_video";
   directorStyle: string;
   visualStyle: string;
-  modelStrategy: "balanced" | "quality" | "economy";
-  imageModelKey: string;
-  videoModelKey: string;
+
   candidateCount: number;
   subtitleLanguages: ProjectLanguage[];
   reviewLanguage: ProjectLanguage;

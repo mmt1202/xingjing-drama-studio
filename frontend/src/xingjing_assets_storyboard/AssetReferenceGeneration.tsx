@@ -24,7 +24,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
   generation: AssetImageControls;
   onGenerate: () => void; onAdopt: (generatedAssetId: string) => void;
 }) {
-  const { t } = useAssetGenerationTranslation();
+  const { t, i18n } = useAssetGenerationTranslation();
   const version = asset.versions.find((item) => item.id === asset.currentVersionId);
   const hasReference = assetHasReferenceImage(asset);
   const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
@@ -32,6 +32,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
   const blocked = busy || generation.pending || draftBlocked || !canManage || !ownerProject;
   const { models } = generation;
   const ready = models.supports("image_generation");
+  const offer = models.offer("image_generation");
   const projectId = asset.projectId ?? models.projectId;
   const source = hasReference && projectId && version?.generatedAssetId
     ? `/api/v1/generation-assets/${encodeURIComponent(version.generatedAssetId)}/content?projectId=${encodeURIComponent(projectId)}` : undefined;
@@ -44,15 +45,17 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
       <p className="mt-3 text-xs leading-6 text-slate-400">{!version ? t("sourceMissing") : hasReference ? t("sourceVersion", { number: version.versionNo }) : t("plainAsset")}</p>
       {!asset.description?.trim() ? <p className="mt-2 text-xs leading-6 text-slate-400">{t("noDescription")}</p> : null}
       {draftBlocked ? <p role="status" className="mt-3 text-xs text-amber-200">{t("savedFirst")}</p> : null}
-      {generation.rejection ? <p role="status" className="mt-3 text-sm text-amber-200">{generation.rejection}</p> : null}
+      {generation.rejection ? <p role="status" className="mt-3 text-sm text-amber-200">{generation.rejection} {generation.billingHref ? <a className="underline" href={generation.billingHref}>{t(generation.canManageBilling ? "topUpLink" : "balanceLink")}</a> : null}</p> : null}
       {ownerProject && !ready ? <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/5 p-3">
         <p role="status" className="text-sm leading-6 text-amber-100">{t(models.notice ?? "modelMissing")}</p>
         {models.notice === "checking" ? null : <div className="mt-2 flex flex-wrap items-center gap-3">
-          {models.canManageModels ? <a className={button} href={`/app/workspaces/${encodeURIComponent(models.workspaceId)}/admin/admin-models`} target="_blank" rel="noreferrer">{t("modelSetup")}</a>
-            : !models.notice ? <span className="text-xs text-slate-300">{t("modelAdmin")}</span> : null}
           <button type="button" className={button} onClick={models.recheck}>{t("checkModels")}</button>
         </div>}
       </div> : null}
+      {ready && offer?.currency && offer.estimatedMinor != null ? <p className="mt-3 text-sm text-slate-300">
+        {t("estimate", { amount: new Intl.NumberFormat(i18n.resolvedLanguage, { style: "currency", currency: offer.currency }).format(offer.estimatedMinor / 100) })}
+        {offer.successfulOutputMinor != null ? ` ${t("charge", { amount: new Intl.NumberFormat(i18n.resolvedLanguage, { style: "currency", currency: offer.currency }).format(offer.successfulOutputMinor / 100) })}` : null}
+      </p> : null}
       <button type="button" className={`${primaryButton} mt-4 disabled:cursor-not-allowed disabled:opacity-50`} disabled={blocked || working || !version || !ready} onClick={onGenerate}>{t(generation.activeAction === "generateReferenceImage" ? "submitting" : hasReference ? "regenerate" : "generate")}</button>
     </>}
     {task ? <>

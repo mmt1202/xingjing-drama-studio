@@ -50,6 +50,7 @@ def _scope_digest(
             context.tenant_id,
             context.workspace_id,
             context.actor_id,
+            "creator-service-categories-v1",
             sorted(context.permissions),
             sorted(ids),
             permissions,

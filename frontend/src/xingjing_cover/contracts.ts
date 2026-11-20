@@ -1,4 +1,5 @@
-import type { GenerationModelAvailability, GenerationTask } from "@/xingjing_generation_center/contracts";
+import type { GenerationService } from "@/xingjing_generation_center/services";
+import type { GenerationTask } from "@/xingjing_generation_center/contracts";
 
 export interface CoverScope { workspaceId: string; projectId: string; actorId: string }
 export interface CoverPermissions { canView: boolean; canManage: boolean; canGenerate: boolean; canApply: boolean }
@@ -16,11 +17,11 @@ export interface CoverVariant {
 }
 export interface CoverCatalog {
   scope: CoverScope; permissions: CoverPermissions; targets: string[]; aspectRatios: string[];
-  finalVideos: CoverFinal[]; generationAvailability: GenerationModelAvailability | null;
+  finalVideos: CoverFinal[]; generationAvailability: GenerationService | null;
 }
 export interface CoverDetail {
   scope: CoverScope; permissions: CoverPermissions; plan: CoverPlan; candidates: CoverCandidate[];
-  variants: CoverVariant[]; generationTasks: (GenerationTask | { task_id: string; status: "unavailable"; resolved_model_id?: never; request?: never })[];
+  variants: CoverVariant[]; generationTasks: (GenerationTask | { task_id: string; status: "unavailable"; request?: never })[];
   history?: { id: string; version: number; action: string; actorId: string; createdAt: string }[];
 }
 export interface CoverPage { items: CoverPlan[]; total: number; offset: number; limit: number }
