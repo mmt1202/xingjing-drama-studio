@@ -19,6 +19,75 @@ from server.xingjing_identity_context import TrustedWorkspaceContext
 from .episode_production import prepare_production_batch, production_catalog
 
 
+async def _script_preparation(session: AsyncSession, workspace_id: str, script: dict[str, Any]) -> dict[str, Any]:
+    script_id = script["id"].rpartition("@")[0]
+    script_state = "stale"
+    scene_count = 0
+    candidate_number = confirmation_id = None
+    version = await session.get(ScriptVersionRow, (workspace_id, script_id, script["version"]))
+    if version:
+        parsed = parse_script(
+            version.source_content, version_number=script["version"], change_summary="storyboard.inputs"
+        )
+        scene_count = len(parsed.scenes)
+        script_state = "ready" if scene_count and not parsed.validation_errors else "invalid"
+    candidate_row = await session.scalar(
+        select(DirectorVersionRow)
+        .where(
+            DirectorVersionRow.workspace_id == workspace_id,
+            DirectorVersionRow.script_id == script_id,
+        )
+        .order_by(DirectorVersionRow.number.desc())
+        .limit(1)
+    )
+    director_state = "missing"
+    if candidate_row:
+        candidate = director_version_from_dict(candidate_row.payload)
+        receipt = await session.scalar(
+            select(DirectorConfirmationRow)
+            .where(
+                DirectorConfirmationRow.workspace_id == workspace_id,
+                DirectorConfirmationRow.script_id == script_id,
+                DirectorConfirmationRow.candidate_number == candidate.number,
+            )
+            .order_by(DirectorConfirmationRow.sequence.desc())
+            .limit(1)
+        )
+        if candidate.script_version_id == script["id"] and candidate.script_content_digest == script["digest"]:
+            candidate_number = candidate.number
+            director_state = "unconfirmed"
+            if receipt and director_confirmation_from_dict(receipt.payload).matches(
+                candidate, script["id"], script["digest"]
+            ):
+                confirmation_id = receipt.confirmation_id
+                director_state = "ready"
+    return {
+        "scriptState": script_state,
+        "directorState": director_state,
+        "sceneCount": scene_count,
+        "candidateNumber": candidate_number,
+        "confirmationId": confirmation_id,
+    }
+
+
+async def check_batch_storyboard_inputs(
+    session: AsyncSession, workspace_id: str, commands: list[dict[str, Any]], catalog: dict[str, Any]
+) -> None:
+    """Check only the eligible episode scripts, using the same preparation rules as the shot planner."""
+    scripts = {script["id"]: script for script in catalog["scripts"]}
+    for command in commands:
+        if command["issue"] or command["existingId"]:
+            continue
+        script = scripts[command["payload"]["payload"]["scriptVersionId"]]
+        preparation = await _script_preparation(session, workspace_id, script)
+        if preparation["scriptState"] != "ready":
+            command["issue"] = "FROZEN_SCRIPT_INVALID"
+        elif preparation["directorState"] != "ready":
+            command["issue"] = "DIRECTOR_CONFIRMATION_REQUIRED"
+        else:
+            command["confirmationId"] = preparation["confirmationId"]
+
+
 async def storyboard_inputs(
     session: AsyncSession,
     context: TrustedWorkspaceContext,
@@ -55,43 +124,12 @@ async def storyboard_inputs(
     scene_count = 0
     confirmation_id = None
     if script:
-        version = await session.get(ScriptVersionRow, (context.workspace_id, script_id, script["version"]))
-        if version:
-            parsed = parse_script(
-                version.source_content, version_number=script["version"], change_summary="storyboard.inputs"
-            )
-            scene_count = len(parsed.scenes)
-            script_state = "ready" if scene_count and not parsed.validation_errors else "invalid"
-        candidate_row = await session.scalar(
-            select(DirectorVersionRow)
-            .where(
-                DirectorVersionRow.workspace_id == context.workspace_id,
-                DirectorVersionRow.script_id == script_id,
-            )
-            .order_by(DirectorVersionRow.number.desc())
-            .limit(1)
-        )
-        director_state = "missing"
-        if candidate_row:
-            candidate = director_version_from_dict(candidate_row.payload)
-            receipt = await session.scalar(
-                select(DirectorConfirmationRow)
-                .where(
-                    DirectorConfirmationRow.workspace_id == context.workspace_id,
-                    DirectorConfirmationRow.script_id == script_id,
-                    DirectorConfirmationRow.candidate_number == candidate.number,
-                )
-                .order_by(DirectorConfirmationRow.sequence.desc())
-                .limit(1)
-            )
-            if candidate.script_version_id == script["id"] and candidate.script_content_digest == script["digest"]:
-                candidate_number = candidate.number
-                director_state = "unconfirmed"
-                if receipt and director_confirmation_from_dict(receipt.payload).matches(
-                    candidate, script["id"], script["digest"]
-                ):
-                    confirmation_id = receipt.confirmation_id
-                    director_state = "ready"
+        preparation = await _script_preparation(session, context.workspace_id, script)
+        script_state = preparation["scriptState"]
+        scene_count = preparation["sceneCount"]
+        director_state = preparation["directorState"]
+        candidate_number = preparation["candidateNumber"]
+        confirmation_id = preparation["confirmationId"]
     matching = [
         item
         for item in catalog["snapshots"]

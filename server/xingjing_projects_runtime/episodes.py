@@ -28,7 +28,7 @@ from .episode_production import (
     validate_production_edits,
 )
 from .episode_sources import create_working_script, enrich_working_scripts, source_context, sources
-from .storyboard_inputs import storyboard_inputs
+from .storyboard_inputs import check_batch_storyboard_inputs, storyboard_inputs
 
 if TYPE_CHECKING:
     from .runtime import ProjectsRuntime
@@ -210,7 +210,11 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
             raise EpisodeEditError("VERSION_CONFLICT", 409)
         async with runtime._require_sessions()() as session:
             catalog = await production_catalog(session, context, project_id)
-        data = prepare_production_batch(context, project_id, current_snapshot, catalog, numbers, action, target.strip())
+            data = prepare_production_batch(
+                context, project_id, current_snapshot, catalog, numbers, action, target.strip()
+            )
+            if action == "storyboards":
+                await check_batch_storyboard_inputs(session, context.workspace_id, data, catalog)
         return {"data": data, "meta": {"requestId": context.request_id}}
 
     @router.put("/projects/{project_id}/episodes")

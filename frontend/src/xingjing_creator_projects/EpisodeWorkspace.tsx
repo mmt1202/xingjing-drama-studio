@@ -9,11 +9,12 @@ import { EPISODE_PAGE_SIZE, EpisodePagination, useEpisodeListPage } from "./Epis
 import { EpisodeDetails, episodeButton as button, episodeInput as input } from "./EpisodeDetails";
 import { useEpisodeProductionTranslation } from "./episode-production-i18n";
 import { EpisodeProductionPanel } from "./EpisodeProductionPanel";
+import { EpisodeBatchActions } from "./EpisodeBatchActions";
+import { useEpisodeWorkflowTranslation } from "./episode-workflow-i18n";
 import { SourcePlanPanel } from "@/xingjing_source_planning/SourcePlanPanel";
-import { EpisodeWorkingScriptPanel } from "./EpisodeWorkingScriptPanel";
 import { useEpisodeHandoffTranslation } from "./episode-handoff-i18n";
 import { useBudgetTranslation } from "@/xingjing_budget/i18n";
-import { useProjectNavigationBlocker } from "./ProjectFlowShell";
+import { useOptionalProjectFlow, useProjectNavigationBlocker } from "./ProjectFlowShell";
 
 interface Props { api: EpisodesApi; creatorApi: CreatorProjectsPort; projectId: string; initialEpisodeId?: number; selectedScriptId?: string; onCommitted?: () => void; mode: "editor" | "library"; onNavigate: (target: string) => void }
 export function EpisodeWorkspace(props: Props) {
@@ -38,15 +39,22 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   const { t } = useEpisodesTranslation();
   const { t: handoff } = useEpisodeHandoffTranslation();
   const { t: budgetText } = useBudgetTranslation();
+  const { t: workflow } = useEpisodeWorkflowTranslation();
+  const projectFlow = useOptionalProjectFlow();
   const [activatePlans, setActivatePlans] = useState(false);
   const [data, setData] = useState<EpisodesSnapshot>();
   const [draft, setDraft] = useState<Episode[]>([]);
-  const [active, setActive] = useState<number>();
+  const routeSelection = JSON.stringify([initialEpisodeId, selectedScriptId]);
+  const [localSelection, setLocalSelection] = useState<{ route: string; number: number }>();
+  const active = localSelection?.route === routeSelection ? localSelection.number : initialEpisodeId ?? (selectedScriptId ? draft.find(item => item.workingScript?.scriptId === selectedScriptId)?.episode : undefined);
   const [selected, setSelected] = useState<number[]>([]);
   const [dirty, setDirty] = useState(false);
   const [workspaceBusy, setBusy] = useState(true);
   const { t: productionText } = useEpisodeProductionTranslation();
-  const [productionCatalog, setProductionCatalog] = useState<ProductionCatalog>();
+  const [catalogRead, setCatalogRead] = useState<{ revision: string; attempt: number; catalog?: ProductionCatalog; failed?: boolean }>();
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const latestRead = catalogRead?.revision === data?.revision && catalogRead?.attempt === catalogAttempt ? catalogRead : undefined;
+  const productionCatalog = latestRead?.catalog;
   const [productionBusy, setProductionBusy] = useState(false);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planningBlocked, setPlanningBlocked] = useState(false);
@@ -65,6 +73,9 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   const saving = useRef(false);
   const dragging = useRef<number | undefined>(undefined);
   const tableStart = useRef<HTMLTableElement>(null);
+  const guide = useRef<HTMLDivElement>(null);
+  const shouldFocusGuide = useRef(false);
+  const lastGuidedEpisode = useRef<number | undefined>(undefined);
   const readSequence = useRef(0);
   const readSource = useCallback((sourceId: string, signal: AbortSignal) => api.source(projectId, sourceId, signal), [api, projectId]);
 
@@ -77,15 +88,25 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
       const result = await api.list(projectId);
       if (!mounted.current || sequence !== readSequence.current) return;
       setError(undefined); setData(result); setDraft(result.items); draftRef.current = result.items; setDirty(false); setActivatePlans(false);
-      const remembered = Number(sessionStorage.getItem(`${storagePrefix}:active`));
-      const requestedEpisode = initialEpisodeId ?? (selectedScriptId ? result.items.find(item => item.workingScript?.scriptId === selectedScriptId)?.episode : remembered);
-      setActive(result.items.find(item => item.episode === requestedEpisode)?.episode);
       setSelected(previous => previous.filter(number => result.items.some(item => item.episode === number)));
       setChecking(false); setActivatePlans(false);
     } catch (reason) { if (mounted.current && sequence === readSequence.current) setError(reason as Error); }
     finally { if (mounted.current && sequence === readSequence.current) setBusy(false); }
-  }, [api, projectId, initialEpisodeId, selectedScriptId, storagePrefix]);
+  }, [api, projectId]);
   useEffect(() => { mounted.current = true; const timer = window.setTimeout(() => void load(), 0); return () => { mounted.current = false; window.clearTimeout(timer); readSequence.current += 1; }; }, [load]);
+  const revision = data?.revision;
+  useEffect(() => {
+    if (!revision) return;
+    let reading = true;
+    void api.production(projectId).then(catalog => {
+      if (reading) setCatalogRead({ revision, attempt: catalogAttempt, catalog });
+    }).catch(() => { if (reading) setCatalogRead({ revision, attempt: catalogAttempt, failed: true }); });
+    return () => { reading = false; };
+  }, [api, projectId, revision, catalogAttempt]);
+  function refreshProduction() {
+    if (!dirty && !saving.current) void load();
+    setCatalogAttempt(attempt => attempt + 1);
+  }
   useEffect(() => {
     if (!dirty && !busy && !planningBlocked) return;
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); };
@@ -124,12 +145,14 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   }
   function inspect(number: number) {
     if (busy) return;
-    setActive(number); sessionStorage.setItem(`${storagePrefix}:active`, String(number));
+    if (number === active) { guide.current?.focus({ preventScroll: true }); guide.current?.scrollIntoView({ block: "start" }); return; }
+    shouldFocusGuide.current = true;
     if (!dirty && !planningBlocked && draft.some((item) => item.episode === number)) {
       const item = draft.find((entry) => entry.episode === number);
       const query = new URLSearchParams({ episodeId: String(number), ...(item?.workingScript ? { scriptId: item.workingScript.scriptId } : {}) });
+      setLocalSelection(undefined);
       onNavigate(`${mode === "editor" ? "episode-split-editor" : "episodes"}?${query.toString()}`);
-    }
+    } else setLocalSelection({ route: routeSelection, number });
   }
   function go(target: string) {
     if (dirty || busy || planningBlocked) return;
@@ -181,50 +204,81 @@ function Workspace({ api, projectId, initialEpisodeId, selectedScriptId, onCommi
   const { items: visible, setPage } = episodePage;
   const current = draft.find((item) => item.episode === active);
   useEffect(() => {
-    if (dirty || busy || planningBlocked || !current || current.episode === initialEpisodeId || !data?.items.some((item) => item.episode === current.episode)) return;
+    if (!current || !guide.current) return;
+    const enteredEpisode = mode === "library" && current.episode === initialEpisodeId && current.episode !== lastGuidedEpisode.current;
+    if (!shouldFocusGuide.current && !enteredEpisode) return;
+    shouldFocusGuide.current = false;
+    lastGuidedEpisode.current = current.episode;
+    guide.current.focus({ preventScroll: true });
+    guide.current.scrollIntoView({ block: "center" });
+  }, [current, localSelection, initialEpisodeId, mode]);
+  useEffect(() => {
+    if (localSelection?.route !== routeSelection || dirty || busy || planningBlocked || !current || current.episode === initialEpisodeId || !data?.items.some((item) => item.episode === current.episode)) return;
     const query = new URLSearchParams({ episodeId: String(current.episode), ...(current.workingScript ? { scriptId: current.workingScript.scriptId } : {}) });
-    onNavigate(`${mode === "editor" ? "episode-split-editor" : "episodes"}?${query.toString()}`);
-  }, [dirty, busy, planningBlocked, current, initialEpisodeId, data, onNavigate, mode]);
+    const timer = window.setTimeout(() => {
+      setLocalSelection(undefined);
+      onNavigate(`${mode === "editor" ? "episode-split-editor" : "episodes"}?${query.toString()}`);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [localSelection, routeSelection, dirty, busy, planningBlocked, current, initialEpisodeId, data, onNavigate, mode]);
   const canAdd = canManage && !planningBlocked && !busy && draft.length < 500 && !(data?.contentMode === "ad" && draft.length > 0);
+  const visibleCatalog = productionItems ? productionCatalog : undefined;
+  const frozenIds = new Set(visibleCatalog?.scripts.map(script => script.id));
+  const episodeIds = new Set(draft.map(item => String(item.episode)));
+  const summary = [
+    ["total", draft.length],
+    ["finalScripts", visibleCatalog?.permissions.includes("script.view") ? draft.filter(item => Boolean(item.workingScript?.lockedVersionNumber) || frozenIds.has(item.production?.scriptVersionId ?? "")).length : null],
+    ["plannedShots", visibleCatalog?.permissions.includes("shot.view") ? visibleCatalog.items.filter(item => item.boards.some(board => board.shots > 0)).length : null],
+    ["rendered", visibleCatalog?.permissions.includes("final.view") ? new Set(visibleCatalog.finals.filter(film => episodeIds.has(film.episodeId)).map(film => film.episodeId)).size : null],
+  ] as const;
   const invalid = data && !validItems(draft, data.sources, data.items);
   const errorCode = error instanceof CreatorApiError ? error.code : "";
   const errorMessage = errorCode.startsWith("EPISODE_") ? handoff(errorCode, { defaultValue: t(errorCode, { defaultValue: error?.message ?? t("error") }) }) : errorCode === "VERSION_CONFLICT" || errorCode === "IDEMPOTENCY_CONFLICT" ? t("conflict") : error?.message ?? t("error");
-  const statusLabel = (value: string) => value === "completed" ? t("completedStatus") : value === "scripted" ? t("scriptedStatus") : value === "in_production" ? t("in_production") : value === "draft" ? t("draft") : productionText(value);
+  const statusLabel = (value: string) => {
+    if (value === "script_frozen") return workflow("finalScripts");
+    if (value === "completed" || value === "scripted") return t(`${value}Status`);
+    if (value === "in_production" || value === "draft") return t(value);
+    return productionText(value);
+  };
   const issuesFor = (item: Episode) => [...(item.hook.trim() ? [] : ["hook_missing"]), ...(item.issues.includes("source_restricted") ? ["source_restricted"] : [...(item.sourceRange ? [] : ["source_missing"]), ...(item.issues.includes("source_changed") ? ["source_changed"] : []), ...(item.scriptStatus === "generated" || item.production?.scriptVersionId ? [] : ["script_missing"])])];
 
   return <div className="space-y-5">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-lg font-semibold">{data?.projectName}</p><p className="mt-1 text-sm text-slate-400">{t("intro")}</p></div><div className="flex flex-wrap items-center gap-2"><button className={button} onClick={() => go("control")}>{t("control")}</button><button className={button} onClick={() => go(mode === "editor" ? "episodes" : "episode-split-editor")}>{t(mode === "editor" ? "library" : "editor")}</button><span role="status" className={`px-2 text-xs ${error || invalid ? "text-amber-300" : dirty || busy ? "text-slate-400" : "text-emerald-300"}`}>{busy ? t("saving") : dirty ? t("unsaved") : data ? t("saved") : t("loading")}</span></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-lg font-semibold">{data?.projectName}</p><p className="mt-1 text-sm text-slate-400">{workflow("overviewHelp")}</p></div><div className="flex flex-wrap items-center gap-2"><button className={button} onClick={() => go("control")}>{t("control")}</button><button className={button} onClick={() => go(mode === "editor" ? "episodes" : "episode-split-editor")}>{t(mode === "editor" ? "library" : "editor")}</button><span role="status" className={`px-2 text-xs ${error || invalid ? "text-amber-300" : dirty || busy ? "text-slate-400" : "text-emerald-300"}`}>{workspaceBusy ? t(dirty ? "saving" : "loading") : dirty ? t("unsaved") : data ? t("saved") : t("loading")}</span></div></div>
     {!canManage && <p className="text-sm text-amber-200">{t("readonly")}</p>}
     {canManageBudget && plannedBudgets ? <label className="flex items-center gap-3 rounded-xl border border-amber-400/20 p-3 text-sm text-amber-100"><input type="checkbox" checked={activatePlans} disabled={busy} onChange={(event) => { setActivatePlans(event.target.checked); setDirty(true); }} />{budgetText("activatePlans")}</label> : null}
     {budgetDirty ? <p role="status" className="text-xs text-amber-200">{budgetText("explicitSave")}</p> : null}
     {error && <div role="alert" className="rounded-xl border border-amber-700/60 bg-amber-950/30 p-4 text-sm text-amber-100"><p>{errorMessage}</p>{error instanceof CreatorApiError && <p className="mt-2 font-mono text-xs">{error.code}{error.requestId ? ` · ${error.requestId}` : ""}</p>}<div className="mt-3 flex gap-2">{data && <button className={button} onClick={downloadDraft}>{t("downloadDraft")}</button>}<button disabled={busy} className={button} onClick={() => { if (!dirty || window.confirm(t("discard"))) void load(); }}>{t("reload")}</button>{data && !(error instanceof CreatorApiError && error.status === 409 && !budgetProblem(error)) && <button className={button} disabled={busy || !!invalid} onClick={() => void save()}>{t("retry")}</button>}</div></div>}
     {!data && !error && <p className="p-8 text-center text-slate-400">{t("loading")}</p>}
     {data && <>
-      <div className="grid grid-cols-2 divide-x divide-[#2A2E3A] rounded-xl border border-[#2A2E3A] bg-[#12141B] py-4 md:grid-cols-4">{[["total", draft.length], ["scripted", draft.filter((e) => e.scriptStatus === "generated" || e.production?.scriptVersionId).length], ["inProduction", draft.filter((e) => ["in_production", "storyboard_ready"].includes(stateFor(e))).length], ["completed", draft.filter((e) => e.status === "completed" || e.production?.finalVideoVersionId).length]].map(([label, value]) => <div key={label} className="px-5"><p className="text-xs text-slate-400">{t(String(label))}</p><p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p></div>)}</div>
+      <div className="grid grid-cols-2 divide-x divide-[#2A2E3A] rounded-xl border border-[#2A2E3A] bg-[#12141B] py-4 md:grid-cols-4">{summary.map(([label, value]) => <div key={label} className="px-5"><p className="text-xs text-slate-400">{workflow(label)}</p><p className="mt-1 text-2xl font-semibold tabular-nums">{value ?? "—"}</p></div>)}</div>
       {mode === "editor" && <SourcePlanPanel key={selectedScriptId ?? ""} workspaceId={workspaceId} actorId={actorId} projectId={projectId} episodes={data} initialSource={source}
         blocked={dirty || workspaceBusy || productionBusy} canManage={canManage && data.permissions?.canCreateWorkingScript === true}
         onBusy={setPlanningBusy} onBlocked={setPlanningBlocked} onRefresh={load} onNavigate={go} />}
+      {initialEpisodeId !== undefined && !draft.some(item => item.episode === initialEpisodeId) && <p role="alert" className="text-sm text-amber-200">{handoff("selectedUnavailable")}</p>}
+      <div ref={guide} tabIndex={-1} className="scroll-mt-4 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-violet-300">
+        <EpisodeProductionPanel key={active ?? "none"} api={api} projectId={projectId} data={data} items={draft} current={current} catalog={productionCatalog}
+          disabled={dirty || busy || planningBlocked} dirty={dirty} loadFailed={Boolean(latestRead?.failed)} canCreate={Boolean(canManage && data.permissions?.canCreateWorkingScript)}
+          onBusy={setProductionBusy} onAccepted={acceptedWorking} onRefresh={refreshProduction} onNavigate={go}
+          update={production => edit(draft.map(item => item.episode === active ? { ...item, production } : item))}
+          plan={current && <EpisodeDetails readSource={readSource} canReadSources={Boolean(data.permissions?.canReadSources)} canManageBudget={canManageBudget} episode={current} sources={data.sources} disabled={!canManage || productionBusy || planningBlocked} update={patch => edit(draft.map(item => item.episode === active ? { ...item, ...patch } : item))} />} />
+      </div>
       <div className="flex flex-wrap items-center gap-2"><input aria-label={t("search")} placeholder={t("search")} className={`${input} !mt-0 !w-auto min-w-60 flex-1`} value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:search`, e.target.value); }} /><select aria-label={t("all")} className={`${input} !mt-0 !w-auto`} value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); sessionStorage.setItem(`${storagePrefix}:status`, e.target.value); }}><option value="">{t("all")}</option>{["draft", "scripted", "in_production", "completed", "script_frozen", "storyboard_ready", "final_ready", "pending_review", "review_blocked", "package_ready"].map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</select><button className={button} disabled={!canAdd} onClick={() => add()}><Plus size={15} className="mr-1 inline" />{t("add")}</button><button className={button} title={t("copyHelp")} disabled={!canAdd || draft.length === 0} onClick={() => add(true)}>{t("copy")}</button><button className={button} disabled={!canManage || !dirty || busy || !!planningBlocked || !!invalid || (error instanceof CreatorApiError && error.status === 409 && !budgetProblem(error))} onClick={() => void save()}>{budgetDirty ? budgetText("saveLimits") : t("save")}</button></div>
       {invalid && <p role="status" className="text-sm text-amber-300">{t("invalid")}</p>}
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0 overflow-clip rounded-xl border border-[#2A2E3A] bg-[#12141B]">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2A2E3A] p-4"><span className="text-xs text-slate-400">{t("selected", { count: selected.length })}</span><div className="flex gap-2"><button className={button} disabled={!selected.length || dirty || busy} onClick={() => setChecking(true)}>{t("health")}</button><button className={button} disabled={costBusy || dirty} onClick={() => void readCosts()}><RefreshCw size={14} className={`mr-1 inline ${costBusy ? "animate-spin" : ""}`} />{t("refreshCosts")}</button></div></div>
-          <div className="overflow-x-auto"><table ref={tableStart} className="w-full scroll-mt-3 text-left text-sm"><thead className="border-b border-[#2A2E3A] text-xs text-slate-400"><tr><th className="p-3"><input type="checkbox" aria-label={t("selectAll")} checked={visible.length > 0 && visible.every((item) => selected.includes(item.episode))} onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...visible.map((item) => item.episode)])] : selected.filter((id) => !visible.some((item) => item.episode === id)))} /></th><th className="p-3">{t("order")}</th><th className="min-w-48 p-3">{t("title")}</th><th className="p-3">{t("all")}</th><th className="p-3">{t("progress")}</th><th className="min-w-36 p-3">{t("costs")}</th></tr></thead><tbody>{visible.map((item) => {
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2A2E3A] p-4"><div><h2 className="font-semibold">{workflow("list")}</h2><p className="mt-1 text-xs text-slate-400">{workflow("selectHint")}</p></div><div className="flex gap-2">{selected.length > 0 && <button className={button} disabled={dirty || busy} onClick={() => setChecking(value => !value)}>{t("health")}</button>}<button className={button} disabled={costBusy || dirty} onClick={() => void readCosts()}><RefreshCw size={14} className={`mr-1 inline ${costBusy ? "animate-spin" : ""}`} />{t("refreshCosts")}</button></div></div>
+          {selected.length > 0 && <EpisodeBatchActions api={api} projectId={projectId} revision={data.revision} selected={selected} items={draft} catalog={productionCatalog}
+            disabled={dirty || busy || planningBlocked || !productionItems} storagePrefix={storagePrefix} defaultTarget={projectFlow?.data.project.targetPlatform ?? ""}
+            onBusy={setProductionBusy} onRefresh={refreshProduction} onInspect={inspect} onClear={() => { setSelected([]); setChecking(false); }} />}
+          {checking && selected.length > 0 && <section className="border-b border-white/10 p-4"><h3 className="font-semibold">{t("healthTitle")}</h3><p className="mt-2 text-xs text-slate-400">{t("healthHelp")}</p><ul className="mt-3 max-h-64 space-y-2 overflow-y-auto">{draft.filter(item => selected.includes(item.episode)).map(item => <li key={item.episode} className="flex flex-wrap gap-3 text-sm"><strong>{item.episode} · {item.title}</strong><span className={issuesFor(item).length ? "text-amber-300" : "text-emerald-300"}>{issuesFor(item).map(issue => t(issue)).join(" · ") || t("healthy")}</span></li>)}</ul></section>}
+          <div className="overflow-x-auto"><table ref={tableStart} className="w-full scroll-mt-3 text-left text-sm"><thead className="border-b border-[#2A2E3A] text-xs text-slate-400"><tr><th className="p-3"><input type="checkbox" disabled={productionBusy} aria-label={t("selectAll")} checked={visible.length > 0 && visible.every((item) => selected.includes(item.episode))} onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...visible.map((item) => item.episode)])] : selected.filter((id) => !visible.some((item) => item.episode === id)))} /></th><th className="p-3">{t("order")}</th><th className="min-w-48 p-3">{t("title")}</th><th className="p-3">{workflow("status")}</th><th className="p-3">{t("progress")}</th><th className="min-w-36 p-3">{t("costs")}</th></tr></thead><tbody>{visible.map((item) => {
             const position = draft.findIndex((candidate) => candidate.episode === item.episode);
             const cost = costs?.episodes.find((candidate) => candidate.episode === item.episode);
-            return <tr key={item.episode} className={`border-b border-[#252936] ${active === item.episode ? "bg-[#FF6B4A]/8" : "hover:bg-white/3"}`} onDragOver={(e) => { if (canManage) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); if (dragging.current !== undefined) move(draft.findIndex((entry) => entry.episode === dragging.current), position); dragging.current = undefined; }}><td className="p-3"><input type="checkbox" aria-label={t("select", { number: item.episode })} checked={selected.includes(item.episode)} onChange={(e) => setSelected(e.target.checked ? [...selected, item.episode] : selected.filter((number) => number !== item.episode))} /></td><td className="p-3"><div className="flex items-center gap-1"><button draggable={canManage && !planningBlocked} aria-label={t("drag")} className="cursor-grab text-slate-500" disabled={!canManage || !!planningBlocked} onDragStart={(event) => { event.dataTransfer.setData("text/plain", String(item.episode)); event.dataTransfer.effectAllowed = "move"; dragging.current = item.episode; }} onDragEnd={() => { dragging.current = undefined; }}><GripVertical size={16} /></button><span className="w-5 font-mono tabular-nums">{position + 1}</span><div className="flex flex-col"><button aria-label={`${t("up")} ${item.episode}`} disabled={!canManage || !!planningBlocked || position === 0} className="p-1 disabled:opacity-20" onClick={() => move(position, position - 1)}><ArrowUp size={12} /></button><button aria-label={`${t("down")} ${item.episode}`} disabled={!canManage || !!planningBlocked || position === draft.length - 1} className="p-1 disabled:opacity-20" onClick={() => move(position, position + 1)}><ArrowDown size={12} /></button></div></div></td><td className="p-3"><button className="text-left hover:text-[#FF9B83]" aria-label={t("inspect", { number: item.episode })} onClick={() => inspect(item.episode)}><span className="block max-w-72 truncate font-medium">{item.title}</span><span className="mt-1 block text-xs text-slate-500">{t("episode")} {item.episode} · {item.targetDuration}s · {shotsFor(item)} {t("shots")}</span></button></td><td className="whitespace-nowrap p-3 text-xs text-slate-300">{statusLabel(stateFor(item))}</td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{data.generationMode === "reference_video" ? "—" : `${item.storyboards.completed}/${item.storyboards.total}`}</p><p className="mt-1">{item.videos.completed}/{item.videos.total}</p></td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{totals(cost?.totals.estimate) || t("unknown")}</p><p className="mt-1">{totals(cost?.totals.actual) || t("unknown")}</p></td></tr>;
+            return <tr key={item.episode} className={`border-b border-[#252936] ${active === item.episode ? "bg-[#FF6B4A]/8" : "hover:bg-white/3"}`} onDragOver={(e) => { if (canManage) e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); if (dragging.current !== undefined) move(draft.findIndex((entry) => entry.episode === dragging.current), position); dragging.current = undefined; }}><td className="p-3"><input type="checkbox" disabled={productionBusy} aria-label={t("select", { number: item.episode })} checked={selected.includes(item.episode)} onChange={(e) => setSelected(e.target.checked ? [...selected, item.episode] : selected.filter((number) => number !== item.episode))} /></td><td className="p-3"><div className="flex items-center gap-1"><button draggable={canManage && !planningBlocked} aria-label={t("drag")} className="cursor-grab text-slate-500" disabled={!canManage || !!planningBlocked} onDragStart={(event) => { event.dataTransfer.setData("text/plain", String(item.episode)); event.dataTransfer.effectAllowed = "move"; dragging.current = item.episode; }} onDragEnd={() => { dragging.current = undefined; }}><GripVertical size={16} /></button><span className="w-5 font-mono tabular-nums">{position + 1}</span><div className="flex flex-col"><button aria-label={`${t("up")} ${item.episode}`} disabled={!canManage || !!planningBlocked || position === 0} className="p-1 disabled:opacity-20" onClick={() => move(position, position - 1)}><ArrowUp size={12} /></button><button aria-label={`${t("down")} ${item.episode}`} disabled={!canManage || !!planningBlocked || position === draft.length - 1} className="p-1 disabled:opacity-20" onClick={() => move(position, position + 1)}><ArrowDown size={12} /></button></div></div></td><td className="p-3"><button className="text-left hover:text-[#FF9B83]" disabled={busy} aria-current={active === item.episode ? "true" : undefined} aria-label={t("inspect", { number: item.episode })} onClick={() => inspect(item.episode)}><span className="block max-w-72 truncate font-medium">{item.title}</span><span className="mt-1 block text-xs text-slate-500">{t("episode")} {item.episode} · {item.targetDuration}s · {shotsFor(item)} {t("shots")}</span></button></td><td className="whitespace-nowrap p-3 text-xs text-slate-300">{statusLabel(stateFor(item))}</td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{data.generationMode === "reference_video" ? "—" : `${item.storyboards.completed}/${item.storyboards.total}`}</p><p className="mt-1">{item.videos.completed}/{item.videos.total}</p></td><td className="p-3 text-xs tabular-nums text-slate-400"><p>{totals(cost?.totals.estimate) || t("unknown")}</p><p className="mt-1">{totals(cost?.totals.actual) || t("unknown")}</p></td></tr>;
           })}</tbody></table></div>
           {!visible.length && <div className="p-10 text-center"><p>{t(draft.length ? "noMatch" : "empty")}</p>{!draft.length && <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-slate-400">{t("emptyHelp")}</p>}</div>}
           <div className="sticky bottom-0 z-10 bg-[#12141b] px-4"><EpisodePagination list={episodePage} label="episodePages" listStart={tableStart} /></div>
         </section>
-        {current && <EpisodeDetails key={current.episode} readSource={readSource} canReadSources={Boolean(data.permissions?.canReadSources)} canManageBudget={canManageBudget} episode={current} sources={data.sources} disabled={!canManage || productionBusy || !!planningBlocked} update={(patch) => edit(draft.map((item) => item.episode === current.episode ? { ...item, ...patch } : item))} />}
-      </div>
-      {initialEpisodeId !== undefined && !draft.some((item) => item.episode === initialEpisodeId) ? <p role="alert" className="text-sm text-amber-200">{handoff("selectedUnavailable")}</p> : null}
-      <EpisodeWorkingScriptPanel key={current?.episode ?? "none"} api={api} projectId={projectId} revision={data.revision} episode={current} sources={data.sources} disabled={dirty || busy || !!planningBlocked} canCreate={Boolean(canManage && data.permissions?.canCreateWorkingScript)} onBusy={setProductionBusy} onAccepted={acceptedWorking} onNavigate={go} />
-      <EpisodeProductionPanel storagePrefix={storagePrefix} api={api} projectId={projectId} revision={data.revision} items={draft} current={current} selected={selected} onLoaded={setProductionCatalog} disabled={dirty || busy || !!planningBlocked} onBusy={setProductionBusy} onNavigate={go} update={(production) => { if (current) edit(draft.map((item) => item.episode === current.episode ? { ...item, production } : item)); }} />
       <p className="text-xs leading-6 text-slate-500">{t("estimateHelp")}{data.generationMode === "reference_video" ? ` ${t("reference")}` : ""}</p>{costError && <p role="alert" className="text-sm text-amber-300">{t("costsFailed")}</p>}
-      {checking && <section className="rounded-xl border border-[#2A2E3A] bg-[#12141B] p-5"><h2 className="font-semibold">{t("healthTitle")}</h2><p className="mt-2 text-xs text-slate-400">{t("healthHelp")}</p><ul className="mt-4 space-y-3">{draft.filter((item) => selected.includes(item.episode)).map((item) => <li key={item.episode} className="flex flex-wrap gap-3 text-sm"><strong>{item.episode} · {item.title}</strong><span className={issuesFor(item).length ? "text-amber-300" : "text-emerald-300"}>{issuesFor(item).map((issue) => t(issue)).join(" · ") || t("healthy")}</span></li>)}</ul></section>}
-      <p className="text-xs leading-6 text-slate-500">{handoff("readyNext")}</p><nav className="flex flex-wrap gap-3 border-t border-[#2A2E3A] pt-5">{[["script-lab", "script"], ["shots", "storyboard"], ["release-package", "release"]].map(([target, label]) => <button key={target} className={button} disabled={dirty || busy || !!planningBlocked || !current || (target === "script-lab" && !current.workingScript)} onClick={() => go(target)}>{t(label)} →</button>)}</nav>
     </>}
   </div>;
 }

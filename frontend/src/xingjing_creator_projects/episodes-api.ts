@@ -22,14 +22,15 @@ export const emptyProduction = (): EpisodeProduction => ({ scriptVersionId: "", 
 export interface ProductionCatalog {
   revision: string;
   permissions: string[];
-  scripts: { id: string; title: string; version: number }[];
-  snapshots: { id: string; scriptVersionId: string; valid: boolean; assets: { id: string; versionId: string }[] }[];
+  scripts: { id: string; title: string; version: number; digest: string }[];
+  snapshots: { id: string; scriptVersionId: string; digest: string; valid: boolean; assets: { id: string; versionId: string }[] }[];
   finals: { id: string; episodeId: string; finalVideoId: string; createdAt: string }[];
   items: { episode: number; state: string; issue: string | null; boards: { id: string; version: number; shots: number }[]; deliveries: { id: string; versionId: string; target: string; format: string; status: string; createdAt: string }[] }[];
 }
 export interface ProductionCommand {
   episode: number; title: string; endpoint: "shots/actions" | "exports"; payload: Record<string, unknown>;
   idempotencyKey: string; issue: string | null; existingId: string | null;
+  confirmationId?: string;
 }
 export interface EpisodeDraft {
   episode: number;

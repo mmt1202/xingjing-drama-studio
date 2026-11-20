@@ -28,6 +28,10 @@ export function productionNavigationQuery({ path, currentPath, currentQuery, tar
     query.set("scriptId", currentScriptId);
   }
   if (!selected) return query;
+  if (inheritContext && selectedId === currentEpisode && currentQuery.get("returnTo") === "episodes"
+    && path !== "episodes" && path !== "episode-split-editor" && path !== "control" && !query.has("returnTo")) {
+    query.set("returnTo", "episodes");
+  }
   if (inheritContext && selectedId === currentEpisode && currentQuery.get("returnTo") === "shots-smart"
     && (scriptRoutes.has(path) || path === "episodes" || path === "assets-extract") && !query.has("returnTo")) {
     query.set("returnTo", "shots-smart");

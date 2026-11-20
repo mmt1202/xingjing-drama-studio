@@ -1,114 +1,138 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CreatorApiError } from "./api";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ArrowRight, BookOpen, Boxes, Check, ChevronDown, Clapperboard, Film, FolderOutput, ListVideo, RefreshCw, Settings2 } from "lucide-react";
 import { episodeButton as button, episodeInput as input } from "./EpisodeDetails";
-import { emptyProduction, type Episode, type EpisodeProduction, type EpisodesApi, type ProductionCatalog, type ProductionCommand } from "./episodes-api";
-import { useEpisodeProductionTranslation } from "./episode-production-i18n";
-import { useEpisodeHandoffTranslation } from "./episode-handoff-i18n";
+import { EpisodeWorkingScriptAction } from "./EpisodeWorkingScriptPanel";
+import { episodeMaterials, episodeNextStep, episodeStages } from "./episode-workflow";
+import { useEpisodeWorkflowTranslation } from "./episode-workflow-i18n";
+import type { Episode, EpisodeProduction, EpisodesApi, EpisodesSnapshot, ProductionCatalog } from "./episodes-api";
+
+const icons = { script: BookOpen, assets: Boxes, shots: Clapperboard, film: Film, delivery: FolderOutput };
+const primary = "inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-violet-200 px-4 py-2 text-sm font-semibold text-[#201335] transition hover:bg-violet-100 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-300 disabled:cursor-not-allowed disabled:opacity-50";
+const disclosure = "inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-white/5 hover:text-white aria-expanded:bg-white/5 aria-expanded:text-violet-200 focus-visible:outline-2 focus-visible:outline-violet-300";
+const pages = {
+  importSource: "script-import", parse: "script-lab", finalize: "versions", extract: "assets-extract", planShots: "shots-smart",
+  makeShots: "storyboard", referenceVideo: "generation/video", editFilm: "postproduction", review: "compliance",
+  deliver: "release-package", openPackage: "release-package", lockedInputs: "shots-smart",
+} as const;
 
 interface Props {
-  api: EpisodesApi; projectId: string; revision: string; items: Episode[]; current?: Episode; storagePrefix?: string;
-  selected: number[]; disabled: boolean; onLoaded: (catalog: ProductionCatalog) => void;
-  update: (production: EpisodeProduction) => void;
-  onNavigate: (target: string) => void; onBusy: (value: boolean) => void;
+  api: EpisodesApi; projectId: string; data: EpisodesSnapshot; items: Episode[]; current?: Episode;
+  catalog?: ProductionCatalog; loadFailed: boolean; disabled: boolean; dirty: boolean; canCreate: boolean;
+  onBusy: (value: boolean) => void; onAccepted: (snapshot: EpisodesSnapshot) => void; onRefresh: () => void;
+  onNavigate: (target: string) => void; update: (production: EpisodeProduction) => void; plan: ReactNode;
 }
-interface BatchResult { episode: number; title: string; status: string; code?: string; requestId?: string }
 
-export function EpisodeProductionPanel({ api, projectId, revision, items, current, selected, disabled, update, onNavigate, onBusy, onLoaded, storagePrefix = `episodes:${projectId}` }: Props) {
-  const { t } = useEpisodeProductionTranslation();
-  const { t: handoff } = useEpisodeHandoffTranslation();
-  const [catalog, setCatalog] = useState<ProductionCatalog>();
-  const [error, setError] = useState<Error>();
-  const [running, setRunning] = useState(false);
-  const [results, setResults] = useState<BatchResult[]>([]);
-  const [target, setTarget] = useState(() => sessionStorage.getItem(`${storagePrefix}:target`) ?? "");
-  const mounted = useRef(false);
-  const executing = useRef(false);
-  const readSequence = useRef(0);
-  const refresh = useCallback(() => {
-    const sequence = ++readSequence.current;
-    return api.production(projectId).then((data) => {
-      if (mounted.current && sequence === readSequence.current) { setCatalog(data); setError(undefined); onLoaded(data); }
-    }).catch((reason: Error) => { if (mounted.current && sequence === readSequence.current) setError(reason); });
-  }, [api, projectId, onLoaded]);
-  useEffect(() => { mounted.current = true; void refresh(); return () => { mounted.current = false; readSequence.current += 1; }; }, [refresh, revision]);
-  const has = (...values: string[]) => values.every((value) => catalog?.permissions.includes(value));
-  const binding = current?.production ?? emptyProduction();
-  const currentState = catalog?.items.find((item) => item.episode === current?.episode);
-  const fresh = catalog?.revision === revision && !error;
-  const inputsLocked = !!currentState?.boards.length;
-  const editDisabled = disabled || running || !fresh || !has("project.manage");
-  const canBatch = !disabled && !running && fresh && selected.length > 0 && selected.length <= 50 && has("project.manage");
-  function showError(reason: unknown) { return reason instanceof CreatorApiError ? reason.code : "NETWORK_ERROR"; }
-  function errorText(code: string) { return handoff(code.split(":", 1)[0], { defaultValue: t(code.split(":", 1)[0], { defaultValue: t("operationFailed") }) }); }
-
-  async function batch(action: "storyboards" | "packages") {
-    if (!canBatch || executing.current) return;
-    executing.current = true; setRunning(true); onBusy(true); setError(undefined); setResults([]);
-    try {
-      const commands = await api.prepare(projectId, revision, selected, action, target.trim());
-      const outcome: BatchResult[] = commands.map((command) => ({ episode: command.episode, title: command.title, status: command.existingId ? "existing" : command.issue ? "blocked" : "queued", code: command.issue ?? undefined }));
-      if (mounted.current) setResults([...outcome]);
-      for (const [index, command] of commands.entries()) {
-        if (!mounted.current) break;
-        if (command.existingId || command.issue) continue;
-        outcome[index] = { ...outcome[index], status: "running" }; setResults([...outcome]);
-        try {
-          const response = await api.execute(projectId, command);
-          if (!validResult(command, response)) throw new CreatorApiError(502, "INVALID_RESPONSE", "INVALID_RESPONSE", undefined, true);
-          outcome[index] = { ...outcome[index], status: "succeeded" };
-        } catch (reason) {
-          outcome[index] = { ...outcome[index], status: "failed", code: showError(reason), requestId: reason instanceof CreatorApiError ? reason.requestId : undefined };
-        }
-        if (mounted.current) setResults([...outcome]);
-      }
-      if (mounted.current) await refresh();
-    } catch (reason) { if (mounted.current) setError(reason as Error); }
-    finally { executing.current = false; if (mounted.current) { setRunning(false); onBusy(false); } }
+export function EpisodeProductionPanel({ api, projectId, data, items, current, catalog, loadFailed, disabled, dirty, canCreate, onBusy, onAccepted, onRefresh, onNavigate, update, plan }: Props) {
+  const { t, i18n } = useEpisodeWorkflowTranslation();
+  const id = useId();
+  const [section, setSection] = useState<"versions" | "settings">();
+  const focusField = useRef<"script" | "assets" | "film" | "source" | undefined>(undefined);
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusField.current) body.current?.querySelector<HTMLSelectElement>(`[data-episode-field="${focusField.current}"]`)?.focus();
+    focusField.current = undefined;
+  }, [section]);
+  if (!current) return <div className="flex items-center gap-4 rounded-xl border border-white/10 bg-[#12141b] p-5">
+    <ListVideo size={24} className="shrink-0 text-violet-300" aria-hidden="true" /><div><h2 className="font-semibold">{t("choose")}</h2><p className="mt-1 text-sm text-slate-400">{t("chooseHelp")}</p></div>
+  </div>;
+  const saved = dirty ? data.items.find(item => item.episode === current.episode) ?? current : current;
+  const editable = catalog && episodeMaterials(current, items, catalog);
+  const materials = saved !== current && catalog ? episodeMaterials(saved, data.items, catalog) : editable;
+  const referenceVideo = data.generationMode === "reference_video";
+  const next = catalog && materials && episodeNextStep(saved, materials, catalog.permissions, data.sources, referenceVideo);
+  const fresh = Boolean(catalog && catalog.revision === data.revision && !loadFailed);
+  const has = (permission: string) => Boolean(catalog?.permissions.includes(permission));
+  const locked = Boolean(materials?.record?.boards.length);
+  const editDisabled = disabled || !fresh || !has("project.manage");
+  const draftAction = next?.action === "createDraft" || next?.action === "replaceDraft";
+  const denied = Boolean(next?.permission && !has(next.permission)) || (draftAction && !canCreate);
+  const showField = (field: NonNullable<typeof focusField.current>) => {
+    const target = field === "source" ? "settings" : "versions";
+    if (section === target) body.current?.querySelector<HTMLSelectElement>(`[data-episode-field="${field}"]`)?.focus();
+    else { focusField.current = field; setSection(target); }
+  };
+  function open(page: string, values: Record<string, string> = {}) {
+    const query = new URLSearchParams({ returnTo: "episodes", ...values });
+    if (materials?.final && ["release-package", "compliance"].includes(page)) query.set("projectVersion", materials.final.id);
+    onNavigate(`${page}?${query}`);
   }
-  const link = (page: string) => `${page}?${new URLSearchParams({ episodeId: String(current?.episode ?? ""), ...(current?.workingScript ? { scriptId: current.workingScript.scriptId } : {}), ...(binding.scriptVersionId ? { scriptVersionId: binding.scriptVersionId } : {}), ...(binding.assetSnapshotId ? { assetSnapshotId: binding.assetSnapshotId } : {}), ...(binding.finalVideoVersionId ? { projectVersion: binding.finalVideoVersionId } : {}), ...(target.trim() ? { target: target.trim() } : {}) }).toString()}`;
-  const pending = catalog?.items.filter((item) => item.state === "pending_review").length;
-  const packaged = catalog?.items.filter((item) => item.deliveries.some((delivery) => delivery.status === "succeeded" && delivery.format === "publish_package")).length;
-  return <section className="overflow-hidden rounded-xl border border-[#2A2E3A] bg-[#12141B]">
-    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2A2E3A] px-5 py-4">
-      <div><h2 className="font-semibold">{t("title")}</h2><p className="mt-1 text-xs leading-5 text-slate-400">{t("intro")}</p></div>
-      <div className="flex gap-5 text-xs text-slate-400"><span>{t("pending")} <strong className="ml-1 text-base text-amber-200">{fresh && has("compliance.view") ? pending : "—"}</strong></span><span>{t("packaged")} <strong className="ml-1 text-base text-emerald-300">{fresh && has("export.view") ? packaged : "—"}</strong></span></div>
+  function advance() {
+    if (!next || !materials || disabled || denied || !fresh) return;
+    const { action } = next;
+    const { binding, workingFinal, snapshots, finals } = materials;
+    if (action === "chooseSource") return showField("source");
+    if (action === "useScript" && workingFinal) return update({ ...binding, scriptVersionId: workingFinal.id, assetSnapshotId: "" });
+    if (action === "fixScript") return showField("script");
+    if (action === "useAssets" && snapshots.length === 1) return update({ ...binding, assetSnapshotId: snapshots[0].id });
+    if (action === "fixAssets" && !snapshots.length && !locked) return open("assets-extract");
+    if (action === "useAssets" || action === "fixAssets") return showField("assets");
+    if (action === "useFilm" && finals.length === 1) return update({ ...binding, finalVideoVersionId: finals[0].id });
+    if (action === "fixFilm" && !finals.length) return open("postproduction");
+    if (action === "useFilm" || action === "fixFilm") return showField("film");
+    if (action in pages) open(pages[action as keyof typeof pages], action === "openPackage" && materials.release ? { target: materials.release.target } : {});
+  }
+  const binding = editable?.binding;
+  const completed = {
+    script: Boolean(materials?.script || materials?.workingFinal), assets: Boolean(materials?.assets),
+    shots: Boolean(materials?.shots), film: Boolean(materials?.final || materials?.finals.length), delivery: materials?.record?.state === "package_ready",
+  };
+  return <section aria-labelledby={id + "-title"} className="overflow-hidden rounded-2xl border border-violet-300/20 bg-[#12141d]">
+    <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 pt-5 sm:px-6">
+      <div className="min-w-0"><p className="mb-1 flex items-center gap-2 text-xs font-medium text-violet-300"><Clapperboard size={15} aria-hidden="true" />{t("guide")}</p>
+        <h2 id={id + "-title"} className="break-words text-xl font-semibold text-slate-50">{t("episode", { number: current.episode })}<span className="mx-2 text-slate-500">·</span>{current.title}</h2></div>
+      <button type="button" className={disclosure} disabled={disabled} onClick={onRefresh}><RefreshCw size={14} aria-hidden="true" />{t("reload")}</button>
+    </header>
+    {fresh && next && materials ? <>
+      <ol aria-label={t("stages")} className="mx-5 my-4 flex flex-wrap gap-x-1 gap-y-2 sm:mx-6">
+        {episodeStages.filter(stage => stage !== "shots" || !referenceVideo || completed.shots).map((stage, index) => {
+          const active = stage === next.stage, done = completed[stage], Icon = done ? Check : icons[stage];
+          return <li key={stage} aria-current={active ? "step" : undefined} className="flex items-center">
+            {index > 0 && <span aria-hidden="true" className="mx-1 hidden h-px w-4 bg-white/15 sm:inline-block" />}
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium ${active ? "bg-violet-300/15 text-violet-200 ring-1 ring-inset ring-violet-300/30" : done ? "text-emerald-300" : "text-slate-400"}`}>
+              <Icon size={14} aria-hidden="true" />{t(stage)}{done && <span className="sr-only"> · {t("done")}</span>}</span>
+          </li>;
+        })}
+      </ol>
+      <div className="mx-5 mb-4 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-violet-300/15 bg-violet-300/[.045] p-4 sm:mx-6">
+        <div className="min-w-0 flex-1 basis-64"><h3 className="text-sm font-semibold text-violet-100">{t("next")} · {t(next.stage)}</h3>
+          <p className="mt-1.5 text-sm leading-6 text-slate-300">{next.action === "useAssets" && materials.snapshots.length === 1
+            ? t("knownAssets", { title: materials.script?.title, n: materials.script?.version, count: materials.snapshots[0].assets.length })
+            : t(`${next.action}Help`, { title: materials.script?.title, n: materials.script?.version, count: next.action === "planShots" ? materials.assets?.assets.length : materials.shots })}</p>
+          {denied && <p className="mt-1 text-xs text-amber-200">{t("noAccess")}</p>}{dirty && <p role="status" className="mt-1 text-xs text-amber-200">{t("saving")}</p>}
+        </div>
+        {draftAction ? <EpisodeWorkingScriptAction key={data.revision} api={api} projectId={projectId} revision={data.revision} episode={current} sources={data.sources} canCreate={canCreate} disabled={disabled} onBusy={onBusy} onAccepted={onAccepted} primaryClass={primary} /> :
+          next.action !== "restricted" && <button type="button" className={primary} disabled={disabled || denied} onClick={advance}>{next.action === "useAssets" && materials.snapshots.length === 1 ? t("adoptAssets", { count: materials.snapshots[0].assets.length }) : t(next.action)}<ArrowRight size={16} aria-hidden="true" /></button>}
+      </div>
+    </> : <p role={loadFailed ? "alert" : "status"} className="px-6 py-5 text-sm text-slate-300">{t(loadFailed ? "loadError" : catalog ? "stale" : "loading")}</p>}
+    <div className="flex flex-wrap gap-1 border-t border-white/10 px-3 py-1.5 sm:px-4">
+      {(["versions", "settings"] as const).map(key => { const Icon = key === "versions" ? Boxes : Settings2; return <button key={key} type="button" aria-expanded={section === key} aria-controls={id + "-details"} className={disclosure} onClick={() => setSection(section === key ? undefined : key)}>
+        <Icon size={15} aria-hidden="true" />{t(key)}<ChevronDown size={14} aria-hidden="true" className={section === key ? "rotate-180" : ""} /></button>; })}
     </div>
-    {error && <div role="alert" className="m-5 rounded-lg border border-amber-700/50 p-3 text-sm text-amber-200"><p>{t("loadError")}</p><p className="mt-1 font-mono text-xs">{showError(error)}</p><button className={`${button} mt-3`} disabled={running} onClick={() => void refresh()}>{t("refresh")}</button></div>}
-    {!catalog && !error && <p className="p-5 text-sm text-slate-400">{t("loading")}</p>}
-    {catalog && <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <div className="space-y-4 p-5 lg:border-r lg:border-[#2A2E3A]">
-        <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-medium">{current ? t("episode", { number: current.episode }) : t("chooseEpisode")}</h3><button disabled={running || disabled} className={button} onClick={() => void refresh()}>{t("refresh")}</button></div>
-        {current && <>
-          <label className="block text-xs text-slate-400">{t("script")}<select className={input} value={binding.scriptVersionId} disabled={editDisabled || inputsLocked || !has("script.view")} onChange={(event) => update({ ...binding, scriptVersionId: event.target.value, assetSnapshotId: "" })}>
-            <option value="">{t("unbound")}</option>{binding.scriptVersionId && !catalog.scripts.some((s) => s.id === binding.scriptVersionId) && <option value={binding.scriptVersionId}>{t("unavailable")} · {binding.scriptVersionId}</option>}
-            {catalog.scripts.map((script) => <option key={script.id} value={script.id} disabled={items.some((item) => item.episode !== current.episode && item.production?.scriptVersionId === script.id) || items.some((item) => item.workingScript && script.id.startsWith(`${item.workingScript.scriptId}@`) && (item.episode !== current.episode || !item.workingScript.rangeMatches))}>{script.title} · v{script.version}</option>)}
+    <div id={id + "-details"} ref={body} hidden={!section} className="border-t border-white/10">
+      {section === "settings" && plan}
+      {section === "versions" && (editable && binding && fresh ? <div className="space-y-4 p-5 sm:px-6">
+        <div className="grid gap-4 md:grid-cols-3">
+          <label className="text-sm text-slate-300">{t("scriptLabel")}<select data-episode-field="script" className={input} value={binding.scriptVersionId} disabled={editDisabled || locked || !has("script.view")} onChange={e => update({ ...binding, scriptVersionId: e.target.value, assetSnapshotId: "" })}>
+            <option value="">{t("noChoice")}</option>{binding.scriptVersionId && !editable.scripts.some(item => item.id === binding.scriptVersionId) && <option value={binding.scriptVersionId}>{t("unavailable")}</option>}
+            {editable.scripts.map(script => <option key={script.id} value={script.id}>{script.title} · {t("version", { n: script.version })}</option>)}
           </select></label>
-          {current.workingScript?.rangeMatches && current.workingScript.lockedVersionNumber && binding.scriptVersionId !== `${current.workingScript.scriptId}@${current.workingScript.lockedVersionNumber}` ? <button type="button" className={button} disabled={editDisabled || inputsLocked || !has("script.view")} onClick={() => update({ ...binding, scriptVersionId: `${current.workingScript!.scriptId}@${current.workingScript!.lockedVersionNumber}`, assetSnapshotId: "" })}>{handoff("bindWorking")}</button> : null}
-          <label className="block text-xs text-slate-400">{t("snapshot")}<select className={input} value={binding.assetSnapshotId} disabled={editDisabled || inputsLocked || !binding.scriptVersionId || !has("asset.view")} onChange={(event) => update({ ...binding, assetSnapshotId: event.target.value })}>
-            <option value="">{t("unbound")}</option>{binding.assetSnapshotId && !catalog.snapshots.some((s) => s.id === binding.assetSnapshotId && s.scriptVersionId === binding.scriptVersionId && s.valid) && <option value={binding.assetSnapshotId}>{t("unavailable")} · {binding.assetSnapshotId}</option>}
-            {catalog.snapshots.filter((snapshot) => snapshot.scriptVersionId === binding.scriptVersionId && snapshot.valid).map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{snapshot.id} · {t("assets", { count: snapshot.assets.length })}</option>)}
+          <label className="text-sm text-slate-300">{t("assetLabel")}<select data-episode-field="assets" className={input} value={binding.assetSnapshotId} disabled={editDisabled || locked || !binding.scriptVersionId || !has("asset.view")} onChange={e => update({ ...binding, assetSnapshotId: e.target.value })}>
+            <option value="">{t("noChoice")}</option>{binding.assetSnapshotId && !editable.assets && <option value={binding.assetSnapshotId}>{t("unavailable")}</option>}
+            {editable.snapshots.map((snapshot, index) => <option key={snapshot.id} value={snapshot.id}>{t("assetOption", { n: index + 1, count: snapshot.assets.length })}</option>)}
           </select></label>
-          <label className="block text-xs text-slate-400">{t("final")}<select className={input} value={binding.finalVideoVersionId} disabled={editDisabled || !has("final.view")} onChange={(event) => update({ ...binding, finalVideoVersionId: event.target.value })}>
-            <option value="">{t("unbound")}</option>{binding.finalVideoVersionId && !catalog.finals.some((final) => final.id === binding.finalVideoVersionId && final.episodeId === String(current.episode)) && <option value={binding.finalVideoVersionId}>{t("unavailable")} · {binding.finalVideoVersionId}</option>}
-            {catalog.finals.filter((final) => final.episodeId === String(current.episode)).map((final) => <option key={final.id} value={final.id}>{final.id} · {new Date(final.createdAt).toLocaleString()}</option>)}
+          <label className="text-sm text-slate-300">{t("filmLabel")}<select data-episode-field="film" className={input} value={binding.finalVideoVersionId} disabled={editDisabled || !has("final.view")} onChange={e => update({ ...binding, finalVideoVersionId: e.target.value })}>
+            <option value="">{t("noChoice")}</option>{binding.finalVideoVersionId && !editable.final && <option value={binding.finalVideoVersionId}>{t("unavailable")}</option>}
+            {editable.finals.map((film, index) => <option key={film.id} value={film.id}>{t("filmOption", { n: editable.finals.length - index, date: new Date(film.createdAt).toLocaleString(i18n.language) })}</option>)}
           </select></label>
-          <p className="text-xs leading-5 text-slate-400">{inputsLocked ? t("locked") : t("bindingHelp")}</p>
-          {currentState && <div className="space-y-2 text-xs"><p className="text-[#FF9B83]">{t(currentState.state)} · {t("shots", { count: currentState.boards.reduce((sum, board) => sum + board.shots, 0) })}</p>{currentState.issue && <p className="text-amber-300">{errorText(currentState.issue)}</p>}{currentState.deliveries.map((delivery) => <p key={delivery.id} className="break-all text-slate-400">{delivery.target} · {delivery.format} · {delivery.status} · {delivery.id}</p>)}</div>}
-          <div className="flex flex-wrap gap-2"><button className={button} disabled={disabled || running || !binding.scriptVersionId} onClick={() => onNavigate(link("assets-extract"))}>{handoff("openAssets")} →</button><button className={button} disabled={disabled || running} onClick={() => onNavigate(link("shots"))}>{t("openBoards")} →</button><button className={button} disabled={disabled || running || !binding.finalVideoVersionId || !target.trim()} onClick={() => onNavigate(link("release-package"))}>{t("openDelivery")} →</button></div>
-        </>}
-      </div>
-      <div className="space-y-4 border-t border-[#2A2E3A] p-5 lg:border-t-0">
-        <h3 className="text-sm font-medium">{t("selected", { count: selected.length })}</h3><p className="text-xs leading-6 text-slate-400">{t("batchHelp")}</p>
-        <button className={`${button} bg-[#FF6B4A] font-medium text-[#1B100C]`} disabled={!canBatch || !has("shot.manage", "shot.view", "script.view", "asset.view")} onClick={() => void batch("storyboards")}>{t("generate")}</button>
-        <div className="border-t border-[#2A2E3A] pt-4"><label className="block text-xs text-slate-400">{t("target")}<input className={input} maxLength={128} value={target} placeholder={t("targetExample")} disabled={running} onChange={(event) => { setTarget(event.target.value); sessionStorage.setItem(`${storagePrefix}:target`, event.target.value); }} /></label><p className="my-3 text-xs leading-6 text-slate-400">{t("packageHelp")}</p><button className={button} disabled={!canBatch || !target.trim() || !has("export.manage", "export.view", "final.view")} onClick={() => void batch("packages")}>{t("createPackages")}</button></div>
-        {disabled && <p className="text-xs text-amber-200">{t("saveFirst")}</p>}
-        {selected.length > 50 && <p className="text-xs text-amber-200">{t("limit")}</p>}
-        {!!results.length && <ol aria-live="polite" className="max-h-72 space-y-3 overflow-y-auto border-t border-[#2A2E3A] pt-4">{results.map((result) => <li key={result.episode} className="text-xs"><div className="flex justify-between gap-3"><strong className="truncate">{result.episode} · {result.title}</strong><span className={result.status === "succeeded" || result.status === "existing" ? "text-emerald-300" : "text-amber-200"}>{t(result.status)}</span></div>{result.code && <p className="mt-1 break-all text-slate-400">{errorText(result.code)} <span className="font-mono">({result.code})</span></p>}{result.requestId && <p className="mt-1 font-mono text-slate-500">{result.requestId}</p>}</li>)}</ol>}
-      </div>
-    </div>}
+        </div>
+        <p className="text-xs leading-5 text-slate-400">{t(locked ? "inputLock" : "autoSave")}</p>
+        <div className="flex flex-wrap gap-2">
+          {current.workingScript && has("script.view") && ([["source", "editScript"], ["script-lab", "analyzeScript"], ["versions", "compareScript"]] as const).map(([page, label]) => <button key={page} type="button" className={button} disabled={disabled} onClick={() => open(page)}>{t(label)}</button>)}
+          {editable.shots > 0 && has("shot.view") && <button type="button" className={button} disabled={disabled} onClick={() => open("shots")}>{t("lockedInputs")}</button>}
+          {has("final.view") && (editable.shots > 0 || editable.finals.length > 0 || binding.finalVideoVersionId) && <button type="button" className={button} disabled={disabled} onClick={() => open("postproduction")}>{t("editFilm")}</button>}
+        </div>
+        {Boolean(editable.record?.deliveries.length) && <div><h3 className="text-sm font-medium">{t("records")}</h3><ul className="mt-2 space-y-1 text-sm text-slate-400">{editable.record?.deliveries.map(item => <li key={item.id}>{t(item.format === "publish_package" ? "package" : "reviewFile")} · {t(item.target, { defaultValue: item.target })} · {new Date(item.createdAt).toLocaleString(i18n.language)}</li>)}</ul></div>}
+      </div> : <p className="p-5 text-sm text-slate-400">{t(loadFailed ? "loadError" : "loading")}</p>)}
+    </div>
   </section>;
-}
-
-function validResult(command: ProductionCommand, response: Awaited<ReturnType<EpisodesApi["execute"]>>) {
-  return command.endpoint === "exports" ? response.delivery?.status === "succeeded" : Array.isArray(response.shots) && response.shots.length > 0;
 }

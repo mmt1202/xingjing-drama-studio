@@ -14,6 +14,7 @@ import type { ProjectControl, ProjectControlApi } from "./control-api";
 import { useControlTranslation } from "./control-i18n";
 import { compactEpisodeTitle } from "./episode-title";
 import { productionNavigationQuery } from "./production-navigation";
+import { useEpisodeWorkflowTranslation } from "./episode-workflow-i18n";
 import { projectOwnerId, projectOwnerName } from "./project-owner";
 
 export const controlButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-[#2A2E3A] px-3 py-2 text-sm transition hover:border-[#FF6B4A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 disabled:cursor-not-allowed disabled:opacity-40";
@@ -53,6 +54,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
   api: ProjectControlApi; workspaceId: string; projectId: string; slug: string; itemId?: string; children: ReactNode;
 }) {
   const { t } = useControlTranslation();
+  const { t: workflow } = useEpisodeWorkflowTranslation();
   const [location, navigate] = useLocation();
   const search = useSearch();
   const token = useAuthStore((state) => state.token);
@@ -193,7 +195,7 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
               <div className="min-w-0 flex-1">
                 <button className="max-w-full truncate text-left text-lg font-semibold text-white hover:text-violet-200" title={validData.project.name} onClick={() => go("control")}>{validData.project.name}</button>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400"><span className="rounded-full border border-white/10 bg-white/[.03] px-3 py-1">{t(`projectType.${validData.project.type}`, { defaultValue: validData.project.type })}</span><span className="rounded-full border border-white/10 bg-white/[.03] px-3 py-1">{t("planned", { count: validData.plannedCount })}</span><span>{t("productionState")}: {t(`status.${validData.project.archived ? "archived" : validData.project.productionStatus}`, { defaultValue: validData.project.productionStatus })}</span></div>
-                <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] leading-5 text-slate-500">{[...(active === "assets" ? [] : [["projectId", validData.project.id]]), ["target", validData.project.targetPlatform], ["owner", ownerDisplayName], ["version", validData.project.version]].map(([label, value]) => <div key={label} className="flex min-w-0 max-w-full gap-2"><dt>{t(String(label))}</dt><dd className="min-w-0 truncate text-slate-300" title={String(value)}>{value}</dd></div>)}</dl>
+                <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] leading-5 text-slate-500">{[...(active === "assets" || slug === "episodes" || slug === "episode-split-editor" ? [] : [["projectId", validData.project.id]]), ["target", validData.project.targetPlatform], ["owner", ownerDisplayName], ["version", validData.project.version]].map(([label, value]) => <div key={label} className="flex min-w-0 max-w-full gap-2"><dt>{t(String(label))}</dt><dd className="min-w-0 truncate text-slate-300" title={String(value)}>{value}</dd></div>)}</dl>
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-start gap-3 sm:items-end">
@@ -215,13 +217,14 @@ export function ProjectFlowShell({ api, workspaceId, projectId, slug, itemId, ch
       {workspaceUnavailable ? <p role="status" className="mt-4 text-xs leading-6 text-amber-200">{t("workspaceNavigationUnavailable")} <button className="underline underline-offset-4" onClick={() => setWorkspaceReload((value) => value + 1)}>{t("retry")}</button></p> : null}
       {navigationBlocked ? <p role="status" className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/[.04] p-3 text-sm text-amber-200">{t("saveBeforeNavigate")}</p> : null}
       <div className="xj-project-surface">
+        {episode && slug !== "episodes" && params.get("returnTo") === "episodes" && <button type="button" className={controlButton + " mb-4"} onClick={() => go("episodes", episode.episode)}><ArrowLeft size={15} aria-hidden="true" />{workflow("back", { number: episode.episode })}</button>}
         {episode && slug !== "shots-smart" && params.get("returnTo") === "shots-smart" ? <button type="button" className={controlButton + " mb-4"} onClick={() => go("shots-smart", episode.episode)}><ArrowLeft size={15}/>{t("returnToShots", {number:episode.episode})}</button> : null}
         {error ? <section role="alert" className="rounded-xl border border-red-400/30 p-6"><h1>{t("failed")}</h1><p className="my-3 text-sm text-slate-400">{t(apiError?.status === 403 ? "forbidden" : apiError?.status === 404 ? "missing" : "notSaved")}</p>{apiError?.requestId ? <p className="mb-3 font-mono text-xs">{apiError.requestId}</p> : null}<button className={controlButton} onClick={refresh}><RefreshCw size={14} />{t("retry")}</button></section>
           : data?.project.id === projectId && data.workspaceId !== workspaceId ? <section role="alert" className="p-6"><p>{t("missing")}</p><button className={controlButton + " mt-4"} disabled={!workspaceAccess?.permissions.includes("project.view")} onClick={() => goWorkspace("projects")}>{t("library")}</button></section>
           : !validData ? <p role="status" className="p-12 text-center text-slate-400">{t("loading")}</p>
           : invalidEpisode ? <section role="alert" className="p-6"><p>{t("invalidEpisode")}</p><button className={controlButton + " mt-4"} onClick={() => go("control", null)}>{t("title")}</button></section>
           : pageGate ? <section role="status" className="rounded-xl border border-amber-400/30 p-6"><h1 className="text-lg">{t(`stage.${pageGate.id}`)}</h1><p className="my-4 text-sm text-amber-200">{t(`gate.${pageGate.reason}`)}</p>{pageGate.recovery ? <button className={controlButton} onClick={() => go(pageGate.recovery!)}>{t("recovery")}</button> : null}</section>
-          : <FlowContext.Provider value={{ data: validData, ownerDisplayName, loading: loading || loadedKey !== requestKey, refresh, go, registerGuard }}><div key={`${projectId}:${location}:${episodeId ?? ""}:${params.get("timelineId") ?? ""}`}>{["generation", "audio", "audio-subtitle"].includes(slug) ? <p className="mb-4 text-xs leading-6 text-slate-400">{t("projectWide")}</p> : null}{children}</div></FlowContext.Provider>}
+          : <FlowContext.Provider value={{ data: validData, ownerDisplayName, loading: loading || loadedKey !== requestKey, refresh, go, registerGuard }}><div key={`${projectId}:${location}:${slug === "episodes" || slug === "episode-split-editor" ? "" : episodeId ?? ""}:${params.get("timelineId") ?? ""}`}>{["generation", "audio", "audio-subtitle"].includes(slug) ? <p className="mb-4 text-xs leading-6 text-slate-400">{t("projectWide")}</p> : null}{children}</div></FlowContext.Provider>}
       </div>
     </div>
   </CreatorShell>;
