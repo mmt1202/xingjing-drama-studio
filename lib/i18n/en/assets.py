@@ -1,4 +1,7 @@
 MESSAGES = {
+    "asset_profile_input_invalid": "Some of the draft is too long or invalid. Shorten it and try again.",
+    "asset_profile_in_progress": "This asset draft is being prepared. Try again shortly.",
+    "asset_profile_unavailable": "The asset draft could not be generated. Continue editing or try again later.",
     "asset_not_found": "Asset '{name}' does not exist",
     "asset_already_exists": "An asset named '{name}' already exists under the same type",
     "asset_invalid_type": "Asset type must be character / scene / prop",

@@ -4,8 +4,8 @@ import { useTranslation } from "react-i18next";
 const zh = {
   viewDenied: "请联系工作区管理员开通资产查看权限后，再打开这个页面。",
   title: "主体资产库",
-  editorTitle: "资产编辑与版本",
-  editorIntro: "编辑资产设定、核对使用授权，并选择要用于制作的版本。",
+  editorTitle: "资产设定",
+  editorIntro: "从剧本起草设定，挑选要保留的细节，保存为项目的制作版本。",
   intro: "从剧本提取角色、场景和道具，整理设定与使用许可，供分镜制作时选用。",
   extract: "提取剧本资产",
   manual: "手动添加资产",
@@ -119,8 +119,8 @@ const zh = {
 const en: Record<keyof typeof zh, string> = {
   viewDenied: "Ask a workspace administrator for access to view assets, then reopen this page.",
   title: "Production assets",
-  editorTitle: "Asset details and versions",
-  editorIntro: "Edit the asset, review its usage permission and choose a version for production.",
+  editorTitle: "Asset profile",
+  editorIntro: "Draft from the script, choose the details to keep and save a version for production.",
   intro:
     "Extract characters, locations and props from your script. Refine their details and record how they may be used in shots.",
   extract: "Extract from script",
@@ -239,8 +239,8 @@ const en: Record<keyof typeof zh, string> = {
 const vi: Record<keyof typeof zh, string> = {
   viewDenied: "Hãy liên hệ quản trị viên để được cấp quyền xem tài sản rồi mở lại trang này.",
   title: "Tài sản sản xuất",
-  editorTitle: "Chi tiết và phiên bản tài sản",
-  editorIntro: "Chỉnh sửa tài sản, kiểm tra quyền sử dụng và chọn phiên bản để sản xuất.",
+  editorTitle: "Hồ sơ tài sản",
+  editorIntro: "Soạn từ kịch bản, chọn các chi tiết muốn giữ và lưu phiên bản dùng cho sản xuất.",
   intro:
     "Trích xuất nhân vật, bối cảnh và đạo cụ từ kịch bản. Chỉnh sửa mô tả và ghi nhận quyền sử dụng cho cảnh quay.",
   extract: "Trích xuất từ kịch bản",

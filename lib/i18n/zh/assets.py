@@ -1,4 +1,7 @@
 MESSAGES = {
+    "asset_profile_input_invalid": "设定内容过长或格式有误，请缩短后再试。",
+    "asset_profile_in_progress": "这份设定正在生成，请稍后查看。",
+    "asset_profile_unavailable": "暂时未能生成设定。可以继续编辑或稍后再试。",
     "asset_not_found": "资产「{name}」不存在",
     "asset_already_exists": "同类型下已有同名资产「{name}」",
     "asset_invalid_type": "资产类型必须为 character / scene / prop",

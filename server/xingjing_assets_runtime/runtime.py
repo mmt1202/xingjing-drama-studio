@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from server.xingjing_assets.contracts import FrozenScriptSnapshotRef
 from server.xingjing_assets_http import create_asset_router, create_unavailable_asset_router
 from server.xingjing_assets_persistence import AssetScope, SqlAlchemyAssetRepository
 from server.xingjing_content.recognition import is_reading_script
@@ -351,6 +352,34 @@ class AssetRuntime:
                 return version.source_content
         except SQLAlchemyError as error:
             raise AssetRuntimeConfigurationError("ASSET_DEPENDENCY_UNAVAILABLE") from error
+
+    def asset_source_text(
+        self, context: TrustedWorkspaceContext, project_id: str, snapshot: FrozenScriptSnapshotRef
+    ) -> str:
+        if "script.view" not in context.permissions or (snapshot.project_id, snapshot.workspace_id) != (
+            project_id,
+            context.workspace_id,
+        ):
+            return ""
+        script_id, _, number = snapshot.script_version_id.rpartition("@")
+        if not script_id or not number.isascii() or not number.isdigit() or len(number) > 9:
+            return ""
+        assert self.session_factory is not None
+        # An extracted asset stays tied to its original script even if a later revision is frozen.
+        with self.session_factory() as session:
+            source = session.scalar(
+                select(ScriptVersionRow.source_content)
+                .join(ScriptRow)
+                .where(
+                    ScriptRow.workspace_id == context.workspace_id,
+                    ScriptRow.project_id == project_id,
+                    ScriptVersionRow.script_id == script_id,
+                    ScriptVersionRow.number == int(number),
+                )
+            )
+        if source and hashlib.sha256(source.encode("utf-8")).hexdigest() == snapshot.content_sha256:
+            return source
+        return ""
 
     def close(self) -> None:
         if self._close is not None:

@@ -21,7 +21,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
 from lib.episode_ledger import ordered_episode_entries
-from lib.i18n import get_translator
+from lib.i18n import get_locale, get_translator
 from lib.project_manager import get_project_manager
 from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequest, TextTaskType
 from lib.text_generator import TextGenerator
@@ -47,6 +47,8 @@ from server.xingjing_generation.contracts import GenerationAssetReference
 from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_storyboard.ports import StoryboardScope
+
+from .profile_draft import PROFILE_TYPES, generate_profile, reference_image_prompt, script_excerpt
 
 if TYPE_CHECKING:
     from server.xingjing_assets_runtime.runtime import AssetRuntime
@@ -351,6 +353,18 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         target_id = _optional_text(body.get("targetId"))
         repository = _repository(runtime)
         scope = AssetScope(context.tenant_id, context.workspace_id)
+        if action == "draftAssetProfile":
+            asset = _owned_asset(repository, scope, project_id, _required_target(target_id))
+            if asset.revision != _if_match(request):
+                raise AssetHttpError("ASSET_VERSION_CONFLICT", 409)
+            return _success(
+                context,
+                {
+                    "profileDraft": await _draft_profile(
+                        runtime, repository, context, scope, asset, payload, key, get_locale(request)
+                    )
+                },
+            )
         service = AssetService(
             ContextAssetRepository(
                 repository, scope, context, action=action, idempotency_key=key, request_payload=body
@@ -530,8 +544,7 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                     project_id=project_id,
                     media_type=MediaType.IMAGE,
                     capability="image_generation",
-                    prompt=f"Create a production reference image for {current.kind.value} {current.name}. "
-                    + json.dumps(current.current_version.content, ensure_ascii=False, sort_keys=True),
+                    prompt=reference_image_prompt(current),
                     parameters={
                         "asset_id": current.asset_id,
                         "source_version_id": current.current_version_id,
@@ -865,6 +878,78 @@ def _generation_task_receipt(task: GenerationTask, context: TrustedWorkspaceCont
         "statusUrl": f"/api/v1/generation-tasks/{task.task_id}?projectId={task.request.project_id}",
         "requestId": context.request_id,
     }
+
+
+async def _draft_profile(
+    runtime: AssetRuntime,
+    repository: SqlAlchemyAssetRepository,
+    context: TrustedWorkspaceContext,
+    scope: AssetScope,
+    asset: Asset,
+    payload: Mapping[str, object],
+    key: str,
+    locale: str,
+) -> dict[str, object]:
+    schema = PROFILE_TYPES[asset.kind]
+    fields = _mapping(payload.get("fields"), "ASSET_PROFILE_INPUT_INVALID")
+    direction = payload.get("direction", "")
+    if (
+        not isinstance(direction, str)
+        or len(direction) > 600
+        or fields.keys() - schema.model_fields.keys()
+        or any(not isinstance(value, str) or len(value) > 4000 for value in fields.values())
+    ):
+        raise AssetHttpError("ASSET_PROFILE_INPUT_INVALID")
+    current = {field: value.strip() for field, value in cast(Mapping[str, str], fields).items()}
+    operation = "asset.profile"
+    claim_key = hashlib.sha256(key.encode()).hexdigest()
+    fingerprint = _digest(
+        {
+            "asset": asset.asset_id,
+            "version": asset.revision,
+            "actor": context.actor_id,
+            "scriptAccess": "script.view" in context.permissions,
+            "fields": current,
+            "direction": direction,
+            "locale": locale,
+        }
+    )
+    claim = repository.claim_operation(
+        scope,
+        operation_kind=operation,
+        idempotency_key=claim_key,
+        fingerprint=fingerprint,
+        owner_id=asset.asset_id,
+        now=datetime.now(UTC),
+    )
+    if claim.status == "succeeded" and claim.result is not None:
+        return dict(claim.result)
+    if not claim.claimed:
+        raise AssetHttpError("ASSET_PROFILE_IN_PROGRESS", 409)
+    try:
+        source = runtime.asset_source_text(context, asset.owner_project_id, asset.frozen_snapshot)
+        excerpt = script_excerpt(source, asset)
+        suggestions = await generate_profile(asset, current, direction, excerpt, locale)
+        result: dict[str, object] = {"fields": suggestions, "usedScript": bool(excerpt), "assetVersion": asset.revision}
+    except Exception as error:
+        repository.fail_operation(
+            scope,
+            operation_kind=operation,
+            idempotency_key=claim_key,
+            fingerprint=fingerprint,
+            reason=type(error).__name__,
+            now=datetime.now(UTC),
+        )
+        raise AssetHttpError("ASSET_PROFILE_UNAVAILABLE", 503) from error
+    repository.finish_operation(
+        scope,
+        operation_kind=operation,
+        idempotency_key=claim_key,
+        fingerprint=fingerprint,
+        result=result,
+        now=datetime.now(UTC),
+    )
+    return result
 
 
 async def _semantic_asset_candidates(
@@ -1226,6 +1311,9 @@ def _success(context: TrustedWorkspaceContext, data: object) -> JSONResponse:
 def _error(request: Request, code: str, status_code: int, details: Mapping[str, object] | None = None) -> JSONResponse:
     request_id = (request.headers.get("X-Request-Id") or str(uuid4())).strip()
     translated = {
+        "ASSET_PROFILE_INPUT_INVALID",
+        "ASSET_PROFILE_IN_PROGRESS",
+        "ASSET_PROFILE_UNAVAILABLE",
         "ASSET_NOT_FOUND",
         "RIGHTS_EVIDENCE_NOT_FOUND",
         "RIGHTS_EXPIRY_INVALID",

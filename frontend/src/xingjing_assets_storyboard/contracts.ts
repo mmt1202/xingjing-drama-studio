@@ -288,11 +288,18 @@ export interface PromptTemplateInput {
 }
 
 export interface AssetActionResult {
+  readonly profileDraft?: AssetProfileDraft;
   readonly asset?: AssetItem;
   readonly task?: TaskReceipt;
   readonly batch?: BatchReceipt;
   readonly message?: string;
   readonly requestId?: string;
+}
+
+export interface AssetProfileDraft {
+  readonly fields: Readonly<Record<string, string>>;
+  readonly usedScript: boolean;
+  readonly assetVersion: number;
 }
 
 export interface ShotActionResult {
@@ -307,6 +314,7 @@ export interface ShotActionResult {
 }
 
 export type AssetAction =
+  | "draftAssetProfile"
   | "extractAssets"
   | "createAsset"
   | "updateAsset"

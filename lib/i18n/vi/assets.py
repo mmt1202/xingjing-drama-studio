@@ -1,4 +1,7 @@
 MESSAGES = {
+    "asset_profile_input_invalid": "Nội dung quá dài hoặc không hợp lệ. Hãy rút gọn rồi thử lại.",
+    "asset_profile_in_progress": "Bản gợi ý đang được tạo. Hãy kiểm tra lại sau.",
+    "asset_profile_unavailable": "Chưa thể tạo bản gợi ý. Bạn có thể tiếp tục chỉnh sửa hoặc thử lại sau.",
     "asset_not_found": "Tài nguyên '{name}' không tồn tại",
     "asset_already_exists": "Đã tồn tại tài nguyên cùng loại có tên '{name}'",
     "asset_invalid_type": "Loại tài nguyên phải là character / scene / prop",

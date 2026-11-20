@@ -19,9 +19,9 @@ function ReferencePreview({ source, alt, workspaceId, projectId }: { source: str
     <p role="status" className="mt-2 text-xs text-slate-400">{t("loadingImage")}</p>;
 }
 
-export function AssetReferenceGeneration({ asset, canManage, busy, generation, draftBlocked = false, ownerProject = true, task, onGenerate, onAdopt }: {
+export function AssetReferenceGeneration({ asset, canManage, busy, generation, draftBlocked = false, ownerProject = true, profileEditor = false, task, onGenerate, onAdopt }: {
   asset: AssetItem; canManage: boolean; busy: boolean; draftBlocked?: boolean; ownerProject?: boolean; task?: TaskReceipt;
-  generation: AssetImageControls;
+  generation: AssetImageControls; profileEditor?: boolean;
   onGenerate: () => void; onAdopt: (generatedAssetId: string) => void;
 }) {
   const { t, i18n } = useAssetGenerationTranslation();
@@ -43,7 +43,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
     {asset.type === "voice" ? <p className="mt-3 text-xs text-slate-400">{t("voice")}</p> : <>
       {source && projectId ? <ReferencePreview source={source} workspaceId={models.workspaceId} projectId={projectId} alt={t("preview", { name: asset.name })} /> : null}
       <p className="mt-3 text-xs leading-6 text-slate-400">{!version ? t("sourceMissing") : hasReference ? t("sourceVersion", { number: version.versionNo }) : t("plainAsset")}</p>
-      {!asset.description?.trim() ? <p className="mt-2 text-xs leading-6 text-slate-400">{t("noDescription")}</p> : null}
+      {profileEditor && canManage && ownerProject && !asset.description?.trim() ? <p className="mt-2 text-xs leading-6 text-slate-400">{t("noDescription")}</p> : null}
       {draftBlocked ? <p role="status" className="mt-3 text-xs text-amber-200">{t("savedFirst")}</p> : null}
       {generation.rejection ? <p role="status" className="mt-3 text-sm text-amber-200">{generation.rejection} {generation.billingHref ? <a className="underline" href={generation.billingHref}>{t(generation.canManageBilling ? "topUpLink" : "balanceLink")}</a> : null}</p> : null}
       {ownerProject && !ready ? <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/5 p-3">
