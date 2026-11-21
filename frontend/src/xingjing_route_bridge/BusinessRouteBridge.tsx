@@ -430,9 +430,10 @@ function ProjectBusinessContent({
             `/app/workspaces/${encodeURIComponent(workspaceId)}/asset-market/${encodeURIComponent(nextAssetId)}`,
           );
       };
-      const navigateStoryboard = (view: StoryboardView, nextShotId?: string) => {
+      const navigateStoryboard = (view: StoryboardView, nextShotId?: string, board?: string) => {
         const targets: Record<StoryboardView, string> = { list: "shots", batch: "shots-batch", quality: "shots-quality", replace: "shots-replace", export: "shots-export", import: "shots-import", smart: "shots-smart", storyboard: "storyboard", compare: "shots-compare", prompts: "prompts" };
-        go(targets[view] + (nextShotId ? `/${encodeURIComponent(nextShotId)}` : ""));
+        const query = board ? "?" + new URLSearchParams({ boardId: board }).toString() : "";
+        go(targets[view] + (nextShotId ? `/${encodeURIComponent(nextShotId)}` : "") + query);
       };
       return (
         <Page
@@ -440,6 +441,7 @@ function ProjectBusinessContent({
           projectId={projectId}
           assetId={assetId}
           shotId={shotId}
+          boardId={complianceQuery.get("boardId") ?? undefined}
           episodeId={complianceQuery.get("episodeId") ?? undefined}
           scriptVersionId={smartPage ? complianceQuery.get("scriptVersionId") ?? undefined : episodeSource ? selectedEpisode?.scriptVersionId || undefined : complianceQuery.get("scriptVersionId") ?? selectedEpisode?.scriptVersionId ?? undefined}
           scriptId={complianceQuery.get("scriptId") ?? undefined}

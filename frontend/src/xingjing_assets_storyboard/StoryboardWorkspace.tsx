@@ -1,9 +1,15 @@
 import { useSmartShotsTranslation } from "./smart-i18n";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, ArrowRight, Clapperboard, Image as ImageIcon } from "lucide-react";
+import { Pagination } from "@/components/ui/Pagination";
+import { ShotReviewList, ShotAssets } from "./ShotReviewList";
+import { ShotDetailsEditor, useShotAssetChoices } from "./ShotDetailsEditor";
+import { useShotReviewTranslation } from "./shot-review-i18n";
+import { SHOTS_PER_PAGE, useShotCollection } from "./useShotCollection";
+import "./asset-library.css";
 
 import { AssetsStoryboardApiError, createAssetsStoryboardApi } from "./api";
 import {
-  moveStableItem,
   type AssetItem,
   type AssetsStoryboardPort,
   type BatchReceipt,
@@ -11,7 +17,7 @@ import {
   type PromptTemplateItem,
   type QualityIssue,
   type QualityPolicyDescriptor,
-  type SessionContext,
+  type ShotAction,
   type ShotItem,
   type ShotVersion,
   type TaskReceipt,
@@ -53,7 +59,8 @@ export interface StoryboardWorkspaceProps {
   readonly shotId?: string;
   readonly projectName?: string;
   readonly api?: AssetsStoryboardPort;
-  readonly onNavigate?: (view: StoryboardView, shotId?: string) => void;
+  readonly onNavigate?: (view: StoryboardView, shotId?: string, boardId?: string) => void;
+  readonly initialBoardId?: string;
   readonly initialScriptVersionId?: string;
   readonly initialAssetSnapshotId?: string;
   readonly onOpenSmart?: SmartNavigation;
@@ -66,10 +73,7 @@ const viewTitles: Record<StoryboardView, [string, string]> = {
     "提示词中心",
     "",
   ],
-  list: [
-    "分镜列表",
-    "镜头 ID 永久不变；镜号、顺序、景别、运镜、资产引用和时长可形成新版本。",
-  ],
+  list: ["", ""],
   batch: [
     "分镜批量编辑",
     "",
@@ -119,134 +123,6 @@ function conflict(error: unknown): boolean {
   return apiError(error)?.status === 409;
 }
 
-function ShotRail({
-  shot,
-  selected,
-  canManage,
-  onSelect,
-  onMove,
-}: {
-  readonly shot: ShotItem;
-  readonly selected: boolean;
-  readonly canManage: boolean;
-  readonly onSelect?: () => void;
-  readonly onMove?: (delta: -1 | 1) => void;
-}) {
-  return (
-    <article
-      className={`${panel} grid overflow-hidden md:grid-cols-[92px_minmax(0,1fr)]`}
-    >
-      <div className="relative border-b border-[#2A2E3A] bg-[#0d0f15] p-4 md:border-b-0 md:border-r">
-        <span className="absolute left-0 top-0 h-full w-1 bg-[#8B5CF6]" />
-        <p className="font-mono text-[11px] text-[#7E8494]">SHOT</p>
-        <strong className="mt-1 block text-xl">{shot.shotNo}</strong>
-        <code className="mt-3 block break-all text-[10px] leading-4 text-[#7E8494]">
-          {shot.id}
-        </code>
-      </div>
-      <div className="p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="font-medium">
-              {shot.shotSize} · {shot.cameraMove}
-            </p>
-            <p className="mt-1 text-xs text-[#B8BECC]">
-              {shot.durationMs} ms · v{shot.version} ·{" "}
-              {shot.assetReferences.map((asset) => asset.name).join(" / ") ||
-                "未绑定资产"}
-            </p>
-          </div>
-          {onSelect ? (
-            <input
-              type="checkbox"
-              aria-label={`选择镜头 ${shot.shotNo}`}
-              checked={selected}
-              disabled={!canManage}
-              onChange={onSelect}
-              className="size-4 accent-[#8B5CF6]"
-            />
-          ) : null}
-        </div>
-        {shot.dialogue ? (
-          <p className="mt-3 text-sm leading-6 text-[#B8BECC]">
-            {shot.dialogue}
-          </p>
-        ) : null}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-[#3A3F4E] px-2 py-1 text-[11px] text-[#B8BECC]">
-            {shot.status}
-          </span>
-          <span
-            className={
-              shot.issueCount
-                ? "rounded-full border border-[#F59E0B]/45 bg-[#F59E0B]/10 px-2 py-1 text-[11px] text-[#fcd34d]"
-                : "rounded-full border border-[#22C55E]/40 bg-[#22C55E]/10 px-2 py-1 text-[11px] text-[#86efac]"
-            }
-          >
-            {shot.issueCount} 个问题
-          </span>
-          {shot.estimatedCredit !== undefined ? (
-            <span className="rounded-full border border-[#3A3F4E] px-2 py-1 text-[11px] text-[#B8BECC]">
-              预计 {shot.estimatedCredit} 算力
-            </span>
-          ) : null}
-          {onMove ? (
-            <>
-              <button
-                type="button"
-                className={button}
-                aria-label={`上移镜头 ${shot.shotNo}`}
-                disabled={!canManage}
-                onClick={() => onMove(-1)}
-              >
-                上移
-              </button>
-              <button
-                type="button"
-                className={button}
-                aria-label={`下移镜头 ${shot.shotNo}`}
-                disabled={!canManage}
-                onClick={() => onMove(1)}
-              >
-                下移
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function ShotList({
-  shots,
-  selected,
-  canManage,
-  onSelect,
-  onMove,
-}: {
-  readonly shots: readonly ShotItem[];
-  readonly selected: readonly string[];
-  readonly canManage: boolean;
-  readonly onSelect?: (id: string) => void;
-  readonly onMove?: (id: string, delta: -1 | 1) => void;
-}) {
-  return (
-    <section className="space-y-3" aria-label="镜头列表">
-      {shots.map((shot) => (
-        <ShotRail
-          key={shot.id}
-          shot={shot}
-          selected={selected.includes(shot.id)}
-          canManage={canManage}
-          onSelect={onSelect ? () => onSelect(shot.id) : undefined}
-          onMove={onMove ? (delta) => onMove(shot.id, delta) : undefined}
-        />
-      ))}
-    </section>
-  );
-}
-
 function BatchEditor({
   shots,
   assets,
@@ -255,6 +131,9 @@ function BatchEditor({
   busy,
   onSelect,
   onApply,
+  order,
+  pagination,
+  assetsUnavailable,
 }: {
   readonly shots: readonly ShotItem[];
   readonly assets: readonly AssetItem[];
@@ -263,7 +142,11 @@ function BatchEditor({
   readonly busy: boolean;
   readonly onSelect: (id: string) => void;
   readonly onApply: (payload: Record<string, unknown>) => void;
+  readonly order: readonly string[];
+  readonly pagination: ReactNode;
+  readonly assetsUnavailable: boolean;
 }) {
+  const { t: review } = useShotReviewTranslation();
   const [shotSize, setShotSize] = useState("");
   const [durationMs, setDurationMs] = useState("");
   const [cameraMove, setCameraMove] = useState("");
@@ -273,7 +156,7 @@ function BatchEditor({
   const [assetSelectionChanged, setAssetSelectionChanged] = useState(false);
   const changes = {
     shotSize: shotSize || undefined,
-    durationMs: durationMs ? Number(durationMs) : undefined,
+    durationMs: durationMs ? Math.round(Number(durationMs) * 1000) : undefined,
     cameraMove: cameraMove || undefined,
     dialogue: dialogue || undefined,
     prompt: prompt || undefined,
@@ -295,16 +178,11 @@ function BatchEditor({
   );
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <ShotList
-        shots={shots}
-        selected={selected}
-        canManage={canManage}
-        onSelect={onSelect}
-      />
+      <div className="min-w-0"><ShotReviewList shots={shots} order={order} selected={selected} canManage={canManage} busy={busy} onSelect={onSelect} />{pagination}</div>
       <aside className={`${panel} h-fit p-5 xl:sticky xl:top-4`}>
         <h2 className="font-semibold">批量变更</h2>
         <p className="mt-2 text-xs text-[#7E8494]">
-          已选择 {selected.length} 个稳定镜头 ID；修改会创建统一的新故事板版本。
+          {review("batchSelection", { n: selected.length })}
         </p>
         <div className="mt-4 grid gap-3">
           <label className="text-xs text-[#B8BECC]">
@@ -324,10 +202,10 @@ function BatchEditor({
             />
           </label>
           <label className="text-xs text-[#B8BECC]">
-            时长（毫秒）
+            {review("duration")}
             <input
               type="number"
-              min="1"
+              min="0.001" step="0.001"
               value={durationMs}
               onChange={(event) => setDurationMs(event.target.value)}
               className="mt-1 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2"
@@ -374,12 +252,12 @@ function BatchEditor({
                   />
                   <span>{asset.name}</span>
                   <code className="ml-auto text-[10px] text-[#7E8494]">
-                    {asset.type} · {asset.currentVersionId}
+                    {review(asset.type)}
                   </code>
                 </label>
               ))}
               {assets.every((asset) => !asset.currentVersionId) ? (
-                <p className="text-xs text-[#7E8494]">当前项目没有可绑定的资产版本。</p>
+                <p className="text-xs text-[#7E8494]">{review(assetsUnavailable ? "assetUnavailable" : "noAssetsFound")}</p>
               ) : null}
             </div>
           </fieldset>
@@ -387,7 +265,7 @@ function BatchEditor({
         <button
           type="button"
           className={`${primaryButton} mt-5 w-full`}
-          disabled={!canManage || busy || selected.length === 0 || !hasChanges}
+          disabled={!canManage || busy || selected.length === 0 || !hasChanges || (Boolean(durationMs) && (!/^\d+(?:\.\d{1,3})?$/.test(durationMs) || Number(durationMs) <= 0))}
           onClick={() => onApply({ itemIds: selected, changes })}
         >
           {busy ? "提交中…" : "应用批量编辑"}
@@ -404,6 +282,7 @@ function QualityView({
   issues,
   policy,
   onRun,
+  onEdit,
 }: {
   readonly shots: readonly ShotItem[];
   readonly canManage: boolean;
@@ -411,11 +290,12 @@ function QualityView({
   readonly issues: readonly QualityIssue[];
   readonly policy?: QualityPolicyDescriptor;
   readonly onRun: () => void;
+  readonly onEdit: (shot: ShotItem) => void;
 }) {
   const { t } = useStoryboardQualityTranslation();
-  const allIssues = issues.length
-    ? issues
-    : shots.flatMap((shot) => shot.qualityIssues);
+  const { t: review } = useShotReviewTranslation();
+  const savedIssues = shots.flatMap(shot => shot.qualityIssues.map(issue => ({ shot, issue })));
+  const allIssues = savedIssues.length ? savedIssues : issues.map(issue => ({ shot: undefined, issue }));
   return (
     <section>
       <QualityPolicyNotice policy={policy} />
@@ -444,10 +324,10 @@ function QualityView({
         />
       ) : (
         <ul className="mt-4 space-y-3">
-          {allIssues.map((issue) => (
+          {allIssues.map(({ shot, issue }) => (
             <li key={issue.id} className={`${panel} p-4`}>
               <div className="flex justify-between gap-3">
-                <strong>{issue.code}</strong>
+                <strong>{shot && <span className="mr-2 text-violet-200">{review("shot", { no: shot.shotNo })}</span>}{review(issue.code, { defaultValue: review("issueFallback") })}</strong>
                 <span
                   className={
                     issue.severity === "blocking"
@@ -457,15 +337,11 @@ function QualityView({
                         : "text-[#3B82F6]"
                   }
                 >
-                  {issue.severity}
+                  {review(issue.severity)}
                 </span>
               </div>
-              <p className="mt-2 text-sm text-[#B8BECC]">{issue.message}</p>
-              {issue.recoveryAction ? (
-                <p className="mt-2 text-xs text-[#8B5CF6]">
-                  恢复动作：{issue.recoveryAction}
-                </p>
-              ) : null}
+              {shot && <button type="button" className={button + " mt-3"} disabled={busy} onClick={() => onEdit(shot)}>
+                {review(canManage && shot.status !== "frozen" ? "edit" : "review")}</button>}
             </li>
           ))}
         </ul>
@@ -737,6 +613,8 @@ function StoryboardViewPanel({
   canManage,
   busy,
   collectionVersion,
+  total,
+  onEdit,
   onSelectCandidate,
   onGenerateMedia,
   onConfirm,
@@ -745,6 +623,8 @@ function StoryboardViewPanel({
   readonly canManage: boolean;
   readonly busy: boolean;
   readonly collectionVersion?: number;
+  readonly total: number;
+  readonly onEdit: (shot: ShotItem) => void;
   readonly onSelectCandidate: (shot: ShotItem, candidateId: string) => void;
   readonly onGenerateMedia: (
     shot: ShotItem,
@@ -754,6 +634,9 @@ function StoryboardViewPanel({
 }) {
   const { t } = useStoryboardQualityTranslation();
   const [confirm, setConfirm] = useState(false);
+  const { t: review, i18n } = useShotReviewTranslation();
+  const seconds = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 3 });
+  const frozen = shots[0]?.status === "frozen";
   const storyboardId = shots[0]?.storyboardId ?? "";
   return (
     <>
@@ -761,20 +644,17 @@ function StoryboardViewPanel({
         className={`${panel} mb-4 flex flex-col gap-3 p-4 md:flex-row md:items-end md:justify-between`}
       >
         <div className="text-sm text-[#B8BECC]">
-          当前故事板 ID
-          <code className="mt-2 block rounded-[10px] border border-[#3A3F4E] bg-[#171922] px-3 py-2 text-[#F5F6FA] md:w-80">
-            {storyboardId || "尚未创建"}
-          </code>
+          {review(frozen ? "frozenSummary" : "draftSummary")}
         </div>
         <button
           type="button"
           className={primaryButton}
           disabled={
-            !canManage || busy || shots.length === 0 || !storyboardId.trim()
+            !canManage || busy || frozen || shots.length === 0 || !storyboardId.trim()
           }
           onClick={() => setConfirm(true)}
         >
-          冻结并确认故事板
+          {frozen ? review("frozen") : review("freeze")}
         </button>
       </section>
       <section
@@ -796,8 +676,8 @@ function StoryboardViewPanel({
                     loading="lazy"
                   />
                 ) : (
-                  <div className="grid h-full place-items-center font-mono text-xs text-[#7E8494]">
-                    {shot.id}
+                  <div className="grid h-full place-content-center justify-items-center gap-2 text-sm text-slate-400">
+                    <ImageIcon size={24} aria-hidden="true"/>{review("blankFrame")}
                   </div>
                 )}
                 <span className="absolute left-3 top-3 rounded-full bg-black/75 px-3 py-1 text-xs">
@@ -805,19 +685,14 @@ function StoryboardViewPanel({
                 </span>
               </div>
               <div className="p-4">
-                <code className="text-[10px] text-[#7E8494]">{shot.id}</code>
-                <p className="mt-2 text-sm text-[#B8BECC]">
-                  {shot.shotSize} · {shot.cameraMove} · {shot.durationMs} ms
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-300">
+                  {[shot.shotSize, shot.cameraMove, review("sec", { n: seconds.format(shot.durationMs / 1000) })].filter(Boolean).join(" · ")}
+                </p><button type="button" className={button} disabled={busy} onClick={() => onEdit(shot)}>{review(canManage && !frozen ? "editNamed" : "review", { no: shot.shotNo })}</button></div>
                 <p className="mt-2 line-clamp-3 text-sm">
                   {shot.prompt || "尚无提示词"}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <span className="text-xs text-[#B8BECC]">
-                    {shot.assetReferences
-                      .map((asset) => asset.name)
-                      .join(" / ") || "未绑定资产"}
-                  </span>
+                  <ShotAssets shot={shot}/>
                   <span
                     className={
                       shot.issueCount
@@ -828,7 +703,7 @@ function StoryboardViewPanel({
                     {shot.issueCount} 个问题
                   </span>
                   <span className="text-xs text-[#8B5CF6]">
-                    生成：{shot.generationStatus ?? "not_started"}
+                    {review("productionStatus")} · {review(shot.generationStatus === "failed" ? "generationFailed" : shot.generationStatus ?? "not_started")}
                   </span>
                   {shot.generationCurrency &&
                   shot.estimatedCostMinor !== undefined ? (
@@ -847,9 +722,7 @@ function StoryboardViewPanel({
                   </p>
                 ) : null}
                 {shot.generationTaskId ? (
-                  <code className="mt-2 block truncate text-[10px] text-[#7E8494]">
-                    任务 {shot.generationTaskId}
-                  </code>
+                  <details className="mt-2 text-xs text-slate-400"><summary className="cursor-pointer">{review("taskDetails")}</summary><code className="break-all">{shot.generationTaskId}</code></details>
                 ) : null}
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
@@ -897,7 +770,7 @@ function StoryboardViewPanel({
                           aria-pressed={candidate.selected}
                           onClick={() => onSelectCandidate(shot, candidate.id)}
                         >
-                          {candidate.id}
+                          {review("candidate", { n: candidate.version })}
                         </button>
                       ))}
                     </div>
@@ -911,7 +784,7 @@ function StoryboardViewPanel({
       <ConfirmDialog
         open={confirm}
         title="确认冻结故事板"
-        detail={t("freezePlanHelp", { count: shots.length })}
+        detail={t("freezePlanHelp", { count: total })}
         confirmLabel={`确认冻结版本 ${collectionVersion ?? "—"}`}
         busy={busy}
         onCancel={() => setConfirm(false)}
@@ -1375,6 +1248,7 @@ export function StoryboardWorkspace({
   onNavigate,
   initialScriptVersionId,
   initialAssetSnapshotId,
+  initialBoardId,
   onOpenSmart,
   onSmartChange,
 }: StoryboardWorkspaceProps) {
@@ -1384,14 +1258,23 @@ export function StoryboardWorkspace({
   }>();
   const activeView =
     localNavigation?.source === view ? localNavigation.target : view;
-  const [context, setContext] = useState<SessionContext>();
-  const [shots, setShots] = useState<readonly ShotItem[]>();
-  const [assets, setAssets] = useState<readonly AssetItem[]>([]);
-  const [collectionVersion, setCollectionVersion] = useState<number>();
-  const [nextToken, setNextToken] = useState<string | null>(null);
+  const collection = useShotCollection(api, scope, activeView, initialBoardId);
+  const { context, page, order, total, boardId, load } = collection;
+  const shots = page?.items;
+  const collectionVersion = page?.collectionVersion;
+  const { t: review } = useShotReviewTranslation();
+  const [editor, setEditor] = useState<ShotItem>();
+  const [revisionDialog, setRevisionDialog] = useState(false);
+  const [notice, setNotice] = useState("");
+  const listTop = useRef<HTMLDivElement>(null), scrollAfterRead = useRef(false);
+  const assetChoices = useShotAssetChoices(api, scope, activeView === "batch");
+  const assets = assetChoices?.assets ?? [];
+  const board = page?.shotList?.boards.find(entry => entry.id === boardId);
+  const frozen = (board?.status ?? shots?.[0]?.status) === "frozen";
   const [selected, setSelected] = useState<string[]>(shotId ? [shotId] : []);
-  const [error, setError] = useState<unknown>();
-  const [denied, setDenied] = useState<AssetsStoryboardApiError>();
+  const [actionError, setError] = useState<unknown>();
+  const error = actionError ?? collection.error;
+  const denied = forbidden(error) ? apiError(error) : undefined;
   const [versionConflict, setVersionConflict] =
     useState<AssetsStoryboardApiError>();
   const [busy, setBusy] = useState(false);
@@ -1402,60 +1285,16 @@ export function StoryboardWorkspace({
   const [task, setTask] = useState<TaskReceipt>();
   const [taskShotId, setTaskShotId] = useState<string>();
   const [issues, setIssues] = useState<readonly QualityIssue[]>([]);
-  const [qualityPolicy, setQualityPolicy] = useState<QualityPolicyDescriptor>();
+  const qualityPolicy = page?.qualityPolicy;
   const [resultMessage, setResultMessage] = useState("");
-  const load = useCallback(
-    async (append = false) => {
-      await Promise.resolve();
-      setError(undefined);
-      setDenied(undefined);
-      try {
-        const session = context ?? (await api.getSessionContext(scope));
-        if (!session.permissions.includes("shot.view")) {
-          setDenied(
-            new AssetsStoryboardApiError(
-              403,
-              "PERMISSION_DENIED",
-              "没有分镜查看权限",
-            ),
-          );
-          setShots([]);
-          return;
-        }
-        const [page, assetPage] = await Promise.all([
-          api.listShots(scope, {
-            pageToken: append ? (nextToken ?? undefined) : undefined,
-            includeQualityPolicy: true,
-          }),
-          append
-            ? Promise.resolve(undefined)
-            : api.listAssets({ ...scope, episodeId: undefined }, { pageSize: 100 }),
-        ]);
-        setContext(session);
-        setShots((current) =>
-          append && current ? [...current, ...page.items] : page.items,
-        );
-        setNextToken(page.nextToken);
-        setCollectionVersion(page.collectionVersion);
-        setQualityPolicy(page.qualityPolicy);
-        if (assetPage) setAssets(assetPage.items);
-      } catch (cause) {
-        if (forbidden(cause)) {
-          setDenied(cause as AssetsStoryboardApiError);
-          setShots([]);
-          setContext(undefined);
-        } else setError(cause);
-      }
-    },
-    [api, context, nextToken, scope],
-  );
-  useEffect(() => {
-    if (activeView === "smart") return;
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [api, scope.workspaceId, scope.projectId, scope.episodeId, activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (page && scrollAfterRead.current) {
+      scrollAfterRead.current = false;
+      const start = listTop.current;
+      start?.focus({ preventScroll: true });
+      if (start && start.getBoundingClientRect().top < 0) start.scrollIntoView({ block: "start", behavior: "instant" });
+    }
+  }, [page]);
   useEffect(() => {
     if (task || !shots) return;
     const pending = shots.find(
@@ -1496,51 +1335,48 @@ export function StoryboardWorkspace({
       window.clearInterval(timer);
     };
   }, [api, scope, task]);
-  const canManage = context?.permissions.includes("shot.manage") ?? false;
+  const canManage = page?.shotList?.canEdit ?? context?.permissions.includes("shot.manage") ?? false;
+  const running = useRef(false);
   const run = async (
-    action: string,
+    action: ShotAction,
     payload: Record<string, unknown> = {},
     target?: ShotItem,
     version = target?.version,
   ) => {
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     setError(undefined);
+    setNotice("");
     setVersionConflict(undefined);
     setResultMessage("");
     try {
       const result = await api.shotAction(scope, {
-        action: action as never,
+        action,
         targetId: target?.id,
         version,
         payload,
       });
-      if (result.shot)
-        setShots((items) =>
-          items?.map((item) =>
-            item.id === result.shot?.id ? result.shot : item,
-          ),
-        );
-      if (result.shots?.length) setShots(result.shots);
-      if (result.batch) setBatch(result.batch);
+      if (result.batch && activeView === "batch") {
+        const labels = new Map((result.shots ?? shots ?? []).map(item => [item.id, item.shotNo]));
+        setBatch({ ...result.batch, items: result.batch.items.map(item => ({ ...item, name: item.name ??
+          (labels.has(item.id) ? review("shot", { no: labels.get(item.id) }) : review("unknownShot")) })) });
+      } else if (result.batch && activeView !== "list") setBatch(result.batch);
       if (result.task) {
         setTask(result.task);
         setTaskShotId(target?.id);
       }
       if (result.issues) setIssues(result.issues);
-      if (result.qualityPolicy) setQualityPolicy(result.qualityPolicy);
       if (result.message) setResultMessage(result.message);
       await load();
       return result;
     } catch (cause) {
-      if (forbidden(cause)) {
-        setDenied(cause as AssetsStoryboardApiError);
-        setShots([]);
-        setContext(undefined);
-      } else if (conflict(cause))
+      if (conflict(cause))
         setVersionConflict(cause as AssetsStoryboardApiError);
       else setError(cause);
       return undefined;
     } finally {
+      running.current = false;
       setBusy(false);
     }
   };
@@ -1548,26 +1384,19 @@ export function StoryboardWorkspace({
     setSelected((items) =>
       items.includes(id) ? items.filter((item) => item !== id) : [...items, id],
     );
-  const move = (id: string, delta: -1 | 1) => {
-    if (!shots) return;
-    const previous = shots;
-    const next = moveStableItem(previous, id, delta);
-    setShots(next);
-    void run(
-      "reorder",
-      {
-        orderedShotIds: next.map((shot) => shot.id),
-        baseVersion: collectionVersion,
-      },
-      undefined,
-      undefined,
-    ).then((result) => {
-      if (!result) setShots(previous);
-    });
+  const move = async (id: string, delta: -1 | 1) => {
+    const from = order.indexOf(id), to = from + delta;
+    if (!canManage || busy || frozen || from < 0 || to < 0 || to >= order.length) return;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    const result = await run("reorder", { orderedShotIds: next, baseVersion: collectionVersion });
+    if (result && Math.floor(to / SHOTS_PER_PAGE) !== Math.floor(from / SHOTS_PER_PAGE)) {
+      scrollAfterRead.current = true; collection.turnPage(Math.floor(to / SHOTS_PER_PAGE) * SHOTS_PER_PAGE);
+    }
   };
   const navigate = (next: StoryboardView, id?: string) => {
     if (!protection.canNavigate()) return;
-    if (onNavigate) onNavigate(next, id);
+    if (onNavigate) onNavigate(next, id, boardId);
     else setLocalNavigation({ source: view, target: next });
   };
   if (activeView === "smart") return <SmartStoryboardWorkspace key={JSON.stringify([scope.workspaceId, scope.projectId, scope.episodeId])} api={api} scope={scope} scriptVersionId={initialScriptVersionId} assetSnapshotId={initialAssetSnapshotId} onOpen={onOpenSmart} onChange={onSmartChange} />;
@@ -1576,8 +1405,8 @@ export function StoryboardWorkspace({
     return (
       <main className="min-h-full bg-[#07080C] p-6">
         <StatePanel
-          title="没有分镜查看权限"
-          detail="服务端拒绝了当前工作区、项目或剧集的数据访问。请申请 shot.view 权限。"
+          title={review("noAccess")}
+          detail={review("viewAccess")}
           requestId={denied.requestId}
           tone="danger"
         />
@@ -1588,17 +1417,42 @@ export function StoryboardWorkspace({
       <main className="min-h-full bg-[#07080C] p-6">
         <StatePanel
           title="分镜数据加载失败"
-          detail={message(error)}
+          detail={review("actionFailed")}
           requestId={apiError(error)?.requestId}
           actionLabel="重新加载"
-          onAction={() => void load()}
+          onAction={retryLoad}
           tone="danger"
         />
       </main>
     );
   const title = viewTitles[activeView];
   const items = shots ?? [];
-  const actions = (
+  const readBusy = busy || collection.loading;
+  const workspaceView = ["list", "batch", "storyboard"].includes(activeView);
+  const here = page?.shotList;
+  const selectedHere = selected.filter(id => order.includes(id));
+  const pagination = <Pagination label={review("pages")} unit="shots" pageSize={SHOTS_PER_PAGE} total={total} offset={collection.offset}
+    disabled={readBusy} onOffsetChange={next => { scrollAfterRead.current = true; collection.turnPage(next); }} />;
+  function chooseBoard(id: string) {
+    setSelected([]); setBatch(undefined); setTask(undefined); setTaskShotId(undefined); setNotice(""); setIssues([]);
+    setVersionConflict(undefined); setError(undefined); setResultMessage("");
+    collection.chooseBoard(id);
+    onNavigate?.(activeView, undefined, id);
+  }
+  function retryLoad() { setError(undefined); setVersionConflict(undefined); void load(); }
+  async function createRevision() {
+    if (!boardId || !canManage || !frozen || readBusy) return;
+    const result = await run("reviseStoryboard", { storyboardId: boardId, baseVersion: collectionVersion });
+    setRevisionDialog(false);
+    if (result?.storyboardId) { chooseBoard(result.storyboardId); setNotice(review("revised")); onSmartChange?.(); }
+  }
+  const actions = workspaceView ? <div className="flex flex-wrap gap-2">
+    {activeView !== "list" && <button className={button + " inline-flex items-center gap-2"} type="button" disabled={readBusy} onClick={() => navigate("list")}><ArrowLeft size={15}/>{review("back")}</button>}
+    {activeView !== "batch" && !!total && <button className={button} type="button" disabled={readBusy} onClick={() => navigate("batch")}>{review("batch")}</button>}
+    {!!total && <button className={button} type="button" disabled={readBusy} onClick={() => navigate("quality")}>{review("quality")}</button>}
+    {activeView !== "storyboard" && !!total && <button type="button" className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-violet-200 px-4 py-2 text-sm font-semibold text-violet-950 hover:bg-violet-100 disabled:opacity-45"
+      disabled={readBusy} onClick={() => navigate("storyboard")}>{review("next")}<ArrowRight size={15}/></button>}
+  </div> : (
     <>
       <button type="button" className={button} onClick={() => navigate("list")}>
         镜头列表
@@ -1629,31 +1483,54 @@ export function StoryboardWorkspace({
   return (
     <WorkspaceShell
       context={context}
-      title={title[0]}
-      description={activeView === "prompts" ? storyboardText("promptHelp") : activeView === "batch" ? storyboardText("batchHelp") : title[1]}
+      libraryHeader={workspaceView}
+      title={activeView === "list" ? review("title") : activeView === "storyboard" ? review("boardTitle") : title[0]}
+      description={activeView === "list" ? review("intro") : activeView === "storyboard" ? review("boardHelp") : activeView === "prompts" ? storyboardText("promptHelp") : activeView === "batch" ? storyboardText("batchHelp") : title[1]}
       eyebrow="M05 · SHOT CONTINUITY"
       projectName={projectName ?? context.project?.name}
       actions={actions}
     >
       {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}
-      <StoryboardSourceNotice items={items} />
+      {workspaceView && total > 0 && <div ref={listTop} tabIndex={-1} className="mb-3 scroll-mt-4 rounded-xl border border-white/10 bg-[#11141d] px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-violet-300">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5 text-sm">
+            <Clapperboard aria-hidden="true" size={17} className="text-violet-300"/>
+            <strong>{/^\d+$/.test(board?.episodeId ?? scope.episodeId ?? "") ? review("episode", { n: board?.episodeId ?? scope.episodeId }) : context.episode?.title || review("plan")}</strong>
+            <span>{review("count", { n: total })}</span><span className="text-slate-400">{items.length === 1 ? review("single", { n: collection.offset + 1 }) : review("range", { from: collection.offset + 1, to: collection.offset + items.length })}</span>
+            <span className="rounded-full bg-violet-300/10 px-2 py-1 text-xs text-violet-200">{review(frozen ? "frozen" : "draft")} · {review("version", { n: collectionVersion })}</span>
+          </div>
+          {here && here.boards.length > 1 && <label className="flex items-center gap-2 text-sm text-slate-400">{review("plan")}<select className={button} value={here.boardId ?? ""} disabled={readBusy}
+            onChange={e => chooseBoard(e.target.value)}>{here.boards.map((b, i) => <option key={b.id} value={b.id}>{/^\d+$/.test(b.episodeId) ? review("episode", { n: b.episodeId }) + " · " : ""}{review("group", { n: i + 1 })} · {review(b.status === "frozen" ? "frozen" : "draft")} · {review("count", { n: b.count })}</option>)}</select></label>}
+        </div>
+        {here?.requestedBoardUnavailable && <p role="status" className="mt-2 text-sm text-amber-200">{review("missingBoard")}</p>}
+        {!canManage && <p className="mt-2 text-sm text-amber-200">{review("readonly")}</p>}
+        {frozen && canManage && <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3 text-sm text-slate-300">
+          {review("lockedHelp")}<button className={button} type="button" disabled={readBusy} onClick={() => setRevisionDialog(true)}>{review("revise")}</button></div>}
+        <details className="mt-2 text-xs text-slate-400"><summary className="w-fit cursor-pointer">{review("sources")}</summary><StoryboardSourceNotice items={items} /></details>
+      </div>}
+      {!workspaceView && <StoryboardSourceNotice items={items}/>}
+      {notice && <p role="status" className="mb-3 rounded-lg bg-emerald-300/10 px-4 py-2 text-sm text-emerald-200">{notice}</p>}
+      {editor && <ShotDetailsEditor key={editor.id} shot={editor} scope={scope} api={api} writable={canManage} onClose={() => setEditor(undefined)}
+        onSaved={no => { setEditor(undefined); setIssues([]); setNotice(review("saved", { no })); void load(); }} />}
+      <ConfirmDialog open={revisionDialog} title={review("revise")} detail={review("reviseHelp")} confirmLabel={review("revise")} busy={busy}
+        onCancel={() => setRevisionDialog(false)} onConfirm={() => void createRevision()} />
       {versionConflict ? (
         <StatePanel
           title="版本冲突"
           detail="当前分镜集合已被其他成员更新。已保留本地选择，请重新读取服务端版本后再提交。"
           requestId={versionConflict.requestId}
           actionLabel="重新读取服务端版本"
-          onAction={() => void load()}
+          onAction={retryLoad}
           tone="warning"
         />
       ) : null}
       {error ? (
         <StatePanel
           title="操作失败"
-          detail={message(error)}
+          detail={qualityErrorMessage(apiError(error)?.code) ?? review("actionFailed")}
           requestId={apiError(error)?.requestId}
           actionLabel="重新加载"
-          onAction={() => void load()}
+          onAction={retryLoad}
           tone="danger"
         />
       ) : null}
@@ -1684,39 +1561,26 @@ export function StoryboardWorkspace({
       {items.length === 0 &&
       !["import", "export", "smart"].includes(activeView) ? (
         <StatePanel
-          title="当前剧集没有镜头"
-          detail="可从智能分镜生成草案，或导入通过服务端预检的分镜表。"
-          actionLabel="进入智能分镜"
+          title={review("emptyTitle")}
+          detail={review("emptyHelp")}
+          actionLabel={review("emptyCta")}
           onAction={() => navigate("smart")}
         />
       ) : null}
-      {activeView === "list" && items.length ? (
-        <>
-          <ShotList
-            shots={items}
-            selected={selected}
-            canManage={canManage}
-            onSelect={toggle}
-            onMove={move}
-          />
-          {nextToken ? (
-            <button
-              type="button"
-              className={`${button} mt-4`}
-              onClick={() => void load(true)}
-            >
-              加载更多
-            </button>
-          ) : null}
-        </>
-      ) : null}
+      {activeView === "list" && items.length > 0 && <>
+        <ShotReviewList shots={items} order={order} selected={selectedHere} canManage={canManage} busy={readBusy} onEdit={setEditor} onMove={(id, direction) => void move(id, direction)} />
+        {pagination}
+      </>}
       {activeView === "batch" && items.length ? (
         <BatchEditor
           shots={items}
           assets={assets}
-          selected={selected}
-          canManage={canManage}
-          busy={busy}
+          order={order}
+          pagination={pagination}
+          assetsUnavailable={Boolean(assetChoices?.error)}
+          selected={selectedHere}
+          canManage={canManage && !frozen}
+          busy={readBusy}
           onSelect={toggle}
           onApply={(payload) =>
             void run(
@@ -1738,6 +1602,7 @@ export function StoryboardWorkspace({
           busy={busy}
           issues={issues}
           policy={qualityPolicy}
+          onEdit={setEditor}
           onRun={() =>
             void run(
               "runQualityCheck",
@@ -1803,6 +1668,8 @@ export function StoryboardWorkspace({
           canManage={canManage}
           busy={busy}
           collectionVersion={collectionVersion}
+          total={total}
+          onEdit={setEditor}
           onSelectCandidate={(shot, candidateId) =>
             void run("selectStoryboardCandidate", { candidateId }, shot)
           }
@@ -1815,7 +1682,7 @@ export function StoryboardWorkspace({
               {
                 storyboardId,
                 baseVersion: collectionVersion,
-                shotIds: items.map((shot) => shot.id),
+                shotIds: order,
               },
               undefined,
               undefined,
@@ -1823,6 +1690,7 @@ export function StoryboardWorkspace({
           }
         />
       ) : null}
+      {activeView === "storyboard" && pagination}
       {activeView === "compare" && items.length ? (
         <CompareView
           shots={items}
@@ -1846,6 +1714,7 @@ export function StoryboardWorkspace({
       {batch && activeView !== "import" ? (
         <BatchResultPanel
           receipt={batch}
+          hideOperationId
           busy={busy}
           onRetry={(itemIds) =>
             void run(

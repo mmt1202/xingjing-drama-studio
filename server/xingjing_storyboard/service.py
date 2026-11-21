@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
@@ -214,10 +214,72 @@ class StoryboardService:
         if replay is not None:
             return MutationResult(replay, True)
 
+        created_shots = (self._shot_from_draft(draft, position) for position, draft in enumerate(drafts, 1))
+        return self._commit_new_draft(
+            context, episode_id, created_shots, source_context, action, idempotency_key, fingerprint
+        )
+
+    def revise_frozen_storyboard(
+        self, context: AccessContext, *, storyboard_id: str, expected_version: int, idempotency_key: str
+    ) -> MutationResult:
+        action = "storyboard.revision_created"
+        self._authorize(context, MANAGE_PERMISSION, action, storyboard_id)
+        self._require_idempotency_key(idempotency_key)
+        fingerprint = _fingerprint({"operation": action, "source": storyboard_id, "version": expected_version})
+        replay = self._repository.replay(context.scope, idempotency_key=idempotency_key, fingerprint=fingerprint)
+        if replay is not None:
+            return MutationResult(replay, True)
+        board = self._owned_storyboard(context, storyboard_id)
+        if board.version != expected_version:
+            raise VersionConflict("VERSION_CONFLICT", details={"current_version": board.version})
+        snapshot = board.frozen_snapshot
+        if snapshot is None:
+            raise ContractViolation("FROZEN_STORYBOARD_REQUIRED")
+        # Media, tasks and quality findings belong to the original shots.
+        shots = (
+            replace(
+                shot,
+                shot_id=self._identifiers.new("shot"),
+                selected_media_id=None,
+                generation_task_id=None,
+                generation_submission=None,
+                generation_status=GenerationStatus.NOT_STARTED,
+                quality_issues=(),
+                replacements=(),
+            )
+            for shot in snapshot.shots
+        )
+        return self._commit_new_draft(
+            context,
+            board.episode_id,
+            shots,
+            snapshot.source_context,
+            action,
+            idempotency_key,
+            fingerprint,
+            origin={
+                "source_storyboard_id": storyboard_id,
+                "source_version": snapshot.source_version,
+                "snapshot_digest": snapshot.digest,
+            },
+        )
+
+    def _commit_new_draft(
+        self,
+        context: AccessContext,
+        episode_id: str,
+        shots: Iterable[Shot],
+        source_context: StoryboardSourceContext | None,
+        action: str,
+        idempotency_key: str,
+        fingerprint: str,
+        *,
+        origin: dict[str, object] | None = None,
+    ) -> MutationResult:
         storyboard_id = self._identifiers.new("storyboard")
         try:
             now = self._now()
-            created_shots = tuple(self._shot_from_draft(draft, position) for position, draft in enumerate(drafts, 1))
+            created_shots = tuple(shots)
             self._validate_assets(context, created_shots)
             version = _version(1, action, context.actor_id, now, created_shots)
             storyboard = Storyboard(
@@ -234,7 +296,7 @@ class StoryboardService:
                 updated_at=now,
                 source_context=source_context,
             )
-            audit = self._audit(context, action, storyboard_id, "succeeded", {}, _summary(storyboard))
+            audit = self._audit(context, action, storyboard_id, "succeeded", origin or {}, _summary(storyboard))
             outcome = self._repository.commit(
                 context.scope,
                 storyboard,
@@ -280,6 +342,15 @@ class StoryboardService:
                 raise ContractViolation("SHOT_NOT_FOUND", details={"shot_ids": missing})
             for edit in edit_tuple:
                 current = by_id[edit.shot_id]
+                if (
+                    edit.shot_number is not None
+                    and edit.shot_number != current.shot_number
+                    and any(
+                        other.shot_id != edit.shot_id and other.shot_number == edit.shot_number
+                        for other in by_id.values()
+                    )
+                ):
+                    raise ContractViolation("DUPLICATE_SHOT_NUMBER")
                 by_id[edit.shot_id] = replace(
                     current,
                     shot_number=edit.shot_number if edit.shot_number is not None else current.shot_number,

@@ -772,6 +772,7 @@ else:
             upload_store=_storyboard_runtime.upload_store,
             smart_draft_generator=_storyboard_runtime.generate_smart_drafts,
             check_episode_binding=_storyboard_runtime.check_episode_binding,
+            asset_names=_storyboard_runtime.asset_names,
             prompt_repository=_storyboard_runtime.prompt_repository,
             audit_repository=_storyboard_runtime.audit_repository,
             generation_runtime=_generation_runtime,

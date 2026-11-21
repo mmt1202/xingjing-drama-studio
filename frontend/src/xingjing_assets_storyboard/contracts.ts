@@ -48,6 +48,16 @@ export interface PageResult<T> {
   readonly collectionVersion?: number;
   readonly requestId?: string;
   readonly qualityPolicy?: QualityPolicyDescriptor;
+  readonly shotList?: ShotListInfo;
+}
+
+export interface ShotListInfo {
+  readonly boards: readonly { id: string; episodeId: string; version: number; status: WorkStatus; count: number }[];
+  readonly boardId: string | null;
+  readonly canEdit?: boolean;
+  readonly requestedBoardUnavailable?: boolean;
+  readonly order: readonly string[];
+  readonly offset: number;
 }
 
 export interface QualityPolicyDescriptor {
@@ -303,6 +313,7 @@ export interface AssetProfileDraft {
 }
 
 export interface ShotActionResult {
+  readonly storyboardId?: string;
   readonly shot?: ShotItem;
   readonly shots?: readonly ShotItem[];
   readonly task?: TaskReceipt;
@@ -335,6 +346,7 @@ export type AssetAction =
 
 export type ShotAction =
   | "generateShots"
+  | "reviseStoryboard"
   | "updateShot"
   | "batchUpdate"
   | "reorder"
@@ -369,6 +381,7 @@ export interface AssetListQuery extends PageQuery {
 }
 
 export interface ShotListQuery extends PageQuery {
+  readonly browseStoryboard?: boolean;
   readonly storyboardId?: string;
   readonly includeQualityPolicy?: boolean;
   readonly status?: WorkStatus;

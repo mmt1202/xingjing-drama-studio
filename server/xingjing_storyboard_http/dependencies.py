@@ -30,6 +30,7 @@ class StoryboardHttpDependencies:
     audit_repository: SqlAlchemyStoryboardRepository | None = None
     generation_runtime: GenerationRuntime | None = None
     check_episode_binding: Callable[[AccessContext, str, str, str], None] | None = None
+    asset_names: Callable[[AccessContext, set[str]], dict[str, str]] | None = None
 
 
 def create_storyboard_http_dependencies(
@@ -43,6 +44,7 @@ def create_storyboard_http_dependencies(
     audit_repository: SqlAlchemyStoryboardRepository | None = None,
     generation_runtime: GenerationRuntime | None = None,
     check_episode_binding: Callable[[AccessContext, str, str, str], None] | None = None,
+    asset_names: Callable[[AccessContext, set[str]], dict[str, str]] | None = None,
 ) -> StoryboardHttpDependencies:
     return StoryboardHttpDependencies(
         service=service,
@@ -54,4 +56,5 @@ def create_storyboard_http_dependencies(
         audit_repository=audit_repository,
         generation_runtime=generation_runtime,
         check_episode_binding=check_episode_binding,
+        asset_names=asset_names,
     )

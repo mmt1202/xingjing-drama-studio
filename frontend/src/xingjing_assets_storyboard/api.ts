@@ -52,6 +52,7 @@ interface ResponseMeta {
   readonly page?: { readonly nextToken?: string | null; readonly total?: number };
   readonly collectionVersion?: number;
   readonly qualityPolicy?: import("./contracts").QualityPolicyDescriptor;
+  readonly shotList?: import("./contracts").ShotListInfo;
 }
 
 interface Envelope<T> {
@@ -300,6 +301,8 @@ export function createAssetsStoryboardApi(
       search.set("hasIssues", String(query.hasIssues));
     if (scope.episodeId) search.set("episodeId", scope.episodeId);
     if ("storyboardId" in query && query.storyboardId) search.set("storyboardId", query.storyboardId);
+    if ("browseStoryboard" in query && query.browseStoryboard) search.set("browseStoryboard", "true");
+    if ("includeQualityPolicy" in query && query.includeQualityPolicy) search.set("includeQualityPolicy", "true");
     const response = await request<readonly T[]>(
       scope,
       `${path}?${search}`,
@@ -312,6 +315,7 @@ export function createAssetsStoryboardApi(
       total: response.meta?.page?.total,
       collectionVersion: response.meta?.collectionVersion,
       qualityPolicy: response.meta?.qualityPolicy,
+      shotList: response.meta?.shotList,
       requestId: response.meta?.requestId,
     };
   }

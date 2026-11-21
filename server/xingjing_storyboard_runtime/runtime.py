@@ -22,6 +22,7 @@ from lib.text_backends.base import DEFAULT_MAX_OUTPUT_TOKENS, TextGenerationRequ
 from lib.text_generator import TextGenerator
 from lib.text_utils import strip_json_code_fences
 from server.xingjing_assets_persistence import AssetScope, SqlAlchemyAssetRepository
+from server.xingjing_assets_persistence.repository import AssetRow
 from server.xingjing_content.models import (
     director_confirmation_from_dict,
     director_version_from_dict,
@@ -175,6 +176,20 @@ class StoryboardRuntime:
     @property
     def trusted_context_resolver(self) -> TrustedContextResolver:
         return self._context_resolver
+
+    def asset_names(self, context: AccessContext, ids: set[str]) -> dict[str, str]:
+        if not ids or "asset.view" not in context.permissions:
+            return {}
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(AssetRow.asset_id, AssetRow.name).where(
+                    AssetRow.tenant_id == context.tenant_id,
+                    AssetRow.workspace_id == context.workspace_id,
+                    AssetRow.owner_project_id == context.project_id,
+                    AssetRow.asset_id.in_(ids),
+                )
+            )
+            return dict(rows.tuples().all())
 
     def project_scope_authorizer(self, trusted: TrustedWorkspaceContext, project_id: str) -> bool:
         """确认路径项目属于身份服务选定的工作区，失败时不得放行。"""

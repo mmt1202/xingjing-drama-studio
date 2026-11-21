@@ -10,7 +10,7 @@ interface PaginationProps {
   total: number;
   onOffsetChange: (offset: number) => void;
   label?: string;
-  unit?: "items" | "episodes" | "chapters" | "documents";
+  unit?: "items" | "episodes" | "chapters" | "documents" | "shots";
   disabled?: boolean;
 }
 
@@ -98,7 +98,9 @@ export function Pagination({ offset, pageSize, total, onOffsetChange, label, uni
   const current = Math.floor(offset / pageSize) + 1;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const format = new Intl.NumberFormat(i18n.resolvedLanguage);
-  const range = offset < total ? format.format(offset + 1) + "–" + format.format(Math.min(offset + pageSize, total)) : "—";
+  const first = offset + 1;
+  const last = Math.min(offset + pageSize, total);
+  const range = first > last ? "—" : first === last ? format.format(first) : format.format(first) + "–" + format.format(last);
   function select(page: number) {
     if (!disabled && page >= 1 && page <= pages && page !== current) onOffsetChange((page - 1) * pageSize);
   }

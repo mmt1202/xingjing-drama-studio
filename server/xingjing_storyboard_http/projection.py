@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from server.xingjing_storyboard.models import QualitySeverity, Shot, Storyboard
 
 
-def project_shot(storyboard: Storyboard, shot: Shot) -> dict[str, object]:
+def project_shot(storyboard: Storyboard, shot: Shot, names: Mapping[str, str] | None = None) -> dict[str, object]:
     versions: list[dict[str, object]] = []
     for version in storyboard.versions:
         versioned_shot = next((item for item in version.shots if item.shot_id == shot.shot_id), None)
@@ -99,7 +100,7 @@ def project_shot(storyboard: Storyboard, shot: Shot) -> dict[str, object]:
                 "id": reference.asset_id,
                 "versionId": reference.asset_version_id,
                 "type": reference.kind.value,
-                "name": reference.asset_id,
+                "name": reference.asset_id if names is None else names.get(reference.asset_id, ""),
             }
             for reference in shot.asset_references
         ],

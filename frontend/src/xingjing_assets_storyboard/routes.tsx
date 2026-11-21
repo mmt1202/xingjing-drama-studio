@@ -10,6 +10,7 @@ export interface AssetsStoryboardRouteProps {
   readonly episodeId?: string;
   readonly assetId?: string;
   readonly shotId?: string;
+  readonly boardId?: string;
   readonly projectName?: string;
   readonly api?: AssetsStoryboardPort;
   readonly onNavigate?: AssetsWorkspaceProps["onNavigate"];
@@ -27,8 +28,8 @@ function assetProps(props: AssetsStoryboardRouteProps): Pick<AssetsWorkspaceProp
   return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, assetId: props.assetId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigate, initialScriptVersionId: props.scriptVersionId, initialScriptId: props.scriptId, episodeBindings: props.episodeBindings, onReviewScripts: props.onReviewScripts };
 }
 
-function shotProps(props: AssetsStoryboardRouteProps): Pick<StoryboardWorkspaceProps, "scope" | "shotId" | "projectName" | "api" | "onNavigate" | "initialScriptVersionId" | "initialAssetSnapshotId" | "onOpenSmart" | "onSmartChange"> {
-  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, shotId: props.shotId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigateStoryboard, initialScriptVersionId: props.scriptVersionId, initialAssetSnapshotId: props.assetSnapshotId, onOpenSmart: props.onOpenSmart, onSmartChange: props.onSmartChange };
+function shotProps(props: AssetsStoryboardRouteProps): Pick<StoryboardWorkspaceProps, "scope" | "shotId" | "projectName" | "api" | "onNavigate" | "initialBoardId" | "initialScriptVersionId" | "initialAssetSnapshotId" | "onOpenSmart" | "onSmartChange"> {
+  return { scope: { workspaceId: props.workspaceId, projectId: props.projectId, episodeId: props.episodeId }, shotId: props.shotId, initialBoardId: props.boardId, projectName: props.projectName, api: props.api, onNavigate: props.onNavigateStoryboard, initialScriptVersionId: props.scriptVersionId, initialAssetSnapshotId: props.assetSnapshotId, onOpenSmart: props.onOpenSmart, onSmartChange: props.onSmartChange };
 }
 
 export const AssetExtractionPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="extract" />;

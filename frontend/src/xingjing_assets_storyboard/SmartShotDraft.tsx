@@ -145,6 +145,7 @@ export function SmartShotDraft({
       setBusy(false);
     }
   }
+  const boardQuery = "?" + new URLSearchParams({ boardId: board.id }).toString();
   return (
     <section className="ss-panel" aria-label={t("board")}>
       <div className="ss-heading">
@@ -158,22 +159,22 @@ export function SmartShotDraft({
         <div className="ss-tools">
           {onOpen && (
             <>
-              <button className="ss-btn" disabled={busy} onClick={() => onOpen("shots", input.number)}>
+              <button className="ss-btn" disabled={busy} onClick={() => onOpen("shots" + boardQuery, input.number)}>
                 {t("shotList")}
               </button>
               <button
                 className="ss-btn"
                 disabled={busy}
-                onClick={() => onOpen("shots-quality", input.number)}
+                onClick={() => onOpen("shots-quality" + boardQuery, input.number)}
               >
                 <CheckCheck size={15} />
                 {t("quality")}
               </button>
-              <button className="ss-btn" disabled={busy} onClick={() => onOpen("shots-batch", input.number)}>
+              <button className="ss-btn" disabled={busy} onClick={() => onOpen("shots-batch" + boardQuery, input.number)}>
                 <SlidersHorizontal size={15} />
                 {t("batch")}
               </button>
-              <button className="ss-btn" disabled={busy} onClick={() => onOpen("storyboard", input.number)}>
+              <button className="ss-btn" disabled={busy} onClick={() => onOpen("storyboard" + boardQuery, input.number)}>
                 {t("boardPage")}
                 <ArrowRight size={15} />
               </button>

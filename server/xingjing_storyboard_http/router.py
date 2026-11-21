@@ -30,7 +30,7 @@ from server.xingjing_storyboard.errors import (
     VersionConflict,
 )
 from server.xingjing_storyboard.exchange import ExportFormat, import_shots
-from server.xingjing_storyboard.models import AssetKind, AssetReference, Storyboard, StoryboardStatus
+from server.xingjing_storyboard.models import AssetKind, AssetReference, Shot, Storyboard, StoryboardStatus
 from server.xingjing_storyboard.ports import AuditEvent
 from server.xingjing_storyboard.service import AccessContext, ShotEdit, SmartDraftResult
 
@@ -268,36 +268,72 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         context = await _access_context(request, project_id, dependencies)
         episode_id = request.query_params.get("episodeId")
         board_id = request.query_params.get("storyboardId")
-        if board_id:
+        browse = request.query_params.get("browseStoryboard") == "true"
+        if board_id and not browse:
             board = dependencies.service.get_storyboard(context, board_id)
-            storyboards = (board,) if episode_id is None or board.episode_id == episode_id else ()
+            storyboards = (board,)
         else:
             storyboards = _all_storyboards(dependencies, context)
+        storyboards = tuple(board for board in storyboards if episode_id is None or board.episode_id == episode_id)
+        boards = sorted(storyboards, key=lambda board: (board.created_at, board.storyboard_id))
+        if browse and boards:
+            picked = next((board for board in boards if board.storyboard_id == board_id), boards[-1])
+            storyboards = (picked,)
         search = (request.query_params.get("search") or "").casefold()
         status = request.query_params.get("status")
         has_issues = _optional_bool(request.query_params.get("hasIssues"))
         items = [
-            project_shot(storyboard, shot)
+            (storyboard, shot)
             for storyboard in storyboards
-            if episode_id is None or storyboard.episode_id == episode_id
             for shot in storyboard.shots
-            if _matches(storyboard, shot.shot_id, shot.shot_number, shot.prompt, search, status, has_issues)
+            if _matches(storyboard, shot, search, status, has_issues)
         ]
-        items.sort(key=lambda item: (str(item["episodeId"]), int(item["sequenceNo"]), str(item["id"])))
+        items.sort(key=lambda pair: (pair[0].episode_id, pair[1].position, pair[1].shot_id))
         offset = _non_negative_integer(request.query_params.get("pageToken"), default=0, code="INVALID_PAGE_TOKEN")
         page_size = _bounded_integer(
             request.query_params.get("pageSize"), default=20, minimum=1, maximum=200, code="INVALID_PAGE_SIZE"
         )
-        selected = items[offset : offset + page_size]
-        selected = [await _with_generation_facts(item, context, dependencies) for item in selected]
+        if browse and offset >= len(items):
+            offset = max(0, (len(items) - 1) // page_size * page_size)
+        page = items[offset : offset + page_size]
+        names = await _page_asset_names(page, context, dependencies)
+        selected = [
+            await _with_generation_facts(project_shot(board, shot, names), context, dependencies)
+            for board, shot in page
+        ]
         next_token = str(offset + page_size) if offset + page_size < len(items) else None
         collection_version = max((storyboard.version for storyboard in storyboards), default=0)
         return {
             "data": selected,
             "meta": {
                 "requestId": context.request_id,
-                "page": {"nextToken": next_token},
+                "page": {"nextToken": next_token, **({"total": len(items)} if browse else {})},
                 "collectionVersion": collection_version,
+                **(
+                    {
+                        "shotList": {
+                            "boards": [
+                                {
+                                    "id": board.storyboard_id,
+                                    "episodeId": board.episode_id,
+                                    "version": board.version,
+                                    "status": board.status.value,
+                                    "count": len(board.shots),
+                                }
+                                for board in boards
+                            ],
+                            "boardId": storyboards[0].storyboard_id if storyboards else None,
+                            "canEdit": "shot.manage" in context.permissions,
+                            "requestedBoardUnavailable": bool(
+                                board_id and all(b.storyboard_id != board_id for b in boards)
+                            ),
+                            "offset": offset,
+                            "order": [shot.shot_id for _, shot in items],
+                        }
+                    }
+                    if browse
+                    else {}
+                ),
                 **(
                     {"qualityPolicy": dependencies.service.quality_policy_descriptor()}
                     if request.query_params.get("includeQualityPolicy") == "true"
@@ -312,7 +348,8 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         for storyboard in _all_storyboards(dependencies, context):
             shot = next((item for item in storyboard.shots if item.shot_id == shot_id), None)
             if shot is not None:
-                projected = await _with_generation_facts(project_shot(storyboard, shot), context, dependencies)
+                names = await _page_asset_names([(storyboard, shot)], context, dependencies)
+                projected = await _with_generation_facts(project_shot(storyboard, shot, names), context, dependencies)
                 return {"data": projected, "meta": {"requestId": context.request_id}}
         raise HttpContractError("SHOT_NOT_FOUND", status_code=404)
 
@@ -322,6 +359,19 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
         body = await _json_object(request)
         action = _required_text(body, "action")
         payload = _object(body.get("payload"), code="INVALID_ACTION_PAYLOAD")
+        if action == "reviseStoryboard":
+            revision = dependencies.service.revise_frozen_storyboard(
+                context,
+                storyboard_id=_required_text(payload, "storyboardId"),
+                expected_version=_expected_version(request, payload),
+                idempotency_key=request.headers.get("Idempotency-Key", ""),
+            )
+            return _action_response(
+                context,
+                {"storyboardId": revision.storyboard.storyboard_id},
+                replayed=revision.replayed,
+                version=revision.storyboard.version,
+            )
         if action == "preflightImport":
             _require_manage(context)
             upload = _upload(dependencies, context, _required_text(payload, "uploadId"))
@@ -1021,17 +1071,25 @@ def _all_storyboards(dependencies: StoryboardHttpDependencies, context: AccessCo
             return tuple(result)
 
 
+async def _page_asset_names(
+    page: Sequence[tuple[Storyboard, Shot]], context: AccessContext, dependencies: StoryboardHttpDependencies
+) -> dict[str, str] | None:
+    if dependencies.asset_names is None:
+        return None
+    identifiers = {ref.asset_id for _, shot in page for ref in shot.asset_references}
+    if "asset.view" not in context.permissions or not identifiers:
+        return {}
+    return await asyncio.to_thread(dependencies.asset_names, context, identifiers)
+
+
 def _matches(
     storyboard: Storyboard,
-    shot_id: str,
-    shot_number: str,
-    prompt: str,
+    shot: Shot,
     search: str,
     status: str | None,
     has_issues: bool | None,
 ) -> bool:
-    shot = next(item for item in storyboard.shots if item.shot_id == shot_id)
-    if search and search not in f"{shot_id}\n{shot_number}\n{prompt}".casefold():
+    if search and search not in f"{shot.shot_id}\n{shot.shot_number}\n{shot.prompt}".casefold():
         return False
     if status and status not in {storyboard.status.value, shot.generation_status.value}:
         return False
@@ -1118,6 +1176,7 @@ def _batch_edits(payload: Mapping[str, object]) -> tuple[ShotEdit, ...]:
         if key not in {"modelPolicy", "costTier"}
     }
     permitted = {
+        "shotNo": "shot_number",
         "shotSize": "shot_size",
         "durationMs": "duration_ms",
         "dialogue": "dialogue",
