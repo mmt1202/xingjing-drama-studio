@@ -87,6 +87,7 @@ class TimelineSourceSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str
+    title: str | None = None
     version_id: str
     duration_ms: int
     content_sha256: str

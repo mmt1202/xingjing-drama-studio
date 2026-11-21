@@ -1,6 +1,7 @@
 import { SequentialPagination } from "@/components/ui/Pagination";
+import { useStudioText } from "@/xingjing_generation_audio/studio-i18n";
 import { useCallback, useEffect, useState } from "react";
-import { useProjectNavigationBlocker } from "@/xingjing_creator_projects/ProjectFlowShell";
+import { useOptionalProjectFlow, useProjectNavigationBlocker } from "@/xingjing_creator_projects/ProjectFlowShell";
 
 import {
   EditingApiError,
@@ -114,6 +115,9 @@ export function M08EditingWorkspace({
   initialEpisodeId,
   pageId = "CR-028",
 }: M08EditingWorkspaceProps) {
+  const { t } = useStudioText();
+  const projectFlow = useOptionalProjectFlow();
+  const soundType = (source: EditingSourceVersion) => t(source.media_kind === "subtitle" ? "subtitles" : source.media_kind === "voice" ? "sounds" : source.media_kind);
   const copy = pageCopy[pageId as M08PageId] ?? pageCopy["CR-028"];
   const [activeTimelineId, setActiveTimelineId] = useState(timelineId);
   const [state, setState] = useState<LoadState>("loading");
@@ -562,9 +566,15 @@ export function M08EditingWorkspace({
                     ))}
                   </div>
                 ) : (
-                  <p className="mt-4 text-sm text-slate-400">
-                    当前项目还没有时间线。请用右侧表单从已完成的视频资产建立第一条。
-                  </p>
+                  <div className="mt-4 text-sm text-slate-400">
+                    <p>{t("editEmpty")}</p>
+                    {projectFlow && !sources.some(source => source.media_kind === "video") && <button type="button" className="mt-2 text-violet-300 underline" onClick={() => projectFlow.go("generation")}>{t("prepareVideo")}</button>}
+                    {sources.some(source => source.media_kind !== "video") && <details className="mt-3">
+                      <summary className="cursor-pointer text-slate-200">{t("readyForEdit")}</summary>
+                      <ul className="mt-2 space-y-1">{sources.filter(source => source.media_kind !== "video").map(source =>
+                        <li key={source.version_id}>{source.title || soundType(source)} · {duration(source.duration_ms)}</li>)}</ul>
+                    </details>}
+                  </div>
                 )}
                 <SequentialPagination count={timelines.length} page={Math.floor(timelineOffset / 20) + 1} previous={timelineOffset > 0 ? () => setTimelineOffset(Math.max(0, timelineOffset - 20)) : undefined} next={timelines.length >= 20 ? () => setTimelineOffset(timelineOffset + 20) : undefined} />
               </section>
@@ -943,7 +953,7 @@ export function M08EditingWorkspace({
             {pageId === "CR-028" ? (
               <div className="mt-5 border border-cyan-300/25 p-4">
                 <h3 className="font-semibold text-cyan-100">
-                  接入 M07 配音、字幕、BGM 或音效
+                  {t("readyForEdit")}
                 </h3>
                 <select
                   value={additionalSourceVersionId}
@@ -952,7 +962,7 @@ export function M08EditingWorkspace({
                   }
                   className="mt-3 block w-full border border-slate-700 bg-slate-950 px-3 py-2"
                 >
-                  <option value="">请选择已完成音频版本</option>
+                  <option value="">{t("pickForEdit")}</option>
                   {sources
                     .filter((source) => source.media_kind !== "video")
                     .map((source) => (
@@ -960,7 +970,7 @@ export function M08EditingWorkspace({
                         key={source.version_id}
                         value={source.version_id}
                       >
-                        {source.media_kind.toUpperCase()} · {source.asset_id} ·{" "}
+                        {source.title || soundType(source)} ·{" "}
                         {duration(source.duration_ms)}
                       </option>
                     ))}
@@ -971,7 +981,7 @@ export function M08EditingWorkspace({
                   onClick={() => void addAudioTrack()}
                   className="mt-3 border border-cyan-300 px-4 py-2 text-sm text-cyan-100 disabled:opacity-50"
                 >
-                  添加版本化音轨
+                  {t("addToEdit")}
                 </button>
               </div>
             ) : null}
@@ -1082,7 +1092,7 @@ export function M08EditingWorkspace({
                           key={source.version_id}
                           value={source.version_id}
                         >
-                          {source.asset_id} · {duration(source.duration_ms)}
+                          {source.title || (source.media_kind === "video" ? source.asset_id : soundType(source))} · {duration(source.duration_ms)}
                         </option>
                       ))}
                   </select>

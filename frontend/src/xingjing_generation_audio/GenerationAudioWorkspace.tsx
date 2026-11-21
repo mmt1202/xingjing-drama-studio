@@ -3,48 +3,50 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthenticatedVideo } from "@/components/shared/AuthenticatedVideo";
 import { BudgetScopePicker, type BudgetScope } from "@/xingjing_budget/BudgetScopePicker";
 import { useAudioBudgetTranslation } from "./budget-i18n";
+import { AudioStudio } from "./AudioStudio";
+import type { AssetsStoryboardPort } from "@/xingjing_assets_storyboard/contracts";
 import { createGenerationAudioApi, XingjingApiError } from "./api";
 import { useAuthStore } from "@/stores/auth-store";
-import { AuthSessionError, getSessionEpoch, getTokenForSession } from "@/utils/auth";
-import { paidAudioRecoveryKey, readPaidAudioOperation, rememberPaidAudioOperation, type PaidAudioOperation, type PaidAudioPayload } from "./paid-request-recovery";
+import { AuthSessionError, getTokenForSession } from "@/utils/auth";
+import { usePaidMediaAction } from "./usePaidMediaAction";
 import {
   createIdempotencyKey,
   type AudioTrack,
-  type AudioTrackKind,
   type LipSyncVersion,
   type MediaTask,
   type MediaTaskKind,
-  type SubtitleFormat,
   type SubtitleTrack,
   type TrackVersion,
 } from "./contracts";
 
-type ApiClient = Omit<ReturnType<typeof createGenerationAudioApi>, "budgetBinding"> & Partial<Pick<ReturnType<typeof createGenerationAudioApi>, "budgetBinding">>;
+export type AudioClient = Omit<ReturnType<typeof createGenerationAudioApi>, "budgetBinding" | "upload"> & Partial<Pick<ReturnType<typeof createGenerationAudioApi>, "budgetBinding" | "upload">>;
 export type AudioPageId =
   "CR-007" | "CR-008" | "CR-056" | "CR-057" | "CR-058" | "CR-059" | "CR-105";
 export interface GenerationAudioWorkspaceProps {
   workspaceId?: string;
   projectId: string;
   projectName?: string;
-  api?: ApiClient;
+  api?: AudioClient;
+  episode?: { number: number; title: string };
+  shotsApi?: Pick<AssetsStoryboardPort, "listShots">;
+  onEditFilm?: () => void;
   pageId?: AudioPageId;
 }
 type LoadState = "loading" | "ready" | "forbidden" | "error";
 type SelectedTrack =
   | { kind: "audio"; track: AudioTrack }
   | { kind: "subtitle"; track: SubtitleTrack };
+type LipPageId = "CR-056" | "CR-057" | "CR-058" | "CR-059";
 type AudioSection =
-  | "create"
   | "tracks"
   | "lip-create"
   | "lip-compare"
-  | "version"
   | "task-create"
   | "task-cancel"
   | "tasks";
 
 const PAGE_CONFIG: Record<
-  AudioPageId,
+  LipPageId,
   {
     title: string;
     description: string;
@@ -52,31 +54,6 @@ const PAGE_CONFIG: Record<
     taskKinds?: ReadonlySet<MediaTaskKind>;
   }
 > = {
-  "CR-007": {
-    title: "音频与字幕工作台",
-    description: "管理配音、音轨、字幕轨、不可变版本与媒体任务。",
-    sections: new Set([
-      "create",
-      "tracks",
-      "version",
-      "task-create",
-      "task-cancel",
-      "tasks",
-    ]),
-  },
-  "CR-008": {
-    title: "BGM 与音效混音",
-    description: "管理 BGM、音效与混音轨，并提交真实混音任务。",
-    sections: new Set([
-      "create",
-      "tracks",
-      "version",
-      "task-create",
-      "task-cancel",
-      "tasks",
-    ]),
-    taskKinds: new Set(["mix"]),
-  },
   "CR-056": {
     title: "对口型生成检查",
     description: "核对音频版本、字幕版本、输入视频和校准参数后创建候选。",
@@ -107,12 +84,7 @@ const PAGE_CONFIG: Record<
     ]),
     taskKinds: new Set(["lip_sync"]),
   },
-  "CR-105": {
-    title: "字幕时间轴",
-    description: "维护字幕轨、时间码内容和不可变字幕版本。",
-    sections: new Set(["create", "tracks", "version", "task-create", "tasks"]),
-    taskKinds: new Set(["subtitle"]),
-  },
+
 };
 
 function newId() {
@@ -134,7 +106,11 @@ function timestamp(value?: string) {
 export function GenerationAudioWorkspace(props: GenerationAudioWorkspaceProps) {
   const epoch = useAuthStore((state) => state.sessionEpoch);
   const api = useMemo(() => props.api ?? createGenerationAudioApi({ getAccessToken: () => getTokenForSession(epoch) }), [props.api, epoch]);
-  return <GenerationAudioWorkspaceContent key={JSON.stringify([epoch, props.workspaceId, props.projectId])} {...props} api={api} sessionEpoch={epoch} />;
+  if (!props.pageId || props.pageId === "CR-007" || props.pageId === "CR-008" || props.pageId === "CR-105") {
+    return <AudioStudio key={JSON.stringify([epoch, props.workspaceId, props.projectId, props.episode?.number, props.pageId])}
+      {...props} api={api} epoch={epoch} />;
+  }
+  return <GenerationAudioWorkspaceContent key={JSON.stringify([epoch, props.workspaceId, props.projectId])} {...props} pageId={props.pageId} api={api} sessionEpoch={epoch} />;
 }
 
 function GenerationAudioWorkspaceContent({
@@ -143,8 +119,8 @@ function GenerationAudioWorkspaceContent({
   projectName,
   api,
   sessionEpoch,
-  pageId = "CR-007",
-}: GenerationAudioWorkspaceProps & { api: ApiClient; sessionEpoch: string }) {
+  pageId,
+}: GenerationAudioWorkspaceProps & { api: AudioClient; sessionEpoch: string; pageId: LipPageId }) {
   const { t: budgetText } = useAudioBudgetTranslation();
   const page = PAGE_CONFIG[pageId];
   const [state, setState] = useState<LoadState>("loading");
@@ -157,9 +133,7 @@ function GenerationAudioWorkspaceContent({
   const [taskPage, setTaskPage] = useState(0);
   const [trackQuery, setTrackQuery] = useState("");
   const [appliedTrackQuery, setAppliedTrackQuery] = useState("");
-  const [trackKindFilter, setTrackKindFilter] = useState(
-    pageId === "CR-008" ? "bgm" : "",
-  );
+  const [trackKindFilter, setTrackKindFilter] = useState("");
   const [trackStateFilter, setTrackStateFilter] = useState("");
   const [taskQuery, setTaskQuery] = useState("");
   const [appliedTaskQuery, setAppliedTaskQuery] = useState("");
@@ -168,26 +142,7 @@ function GenerationAudioWorkspaceContent({
   const [trackVersions, setTrackVersions] = useState<TrackVersion[]>([]);
   const [message, setMessage] = useState("");
   const [selected, setSelected] = useState<SelectedTrack>();
-  const [audioTitle, setAudioTitle] = useState("");
-  const [audioKind, setAudioKind] = useState<AudioTrackKind>(
-    pageId === "CR-008" ? "bgm" : "dialogue",
-  );
-  const [subtitleTitle, setSubtitleTitle] = useState("");
-  const [language, setLanguage] = useState("zh-CN");
-  const [format, setFormat] = useState<SubtitleFormat>("srt");
-  const [versionPayload, setVersionPayload] = useState(
-    '{"durationMs":1000,"clips":[],"loudnessLufs":-16}',
-  );
-  const [objectKey, setObjectKey] = useState("");
-  const [taskKind, setTaskKind] = useState<MediaTaskKind>(
-    pageId === "CR-008"
-      ? "mix"
-      : pageId === "CR-105"
-        ? "subtitle"
-        : ["CR-056", "CR-057", "CR-058", "CR-059"].includes(pageId)
-          ? "lip_sync"
-          : "audio",
-  );
+  const [taskKind, setTaskKind] = useState<MediaTaskKind>("lip_sync");
   const [taskId, setTaskId] = useState("");
   const [taskResourceType, setTaskResourceType] = useState("audio_track");
   const [taskResourceId, setTaskResourceId] = useState("");
@@ -222,13 +177,6 @@ function GenerationAudioWorkspaceContent({
   const [lipOutputKey, setLipOutputKey] = useState("");
   const [lipSourceTaskId, setLipSourceTaskId] = useState("");
   const pendingKeys = useRef(new Map<string, string>());
-  const recoveryKey = paidAudioRecoveryKey(sessionEpoch, workspaceId, projectId);
-  const [paidOperation, setPaidOperation] = useState(() => readPaidAudioOperation(recoveryKey));
-  const paidOperationRef = useRef(paidOperation);
-  const [paidBusy, setPaidBusy] = useState(false);
-  const paidInFlight = useRef(false);
-  const mounted = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const visibleTasks = page.taskKinds
     ? mediaTasks.filter((task) => page.taskKinds?.has(task.task_kind))
     : mediaTasks;
@@ -302,6 +250,10 @@ function GenerationAudioWorkspaceContent({
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const { original: paidOperation, busy: paidBusy, pending: paidOperationRef, execute: executePaid, submit: submitPaid } =
+    usePaidMediaAction(api, projectId, workspaceId, sessionEpoch, () => void load(),
+      error => setMessage(error instanceof Error && error.message === "recoveryUnavailable" ? budgetText("recoveryUnavailable") : errorText(error)));
+
   const runOnce = useCallback(
     async (operation: string, execute: (key: string) => Promise<unknown>) => {
       if (paidOperationRef.current) return;
@@ -321,32 +273,8 @@ function GenerationAudioWorkspaceContent({
         pendingKeys.current.delete(operation);
       }
     },
-    [load, projectId],
+    [load, projectId, paidOperationRef],
   );
-
-  async function executePaid(original: PaidAudioOperation) {
-    if (paidInFlight.current || getSessionEpoch() !== sessionEpoch) return;
-    if (!rememberPaidAudioOperation(recoveryKey, original)) { setMessage(budgetText("recoveryUnavailable")); return; }
-    paidOperationRef.current = original; setPaidOperation(original);
-    paidInFlight.current = true; setPaidBusy(true); setMessage("");
-    const current = () => mounted.current && getSessionEpoch() === sessionEpoch;
-    const clear = () => { paidOperationRef.current = undefined; setPaidOperation(undefined); rememberPaidAudioOperation(recoveryKey, undefined); };
-    try {
-      getTokenForSession(sessionEpoch);
-      await api.audioAction(projectId, original.payload, original.key, original.version);
-      if (!current()) return;
-      clear(); await load();
-    } catch (error) {
-      if (!current()) return;
-      setMessage(errorText(error));
-      if (error instanceof XingjingApiError && error.detail.status >= 400 && error.detail.status < 500
-        && ![401, 408].includes(error.detail.status)) clear();
-    } finally { paidInFlight.current = false; if (current()) setPaidBusy(false); }
-  }
-  function submitPaid(payload: PaidAudioPayload, version?: number) {
-    if (paidOperationRef.current || paidInFlight.current) return;
-    void executePaid({ key: createIdempotencyKey(projectId, payload.action, newId()), payload, ...(version === undefined ? {} : { version }) });
-  }
 
   const choose = (next: SelectedTrack) => {
     setSelected(next);
@@ -354,80 +282,12 @@ function GenerationAudioWorkspaceContent({
     setTaskResourceType(
       next.kind === "audio" ? "audio_track" : "subtitle_track",
     );
-    setVersionPayload(
-      next.kind === "subtitle"
-        ? '{"durationMs":1000,"cues":[]}'
-        : next.track.track_kind === "dialogue" ||
-            next.track.track_kind === "voiceover"
-          ? '{"durationMs":1000,"clips":[],"loudnessLufs":-16}'
-          : '{"durationMs":1000,"segments":[],"loudnessLufs":-16}',
-    );
     void api
       .trackVersions(projectId, next.kind, next.track.id)
       .then((response) => setTrackVersions(response.data.versions))
       .catch((error) => setMessage(errorText(error)));
   };
 
-  const createAudioTrack = () =>
-    void runOnce("create-audio-track", (key) =>
-      api.audioAction(
-        projectId,
-        {
-          action: "create_audio_track",
-          trackId: newId(),
-          trackKind: audioKind,
-          title: audioTitle.trim(),
-        },
-        key,
-      ),
-    );
-  const createSubtitleTrack = () =>
-    void runOnce("create-subtitle-track", (key) =>
-      api.audioAction(
-        projectId,
-        {
-          action: "create_subtitle_track",
-          trackId: newId(),
-          language: language.trim(),
-          format,
-          title: subtitleTitle.trim(),
-        },
-        key,
-      ),
-    );
-  const appendVersion = () => {
-    if (!selected) return;
-    try {
-      const payload = JSON.parse(versionPayload) as Record<string, unknown>;
-      const audio = selected.kind === "audio";
-      void runOnce(
-        `append-${selected.kind}-version:${selected.track.id}`,
-        (key) =>
-          api.audioAction(
-            projectId,
-            audio
-              ? {
-                  action: "append_audio_version",
-                  trackId: selected.track.id,
-                  versionId: newId(),
-                  cuePayload: payload,
-                  objectKey: objectKey.trim(),
-                }
-              : {
-                  action: "append_subtitle_version",
-                  trackId: selected.track.id,
-                  versionId: newId(),
-                  cues: payload,
-                  ...(objectKey.trim() ? { objectKey: objectKey.trim() } : {}),
-                },
-            key,
-            selected.track.version,
-          ),
-      );
-    } catch {
-      setMessage("版本内容必须是合法 JSON 对象。");
-    }
-  };
   const requestTask = () =>
     allocationReady && submitPaid(
       {
@@ -640,93 +500,6 @@ function GenerationAudioWorkspaceContent({
         <button type="button" className="mt-3 rounded border border-amber-500/40 px-3 py-2" disabled={paidBusy} onClick={() => void executePaid(paidOperation)}>{budgetText("retryOriginal")}</button>
       </aside> : null}
       <fieldset disabled={Boolean(paidOperation) || paidBusy} className="contents">
-
-      <section
-        className={`mt-6 grid gap-4 lg:grid-cols-2 ${page.sections.has("create") ? "" : "hidden"}`}
-        aria-label="创建轨道"
-      >
-        <form
-          className="rounded border border-slate-700 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (audioTitle.trim()) createAudioTrack();
-          }}
-        >
-          <h2>创建音频轨</h2>
-          <label className="block mt-3">
-            名称
-            <input
-              className="block w-full"
-              value={audioTitle}
-              onChange={(event) => setAudioTitle(event.target.value)}
-              required
-            />
-          </label>
-          <label className="block mt-3">
-            类型
-            <select
-              className="block w-full"
-              value={audioKind}
-              onChange={(event) =>
-                setAudioKind(event.target.value as AudioTrackKind)
-              }
-            >
-              {(["dialogue", "voiceover", "bgm", "sfx", "mix"] as const).map(
-                (value) => (
-                  <option key={value}>{value}</option>
-                ),
-              )}
-            </select>
-          </label>
-          <button className="mt-4" type="submit">
-            创建音频轨
-          </button>
-        </form>
-        <form
-          className="rounded border border-slate-700 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (subtitleTitle.trim() && language.trim()) createSubtitleTrack();
-          }}
-        >
-          <h2>创建字幕轨</h2>
-          <label className="block mt-3">
-            名称
-            <input
-              className="block w-full"
-              value={subtitleTitle}
-              onChange={(event) => setSubtitleTitle(event.target.value)}
-              required
-            />
-          </label>
-          <label className="block mt-3">
-            语言
-            <input
-              className="block w-full"
-              value={language}
-              onChange={(event) => setLanguage(event.target.value)}
-              required
-            />
-          </label>
-          <label className="block mt-3">
-            格式
-            <select
-              className="block w-full"
-              value={format}
-              onChange={(event) =>
-                setFormat(event.target.value as SubtitleFormat)
-              }
-            >
-              {(["srt", "ass", "vtt", "native"] as const).map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
-          </label>
-          <button className="mt-4" type="submit">
-            创建字幕轨
-          </button>
-        </form>
-      </section>
 
       <section
         className={`mt-6 ${page.sections.has("tracks") ? "" : "hidden"}`}
@@ -1077,42 +850,6 @@ function GenerationAudioWorkspaceContent({
         className="mt-6 grid gap-4 lg:grid-cols-2"
         aria-label="受约束写入"
       >
-        <form
-          className={`rounded border border-slate-700 p-4 ${page.sections.has("version") ? "" : "hidden"}`}
-          onSubmit={(event) => {
-            event.preventDefault();
-            appendVersion();
-          }}
-        >
-          <h2>追加 {selected?.kind === "subtitle" ? "字幕" : "音频"}版本</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            {selected
-              ? `${selected.track.title}（If-Match: ${selected.track.version}）`
-              : "先从服务端轨道中选择一项"}
-          </p>
-          <label className="block mt-3">
-            JSON 内容
-            <textarea
-              className="block min-h-28 w-full"
-              value={versionPayload}
-              onChange={(event) => setVersionPayload(event.target.value)}
-              disabled={!selected}
-            />
-          </label>
-          <label className="block mt-3">
-            对象存储 key{selected?.kind === "audio" ? "（必填）" : "（可选）"}
-            <input
-              className="block w-full"
-              value={objectKey}
-              onChange={(event) => setObjectKey(event.target.value)}
-              disabled={!selected}
-              required={selected?.kind === "audio"}
-            />
-          </label>
-          <button className="mt-4" type="submit" disabled={!selected}>
-            追加版本
-          </button>
-        </form>
         <form
           className={`rounded border border-slate-700 p-4 ${page.sections.has("task-create") ? "" : "hidden"}`}
           onSubmit={(event) => {

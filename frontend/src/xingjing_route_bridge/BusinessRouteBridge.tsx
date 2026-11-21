@@ -351,15 +351,21 @@ function ProjectBusinessContent({
           initialTaskId={complianceQuery.get("taskId") ?? undefined}
         />
       );
-    case "audio":
+    case "audio": {
+      const episode = projectFlow?.data.episodes.find(item => String(item.episode) === complianceQuery.get("episodeId"));
       return (
         <GenerationAudioWorkspace
           workspaceId={workspaceId}
           projectId={projectId}
+          projectName={projectFlow?.data.project.name}
+          episode={episode ? { number: episode.episode, title: episode.title } : undefined}
+          shotsApi={assetsStoryboardApi}
+          onEditFilm={() => go("editing-suite")}
           pageId={surface.pageId as AudioPageId}
           api={generationApi}
         />
       );
+    }
     case "postproduction":
       return (
         <M08EditingWorkspace

@@ -17,6 +17,7 @@ export interface EditingPreview {
 
 export interface EditingSourceVersion {
   readonly asset_id: string;
+  readonly title?: string | null;
   readonly version_id: string;
   readonly duration_ms: number;
   readonly content_sha256: string;

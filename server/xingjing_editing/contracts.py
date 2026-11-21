@@ -65,6 +65,7 @@ class SourceMediaVersion(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     asset_id: Identifier
+    title: str | None = None
     version_id: Identifier
     tenant_id: Identifier
     workspace_id: Identifier

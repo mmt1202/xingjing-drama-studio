@@ -109,12 +109,15 @@ class AudioPostgresRepository:
         scope: AudioScope,
         *,
         track_kind: str | None = None,
+        episode_number: int | None = None,
         state: str | None = None,
         query: str | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[tuple[Mapping[str, Any], ...], int]:
         criteria = list(scope.criteria(audio_tracks))
+        if episode_number is not None:
+            criteria.append(audio_tracks.c.episode_number == episode_number)
         if track_kind:
             criteria.append(audio_tracks.c.track_kind == track_kind)
         if state:
@@ -130,11 +133,14 @@ class AudioPostgresRepository:
         *,
         state: str | None = None,
         language: str | None = None,
+        episode_number: int | None = None,
         query: str | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[tuple[Mapping[str, Any], ...], int]:
         criteria = list(scope.criteria(subtitle_tracks))
+        if episode_number is not None:
+            criteria.append(subtitle_tracks.c.episode_number == episode_number)
         if state:
             criteria.append(subtitle_tracks.c.state == state)
         if language:
@@ -522,6 +528,7 @@ class AudioPostgresRepository:
         scope: AudioScope,
         track_id: str,
         track_kind: str,
+        episode_number: int | None = None,
         title: str,
         actor_id: str,
         request_id: str,
@@ -532,6 +539,7 @@ class AudioPostgresRepository:
             "id": track_id,
             **scope.values(),
             "track_kind": track_kind,
+            "episode_number": episode_number,
             "title": title,
             "created_by": actor_id,
         }
@@ -558,6 +566,17 @@ class AudioPostgresRepository:
         limit: int,
     ) -> tuple[tuple[Mapping[str, Any], ...], int]:
         criteria = list(scope.criteria(generation_tasks))
+        titles = [
+            select(table.c.title)
+            .where(
+                *scope.criteria(table),
+                table.c.id == generation_tasks.c.resource_id,
+                generation_tasks.c.resource_type == kind,
+            )
+            .scalar_subquery()
+            for table, kind in ((audio_tracks, "audio_track"), (subtitle_tracks, "subtitle_track"))
+        ]
+        resource_title = func.coalesce(*titles)
         if status:
             criteria.append(generation_tasks.c.status == status)
         if task_kind:
@@ -569,12 +588,14 @@ class AudioPostgresRepository:
                     generation_tasks.c.id.ilike(pattern),
                     generation_tasks.c.resource_id.ilike(pattern),
                     generation_tasks.c.provider_task_id.ilike(pattern),
+                    resource_title.ilike(pattern),
                 )
             )
         async with self._session_factory() as session:
             rows = await session.execute(
                 select(
                     generation_tasks,
+                    resource_title.label("resource_title"),
                     audio_billing_holds.c.currency.label("billing_currency"),
                     audio_billing_holds.c.estimated_minor,
                     audio_billing_holds.c.actual_minor,
@@ -634,6 +655,7 @@ class AudioPostgresRepository:
         scope: AudioScope,
         track_id: str,
         language: str,
+        episode_number: int | None = None,
         format: str,
         title: str,
         actor_id: str,
@@ -645,6 +667,7 @@ class AudioPostgresRepository:
             "id": track_id,
             **scope.values(),
             "language": language,
+            "episode_number": episode_number,
             "format": format,
             "title": title,
             "created_by": actor_id,

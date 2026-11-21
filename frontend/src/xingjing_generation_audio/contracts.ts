@@ -4,6 +4,7 @@ export type TrackState = "draft" | "ready" | "archived";
 export type MediaTaskKind = "audio" | "subtitle" | "lip_sync" | "mix";
 
 export interface AudioTrack {
+  episode_number?: number | null;
   id: string;
   track_kind: AudioTrackKind;
   title: string;
@@ -14,6 +15,7 @@ export interface AudioTrack {
 }
 
 export interface SubtitleTrack {
+  episode_number?: number | null;
   id: string;
   language: string;
   format: SubtitleFormat;
@@ -25,6 +27,7 @@ export interface SubtitleTrack {
 }
 
 export interface MediaTask {
+  resource_title?: string | null;
   id: string;
   task_kind: MediaTaskKind;
   resource_type: string;
@@ -46,6 +49,8 @@ export interface MediaTask {
 }
 
 export interface AudioTracksData {
+  services?: { canUpload: boolean; prices: Partial<Record<MediaTaskKind, number>>; currency: string | null };
+  canManage?: boolean;
   audioTracks: AudioTrack[];
   subtitleTracks: SubtitleTrack[];
 }
@@ -53,11 +58,21 @@ export interface AudioTracksData {
 export interface AudioTasksData { tasks: MediaTask[] }
 
 export interface TrackVersion {
+  cue_payload?: { durationMs: number; clips?: Array<Record<string, unknown>>; segments?: Array<Record<string, unknown>>; loudnessLufs?: number };
+  cues?: { durationMs: number; cues: SubtitleLine[] } | SubtitleLine[];
   id: string;
   track_id: string;
   revision: number;
   object_key?: string | null;
   created_at?: string;
+}
+
+export interface SubtitleLine {
+  id: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+  sourceLineId?: string;
 }
 
 export interface LipSyncVersion {
@@ -83,7 +98,7 @@ export interface ApiMeta { requestId?: string; total?: number }
 export interface ApiEnvelope<T> { data: T; meta: ApiMeta }
 export interface ApiFailure { status: number; code: string; message: string; requestId?: string }
 
-export interface AudioActionResult { result: AudioTrack | SubtitleTrack | MediaTask | Record<string, unknown> }
+export interface AudioActionResult { result: AudioTrack | SubtitleTrack | TrackVersion | MediaTask | Record<string, unknown> }
 
 export function createIdempotencyKey(projectId: string, action: string, submissionId: string) {
   return `xj:${projectId}:${action}:${submissionId}`;

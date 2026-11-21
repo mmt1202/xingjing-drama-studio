@@ -105,6 +105,8 @@ def create_audio_router(runtime: AudioRuntime) -> APIRouter:
         audio_tracks, subtitle_tracks, total = await runtime.list_tracks(
             scope,
             track_kind=_enum_query(request, "trackKind", {"dialogue", "voiceover", "bgm", "sfx", "mix"}),
+            media=_enum_query(request, "media", {"audio", "subtitle"}),
+            episode_number=_episode_number(request.query_params.get("episodeId")),
             state=_enum_query(request, "state", {"draft", "ready", "archived"}),
             language=_query_text(request, "language"),
             query=_query_text(request, "q"),
@@ -113,9 +115,20 @@ def create_audio_router(runtime: AudioRuntime) -> APIRouter:
         )
         return _success(
             context.request_id,
-            {"audioTracks": jsonable_encoder(audio_tracks), "subtitleTracks": jsonable_encoder(subtitle_tracks)},
+            {
+                "audioTracks": jsonable_encoder(audio_tracks),
+                "subtitleTracks": jsonable_encoder(subtitle_tracks),
+                "services": runtime.studio_services(),
+                "canManage": "audio.manage" in context.permissions,
+            },
             total=total,
         )
+
+    @router.post("/projects/{project_id}/audio-uploads")
+    async def upload_audio(request: Request, project_id: str) -> JSONResponse:
+        scope, context = await runtime.scope_for(request, project_id, "audio.manage")
+        stored = await runtime.upload_audio(scope, request.stream())
+        return _success(context.request_id, {"objectKey": stored.key})
 
     @router.get("/projects/{project_id}/audio-tasks")
     async def list_audio_tasks(request: Request, project_id: str) -> JSONResponse:
@@ -245,6 +258,7 @@ async def _dispatch_action(
             context,
             track_id=_text(body, "trackId"),
             track_kind=_text(body, "trackKind"),
+            episode_number=_episode_number(body.get("episodeId")),
             title=_text(body, "title"),
             idempotency_key=idempotency_key,
         )
@@ -254,6 +268,7 @@ async def _dispatch_action(
             context,
             track_id=_text(body, "trackId"),
             language=_text(body, "language"),
+            episode_number=_episode_number(body.get("episodeId")),
             format=_text(body, "format"),
             title=_text(body, "title"),
             idempotency_key=idempotency_key,
@@ -323,6 +338,7 @@ async def _dispatch_action(
             version_id=_text(body, "versionId"),
             expected_version=_expected_version(request, body),
             cues=_object(body, "cues"),
+            prepare_for_editing=body.get("prepareForEditing") is True,
             object_key=_optional_text(body, "objectKey"),
             source_task_id=_optional_text(body, "sourceTaskId"),
             idempotency_key=idempotency_key,
@@ -440,6 +456,14 @@ def _expected_version(request: Request, body: Mapping[str, object]) -> int:
     header = request.headers.get("If-Match", "").strip().strip('"')
     candidate: object = header if header else body.get("version")
     return _integer_value(candidate, default=None, minimum=1, maximum=2**31 - 1, code="IF_MATCH_REQUIRED")
+
+
+def _episode_number(value: object) -> int | None:
+    return (
+        None
+        if value is None
+        else _integer_value(value, default=None, minimum=1, maximum=2**31 - 1, code="AUDIO_EPISODE_NOT_FOUND")
+    )
 
 
 def _integer(value: str | None, *, default: int, minimum: int, maximum: int, code: str) -> int:

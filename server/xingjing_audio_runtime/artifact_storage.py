@@ -7,6 +7,7 @@ import hashlib
 import mimetypes
 import os
 import re
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -40,12 +41,56 @@ class LocalAudioObjectStorage:
         self._root = Path(root).expanduser().resolve()
         self._provider_root = Path(provider_project_root).expanduser().resolve() if provider_project_root else None
 
+    @property
+    def can_import_outputs(self) -> bool:
+        return self._provider_root is not None and self._provider_root.is_dir()
+
     async def inspect(self, *, scope: AudioScope, object_key: str) -> StoredObject:
         return await asyncio.to_thread(self._inspect, scope, object_key)
+
+    async def upload_audio(self, scope: AudioScope, stream: AsyncIterable[bytes]) -> StoredObject:
+        """Store one bounded upload by content digest, inside the authenticated project."""
+        folder = (self._root / scope.tenant_id / scope.workspace_id / scope.project_id / "uploads").resolve()
+        folder.relative_to(self._root)
+        folder.mkdir(parents=True, exist_ok=True)
+        temporary = folder / f".{uuid4().hex}.uploading"
+        digest = hashlib.sha256()
+        prefix = bytearray()
+        size = 0
+        try:
+            with temporary.open("xb") as destination:
+                async for chunk in stream:
+                    size += len(chunk)
+                    if size > 64 * 1024 * 1024:
+                        raise AudioArtifactStorageError("AUDIO_UPLOAD_TOO_LARGE")
+                    prefix.extend(chunk[: 64 - len(prefix)])
+                    digest.update(chunk)
+                    await asyncio.to_thread(destination.write, chunk)
+            suffix = _audio_suffix(bytes(prefix))
+            fingerprint = digest.hexdigest()
+            target = folder / f"{fingerprint}{suffix}"
+            os.replace(temporary, target)
+            return StoredObject(target.relative_to(self._root).as_posix(), fingerprint, size, _MIME_TYPES[suffix])
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def file_for(self, *, scope: AudioScope, object_key: str) -> Path:
         """Return a verified local path for a route that has already authorized scope access."""
         return self._resolve_scoped_object(scope, object_key)
+
+    def save_captions(self, scope: AudioScope, contents: bytes) -> StoredObject:
+        digest = hashlib.sha256(contents).hexdigest()
+        folder = (self._root / scope.tenant_id / scope.workspace_id / scope.project_id / "captions").resolve()
+        folder.relative_to(self._root)
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"{digest}.srt"
+        temporary = folder / f".{uuid4().hex}.uploading"
+        try:
+            temporary.write_bytes(contents)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return StoredObject(target.relative_to(self._root).as_posix(), digest, len(contents), _MIME_TYPES[".srt"])
 
     async def import_provider_output(
         self, *, scope: AudioScope, task_id: str, output_id: str, source_path: str
@@ -129,3 +174,17 @@ class LocalAudioObjectStorage:
         if size <= 0:
             raise AudioArtifactStorageError("AUDIO_OBJECT_EMPTY")
         return StoredObject(key=object_key, sha256=digest.hexdigest(), size_bytes=size, mime_type=mime_type)
+
+
+def _audio_suffix(header: bytes) -> str:
+    if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
+        return ".wav"
+    if header.startswith(b"fLaC"):
+        return ".flac"
+    if header.startswith(b"OggS") and (b"OpusHead" in header or b"vorbis" in header):
+        return ".ogg"
+    if header[4:8] == b"ftyp" and header[8:12] in {b"M4A ", b"M4B "}:
+        return ".m4a"
+    if header.startswith(b"ID3") or (len(header) >= 3 and header[0] == 255 and header[1] & 0xE6 == 0xE2):
+        return ".mp3"
+    raise AudioArtifactStorageError("AUDIO_UPLOAD_FORMAT_INVALID")

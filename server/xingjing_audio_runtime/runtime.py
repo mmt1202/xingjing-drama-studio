@@ -14,7 +14,7 @@ import hmac
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -147,6 +147,8 @@ class AudioRuntime:
         scope: AudioScope,
         *,
         track_kind: str | None = None,
+        media: str | None = None,
+        episode_number: int | None = None,
         state: str | None = None,
         language: str | None = None,
         query: str | None = None,
@@ -154,13 +156,63 @@ class AudioRuntime:
         limit: int = 50,
     ) -> tuple[tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...], int]:
         repository = self._repository_or_raise()
-        audio_tracks, audio_total = await repository.list_audio_tracks(
-            scope, track_kind=track_kind, state=state, query=query, offset=offset, limit=limit
-        )
-        subtitle_tracks, subtitle_total = await repository.list_subtitle_tracks(
-            scope, state=state, language=language, query=query, offset=offset, limit=limit
-        )
+        audio_tracks, audio_total = (), 0
+        subtitle_tracks, subtitle_total = (), 0
+        if media != "subtitle":
+            audio_tracks, audio_total = await repository.list_audio_tracks(
+                scope,
+                track_kind=track_kind,
+                episode_number=episode_number,
+                state=state,
+                query=query,
+                offset=offset,
+                limit=limit,
+            )
+        if media != "audio":
+            subtitle_tracks, subtitle_total = await repository.list_subtitle_tracks(
+                scope,
+                state=state,
+                episode_number=episode_number,
+                language=language,
+                query=query,
+                offset=offset,
+                limit=limit,
+            )
         return audio_tracks, subtitle_tracks, audio_total + subtitle_total
+
+    def studio_services(self) -> dict[str, object]:
+        can_generate = bool(
+            self._provider
+            and self._provider_callback_secret
+            and self._billing_policy
+            and callable(getattr(self._object_storage, "import_provider_output", None))
+            and getattr(self._object_storage, "can_import_outputs", True)
+        )
+        return {
+            "canUpload": isinstance(self._object_storage, LocalAudioObjectStorage),
+            "prices": self._billing_policy.estimated_minor_by_kind if can_generate and self._billing_policy else {},
+            "currency": self._billing_policy.currency if self._billing_policy else None,
+        }
+
+    async def upload_audio(self, scope: AudioScope, stream: AsyncIterable[bytes]) -> StoredObject:
+        if not isinstance(self._object_storage, LocalAudioObjectStorage):
+            raise AudioRuntimeUnavailable("AUDIO_OBJECT_STORAGE_NOT_CONFIGURED")
+        return await self._object_storage.upload_audio(scope, stream)
+
+    @staticmethod
+    async def _check_episode(scope: AudioScope, episode_number: int | None) -> None:
+        if episode_number is None:
+            return
+        from lib.project_manager import get_project_manager
+
+        try:
+            project = await asyncio.to_thread(get_project_manager().load_project, scope.project_id, read_only=True)
+        except FileNotFoundError as error:
+            raise ValueError("AUDIO_EPISODE_NOT_FOUND") from error
+        if not any(
+            isinstance(item, dict) and item.get("episode") == episode_number for item in project.get("episodes", [])
+        ):
+            raise ValueError("AUDIO_EPISODE_NOT_FOUND")
 
     async def list_media_tasks(
         self,
@@ -377,18 +429,27 @@ class AudioRuntime:
         *,
         track_id: str,
         track_kind: str,
+        episode_number: int | None = None,
         title: str,
         idempotency_key: str,
     ) -> Mapping[str, Any]:
+        await self._check_episode(scope, episode_number)
         return await self._repository_or_raise().create_audio_track(
             scope=scope,
             track_id=track_id,
             track_kind=track_kind,
+            episode_number=episode_number,
             title=title,
             actor_id=context.actor_id,
             request_id=context.request_id,
             idempotency_key=idempotency_key,
-            request_fingerprint=_fingerprint("create_audio_track", track_id, track_kind, title),
+            request_fingerprint=_fingerprint(
+                "create_audio_track",
+                track_id,
+                track_kind,
+                title,
+                *(() if episode_number is None else (episode_number,)),
+            ),
         )
 
     async def create_subtitle_track(
@@ -398,20 +459,30 @@ class AudioRuntime:
         *,
         track_id: str,
         language: str,
+        episode_number: int | None = None,
         format: str,
         title: str,
         idempotency_key: str,
     ) -> Mapping[str, Any]:
+        await self._check_episode(scope, episode_number)
         return await self._repository_or_raise().create_subtitle_track(
             scope=scope,
             track_id=track_id,
             language=language,
+            episode_number=episode_number,
             format=format,
             title=title,
             actor_id=context.actor_id,
             request_id=context.request_id,
             idempotency_key=idempotency_key,
-            request_fingerprint=_fingerprint("create_subtitle_track", track_id, language, format, title),
+            request_fingerprint=_fingerprint(
+                "create_subtitle_track",
+                track_id,
+                language,
+                format,
+                title,
+                *(() if episode_number is None else (episode_number,)),
+            ),
         )
 
     async def append_audio_version(
@@ -461,9 +532,17 @@ class AudioRuntime:
         idempotency_key: str,
         object_key: str | None = None,
         source_task_id: str | None = None,
+        prepare_for_editing: bool = False,
     ) -> Mapping[str, Any]:
         validated_cues = _validate_subtitle_payload(cues)
         stored = await self._inspect_object(scope, object_key) if object_key else None
+        if prepare_for_editing and stored is None:
+            if not isinstance(self._object_storage, LocalAudioObjectStorage):
+                raise AudioRuntimeUnavailable("AUDIO_OBJECT_STORAGE_NOT_CONFIGURED")
+            await self._repository_or_raise().get_subtitle_track(scope, track_id)
+            stored = await asyncio.to_thread(
+                self._object_storage.save_captions, scope, _srt_content(validated_cues["cues"])
+            )
         return await self._repository_or_raise().append_subtitle_version(
             scope=scope,
             track_id=track_id,
@@ -1101,6 +1180,17 @@ def _billing_policy_from_environment() -> AudioBillingPolicy | None:
         pricing_version=pricing_version,
         estimated_minor_by_kind=cast(dict[str, int], parsed),
     )
+
+
+def _srt_content(cues: list[dict[str, Any]]) -> bytes:
+    def stamp(ms: int) -> str:
+        seconds, remainder = divmod(ms, 1000)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:02}:{minutes:02}:{seconds:02},{remainder:03}"
+
+    blocks = [f"{i}\n{stamp(cue['startMs'])} --> {stamp(cue['endMs'])}\n{cue['text']}" for i, cue in enumerate(cues, 1)]
+    return ("\n\n".join(blocks) + "\n").encode("utf-8")
 
 
 def _validate_subtitle_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -9,6 +9,8 @@ export class XingjingApiError extends Error {
 
 export interface RequestOptions { signal?: AbortSignal; idempotencyKey?: string; version?: number }
 export interface AudioListOptions {
+  media?: "audio" | "subtitle";
+  episodeId?: number;
   offset?: number;
   limit?: number;
   q?: string;
@@ -60,7 +62,7 @@ export function createGenerationAudioApi({ fetcher: providedFetcher, getAccessTo
   async function request<T>(path: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<ApiEnvelope<T>> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    if (init.body) headers.set("Content-Type", "application/json");
+    if (init.body) headers.set("Content-Type", init.body instanceof Blob ? "application/octet-stream" : "application/json");
     headers.set("Accept-Language", i18n.resolvedLanguage ?? i18n.language ?? "zh");
     if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
     if (options.version !== undefined) headers.set("If-Match", String(options.version));
@@ -77,11 +79,12 @@ export function createGenerationAudioApi({ fetcher: providedFetcher, getAccessTo
   }
 
   return {
+    upload: (projectId: string, file: File) => request<{ objectKey: string }>(`/api/v1/projects/${encodeURIComponent(projectId)}/audio-uploads`, { method: "POST", body: file }),
     budgetBinding: (projectId: string, resourceType: string, resourceId: string, signal?: AbortSignal) => request<{ budgetScope: BudgetScope | null }>(`/api/v1/projects/${encodeURIComponent(projectId)}/audio/budget-binding?${new URLSearchParams({ resourceType, resourceId })}`, {}, { signal }),
     audioTracks: (projectId: string, options?: AudioListOptions, signal?: AbortSignal) => request<AudioTracksData>(listPath(`/api/v1/projects/${encodeURIComponent(projectId)}/audio-tracks`, options), {}, { signal }),
     audioTasks: (projectId: string, options?: AudioListOptions, signal?: AbortSignal) => request<AudioTasksData>(listPath(`/api/v1/projects/${encodeURIComponent(projectId)}/audio-tasks`, options), {}, { signal }),
     lipSyncVersions: (projectId: string, signal?: AbortSignal) => request<LipSyncVersionsData>(`/api/v1/projects/${encodeURIComponent(projectId)}/lip-sync-versions`, {}, { signal }),
-    trackVersions: (projectId: string, trackKind: "audio" | "subtitle", trackId: string, signal?: AbortSignal) => request<TrackVersionsData>(`/api/v1/projects/${encodeURIComponent(projectId)}/${trackKind}-tracks/${encodeURIComponent(trackId)}/versions`, {}, { signal }),
+    trackVersions: (projectId: string, trackKind: "audio" | "subtitle", trackId: string, signal?: AbortSignal, offset = 0) => request<TrackVersionsData>(listPath(`/api/v1/projects/${encodeURIComponent(projectId)}/${trackKind}-tracks/${encodeURIComponent(trackId)}/versions`, offset ? { offset } : undefined), {}, { signal }),
     audioObjectUrl: (projectId: string, objectKey: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/audio-objects/${objectKey.split("/").map(encodeURIComponent).join("/")}`,
     generatedAssetUrl: (projectId: string, assetId: string) => `/api/v1/generation-assets/${encodeURIComponent(assetId)}/content?projectId=${encodeURIComponent(projectId)}`,
     audioAction: (projectId: string, payload: object, key: string, version?: number) => request<AudioActionResult>(

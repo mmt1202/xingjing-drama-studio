@@ -168,6 +168,7 @@ def create_editing_router(dependencies: EditingDependencies | None = None) -> AP
             return [
                 TimelineSourceSummary(
                     asset_id=source.asset_id,
+                    title=source.title,
                     version_id=source.version_id,
                     duration_ms=source.duration_ms,
                     content_sha256=source.content_sha256,

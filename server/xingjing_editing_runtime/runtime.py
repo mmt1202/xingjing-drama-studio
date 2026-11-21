@@ -166,6 +166,7 @@ class GeneratedAssetMediaVersionCatalog:
                     await session.execute(
                         select(
                             audio_tracks.c.id.label("track_id"),
+                            audio_tracks.c.title,
                             audio_tracks.c.project_id,
                             audio_tracks.c.track_kind,
                             audio_track_versions.c.id.label("version_id"),
@@ -201,6 +202,7 @@ class GeneratedAssetMediaVersionCatalog:
                     await session.execute(
                         select(
                             subtitle_tracks.c.id.label("track_id"),
+                            subtitle_tracks.c.title,
                             subtitle_tracks.c.project_id,
                             subtitle_track_versions.c.id.label("version_id"),
                             subtitle_track_versions.c.created_at,
@@ -301,6 +303,7 @@ class GeneratedAssetMediaVersionCatalog:
                 await session.execute(
                     select(
                         audio_tracks.c.id.label("track_id"),
+                        audio_tracks.c.title,
                         audio_tracks.c.project_id,
                         audio_tracks.c.track_kind,
                         audio_track_versions.c.id.label("version_id"),
@@ -338,6 +341,7 @@ class GeneratedAssetMediaVersionCatalog:
                 await session.execute(
                     select(
                         subtitle_tracks.c.id.label("track_id"),
+                        subtitle_tracks.c.title,
                         subtitle_tracks.c.project_id,
                         subtitle_track_versions.c.id.label("version_id"),
                         subtitle_track_versions.c.created_at,
@@ -475,6 +479,7 @@ class GeneratedAssetMediaVersionCatalog:
             return None
         return SourceMediaVersion(
             asset_id=str(row["track_id"]),
+            title=row.get("title"),
             version_id=str(row["version_id"]),
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -517,6 +522,7 @@ class GeneratedAssetMediaVersionCatalog:
             return None
         return SourceMediaVersion(
             asset_id=str(row["track_id"]),
+            title=row.get("title"),
             version_id=str(row["version_id"]),
             tenant_id=tenant_id,
             workspace_id=workspace_id,
