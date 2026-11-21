@@ -6,6 +6,7 @@ import { useProductionHandoffTranslation } from "@/xingjing_assets_storyboard/ha
 import type { StoryboardView } from "@/xingjing_assets_storyboard/StoryboardWorkspace";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
 import { createEpisodesApi } from "@/xingjing_creator_projects/episodes-api";
+import { ScriptLibraryPage } from "@/xingjing_creator_projects/ScriptLibraryPage";
 import { createProjectControlApi } from "@/xingjing_creator_projects/control-api";
 import { ProjectFlowShell, useOptionalProjectFlow } from "@/xingjing_creator_projects/ProjectFlowShell";
 import { Redirect, useLocation, useSearch } from "wouter";
@@ -301,13 +302,26 @@ function ProjectBusinessContent({
     case "episodes":
       return <EpisodeWorkspace api={episodesApi} creatorApi={creatorApi} projectId={projectId} initialEpisodeId={complianceQuery.has("episodeId") ? Number(complianceQuery.get("episodeId")) : undefined} selectedScriptId={complianceQuery.get("scriptId") ?? undefined} onCommitted={projectFlow?.refresh} mode={surface.mode} onNavigate={go} />;
     case "script-import": {
-      const currentEpisode = projectFlow?.data.episodes.find(item =>
-        String(item.episode) === complianceQuery.get("episodeId"));
-      return <ScriptImportPage {...scriptPageProps} selectedScriptId={scriptPageProps.selectedScriptId ?? currentEpisode?.scriptId ?? undefined} onDocumentSelected={(id, replace) => {
-        const query = new URLSearchParams({ scriptId: id });
-        if (currentEpisode?.scriptId === id) query.set("episodeId", String(currentEpisode.episode));
+      const change = (updates: Record<string, string | number | null>, replace = false) => {
+        const query = new URLSearchParams(complianceQuery);
+        for (const [key, value] of Object.entries(updates)) {
+          if (value === null) query.delete(key);
+          else query.set(key, String(value));
+        }
+        if (query.get("episodeId") !== complianceQuery.get("episodeId")) {
+          for (const key of ["scriptVersionId", "assetSnapshotId", "directorCandidateId"]) query.delete(key);
+          if (!query.has("episodeId")) query.delete("returnTo");
+        }
         navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/script-import?${query}`, { replace });
-      }} />;
+      };
+      if (complianceQuery.get("library") === "import") return <ScriptImportPage {...scriptPageProps} selectedScriptId={undefined}
+        onReturnLibrary={() => change({ library: complianceQuery.get("backView"), backView: null })}
+        onDocumentSelected={(id, replace) => {
+          const query = new URLSearchParams({ scriptId: id, library: "document" });
+          navigate(`/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/script-import?${query}`, { replace });
+        }}/>;
+      return <ScriptLibraryPage api={creatorApi} projectId={projectId} episodesApi={episodesApi} query={complianceQuery}
+        change={change} manage={projectFlow?.data.permissions.includes("script.manage")} navigate={(target, episode) => projectFlow ? projectFlow.go(target, episode) : go(target)}/>;
     }
     case "ai-director":
       return <AiDirectorPage {...scriptPageProps} />;

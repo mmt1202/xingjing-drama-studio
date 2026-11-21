@@ -1,6 +1,7 @@
 import i18n from "@/i18n";
 import { createAuthenticatedFetcher } from "@/utils/auth";
 import { CreatorApiError } from "./api";
+import type { Chapter } from "@/xingjing_source_planning/api";
 
 export interface EpisodeProduction { scriptVersionId: string; assetSnapshotId: string; finalVideoVersionId: string }
 export interface EpisodeSource { path: string; label: string; kind: "file" | "sql_original"; scriptId: string | null; digest: string; length: number; coordinateSystem: "nfc_lf" }
@@ -89,7 +90,13 @@ export function createEpisodesApi(getAccessToken: () => string | null) {
     return body.data;
   }
   return {
-    list: (id: string) => request<EpisodesSnapshot>(id, "?limit=500"),
+    list: (id: string, offset = 0, signal?: AbortSignal) => request<EpisodesSnapshot>(id, "?limit=500" + (offset ? "&offset=" + offset : ""), { signal }),
+    chapterDirectory: (id: string, sourceId: string, signal?: AbortSignal) =>
+      request<{ source: EpisodeSource; chapters: Chapter[] }>(id, "/source/chapters?" + new URLSearchParams({ sourceId }).toString(), { signal }),
+    sourceExcerpt: (id: string, source: EpisodeSource, start: number, end: number, signal?: AbortSignal) => {
+      const params = new URLSearchParams({ sourceId: source.path, digest: source.digest, start: String(start), end: String(end) });
+      return request<{ source: EpisodeSourceText & { start: number; end: number } }>(id, "/source?" + params.toString(), { signal }).then(data => data.source);
+    },
     source: (id: string, sourceId: string, signal?: AbortSignal) => request<{ source: EpisodeSourceText }>(id, "/source?" + new URLSearchParams({ sourceId }).toString(), { signal }).then((data) => data.source),
     preview: (id: string, revision: string, source: string, count: number, sourceDigest: string) => request<EpisodeDraft[]>(id, "/split-preview", { method: "POST", headers: { "If-Match": `"${revision}"` }, body: JSON.stringify({ source, count, sourceDigest }) }),
     createWorkingScript: async (id: string, episode: number, revision: string, sourceDigest: string, previousWorkingScriptId?: string) => {

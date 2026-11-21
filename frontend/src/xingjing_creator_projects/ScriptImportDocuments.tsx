@@ -1,18 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { ArrowRight, ChevronRight, FileText, Search } from "lucide-react";
 import { Pagination } from "@/components/ui/Pagination";
 import { useImportTranslation } from "./import-i18n";
 import { useRecognitionTranslation } from "./recognition-i18n";
 import { useScriptTranslation } from "./script-i18n";
+import { positiveNumber, type LibraryChange } from "./script-library-read";
 import { matchesScriptRecognition } from "./source-input";
 import { aiCharacterLimit, characterCount, completeScript, contentOf, currentVersion, ScriptError, scriptButton, scriptField, scriptPrimary } from "./script-workflow";
 import type { CreatorProjectsPort, ScriptCatalogItem, ScriptDocument, ScriptRecognition } from "./types";
 
-export function ImportCatalog({ api, projectId, compact, revision, onSelect }: {
+export function ImportCatalog({ api, projectId, compact, revision, onSelect, location, changeLocation }: {
   api: CreatorProjectsPort; projectId: string; compact?: boolean; revision: number; onSelect: (id: string) => void;
+  location?: URLSearchParams; changeLocation?: LibraryChange;
 }) {
   const { t } = useImportTranslation(), { t: script } = useScriptTranslation();
-  const [query, setQuery] = useState(""), [page, setPage] = useState(0), [retry, setRetry] = useState(0);
+  const [localQuery, setQuery] = useState(""), [localPage, setPage] = useState(0), [retry, setRetry] = useState(0);
+  const query = location ? location.get("q") ?? "" : localQuery;
+  const page = location ? (positiveNumber(location.get("listPage")) ?? 1) - 1 : localPage;
+  function selectPage(number: number, replace = false) {
+    if (changeLocation) changeLocation({ listPage: number + 1 }, replace);
+    else setPage(number);
+  }
+  const correctPage = useEffectEvent((number: number) => selectPage(number, true));
   const limit = compact ? 1 : 8;
   const key = JSON.stringify([projectId, query.trim(), page, limit, retry, revision]);
   const [response, setResponse] = useState<{ key: string; items?: ScriptCatalogItem[]; total?: number; error?: unknown }>();
@@ -26,7 +35,7 @@ export function ImportCatalog({ api, projectId, compact, revision, onSelect }: {
             items: items.map((d) => ({ id: d.id, title: d.title, filename: d.sourceDocument.filename, lockedVersionNumber: d.lockedVersionNumber })), total: total ?? items.length,
           }));
         if (abort.signal.aborted) return;
-        if (page > 0 && options.offset >= result.total) setPage(Math.max(0, Math.ceil(result.total / limit) - 1));
+        if (page > 0 && options.offset >= result.total) correctPage(Math.max(0, Math.ceil(result.total / limit) - 1));
         else setResponse({ key, ...result });
       } catch (error) { if (!abort.signal.aborted) setResponse({ key, error }); }
     }, query ? 220 : 0);
@@ -36,7 +45,10 @@ export function ImportCatalog({ api, projectId, compact, revision, onSelect }: {
   if (compact) return data?.total !== undefined ? <p className="text-xs text-slate-400">{data.total ? t("total", { count: data.total }) : script("noScripts")}</p> : null;
   return <section className="space-y-4">
     <label className="relative block"><Search size={17} aria-hidden="true" className="pointer-events-none absolute top-3 left-3 text-slate-400" />
-      <span className="sr-only">{t("search")}</span><input type="search" className={scriptField + " mt-0 pl-10"} value={query} placeholder={t("search")} onChange={e => { setQuery(e.target.value); setPage(0); }} />
+      <span className="sr-only">{t("search")}</span><input type="search" maxLength={200} className={scriptField + " mt-0 pl-10"} value={query} placeholder={t("search")} onChange={e => {
+        if (changeLocation) changeLocation({ q: e.target.value || null, listPage: 1 }, true);
+        else { setQuery(e.target.value); setPage(0); }
+      }} />
     </label>
     {data?.error ? <ScriptError error={data.error} retry={() => setRetry(n => n + 1)} /> : !data ? <p role="status">{script("loading")}</p> :
       data.items?.length ? <ul className="divide-y divide-white/10">{data.items.map(item => <li key={item.id}>
@@ -44,11 +56,11 @@ export function ImportCatalog({ api, projectId, compact, revision, onSelect }: {
           <span className="min-w-0 flex-1"><strong className="block break-words">{item.title}</strong><small className="block truncate text-slate-400">{item.filename}{item.lockedVersionNumber ? " · " + script("frozenVersion", { number: item.lockedVersionNumber }) : ""}</small></span><ChevronRight size={16} aria-hidden="true" /></button>
       </li>)}</ul> : <p role="status" className="text-sm text-slate-400">{query ? t("noMatches") : script("noScripts")}</p>}
     {data?.total !== undefined && <Pagination offset={page * limit} pageSize={limit} total={data.total}
-      unit="documents" label={t("existing")} onOffsetChange={offset => setPage(offset / limit)} />}
+      unit="documents" label={t("existing")} onOffsetChange={offset => selectPage(offset / limit)} />}
   </section>;
 }
 
-function nextStep(document: ScriptDocument, info?: ScriptRecognition, episode?: number) {
+export function nextStep(document: ScriptDocument, info?: ScriptRecognition, episode?: number) {
   const version = currentVersion(document);
   if (document.lockedVersionNumber) return { target: "versions", label: "frozen", help: "frozenHelp" } as const;
   if (info?.kind === "path") return { target: "new", label: "change", help: null } as const;

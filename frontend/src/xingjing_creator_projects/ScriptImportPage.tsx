@@ -4,6 +4,7 @@ import { CreatorPage } from "./shared";
 import { useOptionalProjectFlow } from "./ProjectFlowShell";
 import { ImportCatalog, ImportDocument } from "./ScriptImportDocuments";
 import { useImportTranslation } from "./import-i18n";
+import { useLibraryTranslation } from "./script-library-i18n";
 import { useRecognitionTranslation } from "./recognition-i18n";
 import { useScriptExperienceTranslation } from "./script-experience-i18n";
 import { useScriptTranslation } from "./script-i18n";
@@ -12,7 +13,7 @@ import { aiCharacterLimit, completeScript, currentVersion, MutationFeedback, scr
 import type { ScriptDocument } from "./types";
 import "./script-import.css";
 
-type ImportProps = ScriptPageProps & { onDocumentSelected?: (id: string, replace: boolean) => void };
+type ImportProps = ScriptPageProps & { onDocumentSelected?: (id: string, replace: boolean) => void; onReturnLibrary?: () => void };
 type View = "new" | "current" | "browse";
 const fileTypes = ".txt,.md,.markdown,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
@@ -23,9 +24,10 @@ export function ScriptImportPage(props: ImportProps) {
   }</CreatorPage>;
 }
 
-function ImportWorkspace({ api, projectId, selectedScriptId, onNavigate, onDocumentSelected, workspaceCanManage }: ImportProps & { workspaceCanManage: boolean }) {
+function ImportWorkspace({ api, projectId, selectedScriptId, onNavigate, onDocumentSelected, onReturnLibrary, workspaceCanManage }: ImportProps & { workspaceCanManage: boolean }) {
   const { t } = useImportTranslation(), { t: script } = useScriptTranslation(), { t: copy } = useRecognitionTranslation();
   const { t: experience } = useScriptExperienceTranslation();
+  const { t: library } = useLibraryTranslation();
   const flow = useOptionalProjectFlow();
   const canManage = flow ? flow.data.permissions.includes("script.manage") : workspaceCanManage;
   const [choice, setChoice] = useState<{ route?: string; view: View; id?: string }>();
@@ -53,10 +55,10 @@ function ImportWorkspace({ api, projectId, selectedScriptId, onNavigate, onDocum
   const navigate = onNavigate ? (step: string, docId: string, episode?: number) =>
     onNavigate(step + "?" + new URLSearchParams({ scriptId: docId, ...(episode ? { episodeId: String(episode) } : {}) }).toString()) : undefined;
   useEffect(() => {
-    if (!receipt || notified.current === receipt.id || saving) return;
+    if (!receipt || notified.current === receipt.id || saving || adapting.error) return;
     notified.current = receipt.id;
     onDocumentSelected?.(receipt.id, true);
-  }, [receipt, saving, onDocumentSelected]);
+  }, [receipt, saving, adapting.error, onDocumentSelected]);
 
   function resetForm() {
     setFile(undefined); setBody(""); setTitle(""); setAutoAdapt(false); setLocalError(""); setDiscard(false);
@@ -104,10 +106,10 @@ function ImportWorkspace({ api, projectId, selectedScriptId, onNavigate, onDocum
     onDocumentSelected?.(docId, false);
   };
   return <div className="xj-intake-body">
-    <div className="xj-intake-switch" role="group" aria-label={t("title")}>
+    {onReturnLibrary ? <div><button type="button" className={scriptButton} disabled={blocked} onClick={onReturnLibrary}><FolderOpen size={16}/>{library("library")}</button></div> : <div className="xj-intake-switch" role="group" aria-label={t("title")}>
       <button type="button" aria-pressed={view === "new"} disabled={blocked && view !== "new"} onClick={() => switchView("new")}><FilePlus2 size={16} />{t("create")}</button>
       <button type="button" aria-pressed={view !== "new"} disabled={blocked} onClick={() => switchView(id ? "current" : "browse")}><FolderOpen size={16} />{t("existing")}</button>
-    </div>
+    </div>}
     {view === "current" && id ? <>
       {receipt?.id === id && <p role="status" className="flex items-center gap-2 text-sm text-emerald-300"><CheckCircle2 size={16} />{script("imported")}</p>}
       {adapting.pending && <p role="status" className="text-sm text-violet-200">{copy("processing")}</p>}

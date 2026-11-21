@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Query, Request
@@ -15,6 +16,7 @@ from lib.db import async_session_factory
 from lib.episode_editor import EpisodeEdit, EpisodeEditError, read_episodes, save_episodes, split_remaining
 from lib.i18n import get_locale
 from lib.project_manager import get_project_manager
+from lib.source_structure import SourceStructureError, chapters
 from server.services.cost_estimation import CostEstimationService
 from server.xingjing_platform_persistence import PersistenceUnitOfWork, Scope
 from server.xingjing_platform_persistence.persistence import ProjectRow
@@ -63,20 +65,52 @@ def register_episode_routes(runtime: ProjectsRuntime, router: APIRouter) -> None
                 raise EpisodeEditError("PROJECT_NOT_FOUND", 404)
             return await enrich_episode_budgets(session, context, row, data)
 
-    @router.get("/projects/{project_id}/episodes/source")
-    async def source(request: Request, project_id: str, sourceId: str):
+    async def readable_source(request: Request, project_id: str, source_id: str):
         context = await source_context(runtime, request, project_id)
-        await ready(context, project_id)
+        project = await ready(context, project_id)
         if "script.view" not in context.permissions:
             raise EpisodeEditError("FORBIDDEN", 403)
         async with runtime._require_sessions()() as session:
             collection = await sources(session, context, project_id)
-        option = next((item for item in collection.options if item["path"] == sourceId), None)
+        option = next((item for item in collection.options if item["path"] == source_id), None)
         if option is None:
             raise EpisodeEditError("EPISODE_SOURCE_NOT_FOUND", 404)
+        return context.request_id, project.name, option, collection.texts[source_id]
+
+    @router.get("/projects/{project_id}/episodes/source/chapters")
+    async def source_chapters(request: Request, project_id: str, sourceId: str):
+        request_id, project_name, option, text = await readable_source(request, project_id, sourceId)
+        names = (project_name, option["label"])
+        try:
+            sections = await asyncio.to_thread(chapters, text, option["digest"], book_titles=names)
+        except SourceStructureError as error:
+            raise EpisodeEditError(str(error)) from error
         return {
-            "data": {"source": {**option, "text": collection.texts[sourceId]}},
-            "meta": {"requestId": context.request_id},
+            "data": {"source": option, "chapters": [asdict(section) for section in sections]},
+            "meta": {"requestId": request_id},
+        }
+
+    @router.get("/projects/{project_id}/episodes/source")
+    async def source(
+        request: Request,
+        project_id: str,
+        sourceId: str,
+        start: int | None = Query(default=None, ge=0),
+        end: int | None = Query(default=None, ge=0),
+        digest: str | None = None,
+    ):
+        request_id, _, option, text = await readable_source(request, project_id, sourceId)
+        if digest is not None and digest != option["digest"]:
+            raise EpisodeEditError("EPISODE_SOURCE_CHANGED", 409)
+        excerpt = {}
+        if start is not None or end is not None:
+            if start is None or end is None or not 0 <= start < end <= len(text) or end - start > 8000:
+                raise EpisodeEditError("EPISODE_SOURCE_RANGE_INVALID", 422)
+            text = text[start:end]
+            excerpt = {"start": start, "end": end}
+        return {
+            "data": {"source": {**option, **excerpt, "text": text}},
+            "meta": {"requestId": request_id},
         }
 
     @router.post("/projects/{project_id}/episodes/{episode}/working-script")

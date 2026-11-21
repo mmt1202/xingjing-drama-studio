@@ -1,6 +1,7 @@
 import type { ControlEpisode } from "./control-api";
 
 const scriptRoutes = new Set(["script-import", "script-lab", "source", "rewrite", "versions", "source-mapping", "script-checkup", "ai-director", "director-assets"]);
+export const scriptReadingParams = ["library", "book", "chapter", "part", "v", "listPage", "q"] as const;
 
 export function productionNavigationQuery({ path, currentPath, currentQuery, targetQuery, episodes, episodeOverride, inheritContext = true, targetPlatform }: {
   path: string; currentPath: string; currentQuery: URLSearchParams; targetQuery: URLSearchParams;
@@ -10,6 +11,17 @@ export function productionNavigationQuery({ path, currentPath, currentQuery, tar
   const currentEpisode = currentQuery.get("episodeId");
   const currentScriptId = currentQuery.get("scriptId");
   const targetScriptId = query.get("scriptId");
+  if (scriptRoutes.has(path) && scriptRoutes.has(currentPath) && currentPath !== "script-import"
+    && (!targetScriptId || targetScriptId === currentScriptId) && episodeOverride === undefined) {
+    const position = currentQuery.get("reader");
+    if (position && path === "script-import") {
+      const saved = new URLSearchParams(position);
+      for (const key of scriptReadingParams) {
+        const value = saved.get(key);
+        if (value !== null && !query.has(key)) query.set(key, value);
+      }
+    } else if (position) query.set("reader", position);
+  }
   if (targetScriptId && !query.has("episodeId") && episodeOverride === undefined && scriptRoutes.has(currentPath)) {
     const switchedDocument = scriptRoutes.has(path) && targetScriptId !== currentScriptId
       && !episodes.some(episode => String(episode.episode) === currentEpisode && episode.scriptId === targetScriptId);

@@ -1,0 +1,66 @@
+import i18n from "@/i18n";
+import { useTranslation } from "react-i18next";
+
+const zh = {
+  episodes: "分集剧本", originals: "小说原文", all: "全部文档", library: "返回小说与剧本", import: "导入新素材",
+  episodeDirectory: "剧集目录", chapterDirectory: "原文目录", episodeCount: "共 {{count}} 集", chapterCount: "{{count}} 个目录条目",
+  searchEpisodes: "搜索集数或集名", searchChapters: "搜索章节标题", noMatches: "没有找到匹配项", clear: "清除搜索",
+  episode: "第 {{number}} 集", untitled: "未命名剧集", frozen: "已定稿", draft: "工作稿", unmade: "待建稿",
+  original: "导入时的原文", originalExcerpt: "本集原文片段", version: "第 {{number}} 版", history: "阅读版本",
+  current: "当前稿", archived: "历史稿", readOnly: "正在阅读已保存的内容。", frozenHelp: "第 {{number}} 版已定稿，可用于后续制作。你仍可阅读原文和之前保存的稿件。",
+  draftHelp: "可继续编辑本稿，核对场景和对白后再定稿。", olderHelp: "正在阅读早先保存的内容。切回当前稿可继续制作。",
+  latest: "回到当前稿", director: "进入 AI 导演", manageVersions: "对比与恢复版本", edit: "编辑正文", readChapters: "按章阅读原著",
+  document: "项目文档", source: "选择原著", preamble: "卷首内容", body: "正文", chapter: "章节 {{number}}",
+  bound: "本集取材处", goToSource: "定位本集原文", sourceChanged: "这份原著已有更新。本集建稿时的文字可在「分集剧本」的阅读版本中查看。", noBook: "项目中还没有可阅读的原著。", noEpisodes: "还没有规划剧集",
+  plan: "规划分集", noScript: "本集还没有工作稿", createHelp: "到分集制作确认本集取材范围，即可建立工作稿。",
+  openProduction: "前往本集制作", reader: "阅读正文", previousEpisode: "上一集", nextEpisode: "下一集",
+  previousChapter: "上一章", nextChapter: "下一章", previousText: "上一段", nextText: "下一段", part: "正文 {{page}} / {{pages}}",
+  characters: "{{count}} 字", emptyText: "这个版本没有正文。", sections: "阅读内容", chapterList: "展开目录", collapseList: "收起目录",
+  missing: "没有找到指定的内容，请从目录重新选择。", empty: "导入小说或剧本，即可在这里按章节阅读并开始分集制作。",
+  reload: "重新读取", readError: "暂时无法读取正文，请重试。", indexError: "暂时无法读取项目目录，请重试。",
+  bookFallback: "项目源文件", savedFile: "导入文件",
+  otherVersions: "版本记录", split: "按这份原文规划分集", backDocument: "查看这份素材的剧本版本", unauthorized: "当前账号没有阅读原著的权限。",
+};
+type Copy = Record<keyof typeof zh, string>;
+const en: Copy = {
+  episodes: "Episode scripts", originals: "Original text", all: "All documents", library: "Back to novels and scripts", import: "Import material",
+  episodeDirectory: "Episodes", chapterDirectory: "Contents", episodeCount: "{{count}} episodes", chapterCount: "{{count}} sections",
+  searchEpisodes: "Search by episode number or title", searchChapters: "Search chapter titles", noMatches: "No matches", clear: "Clear search",
+  episode: "Episode {{number}}", untitled: "Untitled episode", frozen: "Finalized", draft: "Working draft", unmade: "No draft yet",
+  original: "Text at import", originalExcerpt: "Original episode excerpt", version: "Version {{number}}", history: "Reading version",
+  current: "Current draft", archived: "Earlier draft", readOnly: "You are reading saved text.", frozenHelp: "Version {{number}} is ready for production. The original text and earlier drafts are available to read.",
+  draftHelp: "Edit this draft, then review its scenes and dialogue before finalizing.", olderHelp: "You are reading an earlier text. Return to the current draft to continue production.",
+  latest: "Return to current draft", director: "Continue to AI director", manageVersions: "Compare and recover versions", edit: "Edit text", readChapters: "Read by chapter",
+  document: "Project document", source: "Choose source", preamble: "Front matter", body: "Text", chapter: "Section {{number}}",
+  bound: "Episode source", goToSource: "Find episode in source", sourceChanged: "The source has changed. Read the text used for this episode from the version menu in Episode scripts.", noBook: "No source text is available yet.", noEpisodes: "No episodes planned yet",
+  plan: "Plan episodes", noScript: "This episode has no draft yet", createHelp: "Open episode production to confirm its source excerpt and create a working draft.",
+  openProduction: "Open episode production", reader: "Read text", previousEpisode: "Previous episode", nextEpisode: "Next episode",
+  previousChapter: "Previous chapter", nextChapter: "Next chapter", previousText: "Previous part", nextText: "Next part", part: "Part {{page}} of {{pages}}",
+  characters: "{{count}} characters", emptyText: "This version has no text.", sections: "Reading views", chapterList: "Show contents", collapseList: "Hide contents",
+  missing: "This item is unavailable. Choose another from the contents.", empty: "Import a novel or script to read by chapter and start planning episodes.",
+  reload: "Reload", readError: "The text could not be loaded. Try again.", indexError: "The project contents could not be loaded. Try again.",
+  bookFallback: "Project source file", savedFile: "Imported file",
+  otherVersions: "Version history", split: "Plan episodes from this text", backDocument: "View script versions for this source", unauthorized: "Your account cannot read the original text.",
+};
+const vi: Copy = {
+  episodes: "Kịch bản từng tập", originals: "Nguyên tác", all: "Tất cả tài liệu", library: "Trở về tiểu thuyết và kịch bản", import: "Nhập tư liệu",
+  episodeDirectory: "Danh sách tập", chapterDirectory: "Mục lục nguyên tác", episodeCount: "{{count}} tập", chapterCount: "{{count}} mục",
+  searchEpisodes: "Tìm theo số hoặc tên tập", searchChapters: "Tìm tiêu đề chương", noMatches: "Không có kết quả", clear: "Xóa tìm kiếm",
+  episode: "Tập {{number}}", untitled: "Tập chưa đặt tên", frozen: "Đã chốt", draft: "Bản thảo", unmade: "Chưa có bản thảo",
+  original: "Nguyên văn khi nhập", originalExcerpt: "Trích đoạn gốc của tập", version: "Bản {{number}}", history: "Phiên bản đang đọc",
+  current: "Bản hiện tại", archived: "Bản trước", readOnly: "Bạn đang đọc nội dung đã lưu.", frozenHelp: "Bản {{number}} đã chốt để sản xuất. Bạn vẫn có thể đọc nguyên tác và các bản thảo trước.",
+  draftHelp: "Bạn có thể sửa bản thảo, rồi kiểm tra cảnh và lời thoại trước khi chốt.", olderHelp: "Bạn đang đọc nội dung cũ. Trở về bản hiện tại để tiếp tục sản xuất.",
+  latest: "Về bản hiện tại", director: "Tiếp tục đến đạo diễn AI", manageVersions: "So sánh và khôi phục", edit: "Sửa nội dung", readChapters: "Đọc theo chương",
+  document: "Tài liệu dự án", source: "Chọn nguyên tác", preamble: "Phần mở đầu", body: "Nội dung", chapter: "Mục {{number}}",
+  bound: "Nguồn của tập", goToSource: "Tìm trích đoạn gốc", sourceChanged: "Nguyên tác đã thay đổi. Xem phần văn bản đã dùng cho tập này qua mục phiên bản trong kịch bản từng tập.", noBook: "Chưa có nguyên tác để đọc.", noEpisodes: "Chưa có kế hoạch tập",
+  plan: "Lên kế hoạch từng tập", noScript: "Tập này chưa có bản thảo", createHelp: "Vào trang sản xuất tập để xác nhận trích đoạn và tạo bản thảo.",
+  openProduction: "Mở sản xuất tập", reader: "Đọc nội dung", previousEpisode: "Tập trước", nextEpisode: "Tập sau",
+  previousChapter: "Chương trước", nextChapter: "Chương sau", previousText: "Phần trước", nextText: "Phần sau", part: "Phần {{page}} / {{pages}}",
+  characters: "{{count}} ký tự", emptyText: "Phiên bản này không có nội dung.", sections: "Chế độ đọc", chapterList: "Mở mục lục", collapseList: "Đóng mục lục",
+  missing: "Không tìm thấy nội dung đã chọn. Hãy chọn lại từ mục lục.", empty: "Nhập tiểu thuyết hoặc kịch bản để đọc từng chương và bắt đầu lên kế hoạch tập.",
+  reload: "Tải lại", readError: "Chưa tải được văn bản. Hãy thử lại.", indexError: "Chưa tải được mục lục dự án. Hãy thử lại.",
+  bookFallback: "Tệp gốc dự án", savedFile: "Tệp đã nhập",
+  otherVersions: "Lịch sử phiên bản", split: "Chia tập theo nguyên tác này", backDocument: "Xem các bản kịch bản của nguồn này", unauthorized: "Tài khoản chưa có quyền đọc nguyên tác.",
+};
+for (const [language, copy] of Object.entries({ zh, en, vi })) i18n.addResourceBundle(language, "scriptLibrary", copy, true, false);
+export const useLibraryTranslation = () => useTranslation("scriptLibrary");

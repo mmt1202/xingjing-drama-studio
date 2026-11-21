@@ -5,6 +5,7 @@ import { CreatorApiError } from "./api";
 import { CreatorPage } from "./shared";
 import { useProjectNavigationBlocker } from "./ProjectFlowShell";
 import { useScriptTranslation } from "./script-i18n";
+import { useLibraryTranslation } from "./script-library-i18n";
 import type { ContentAiReadiness, CreatorProjectsPort, ScriptDocument, ScriptVersion, SessionContext } from "./types";
 import { useScriptExperienceTranslation } from "./script-experience-i18n";
 import { AI_CHARACTER_LIMIT } from "./source-input";
@@ -121,6 +122,7 @@ export function useContentAiReadiness(api: CreatorProjectsPort, projectId: strin
 }
 export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, page, blocked, children }: ScriptPageProps & { page: Exclude<ScriptStep, "script-import">; blocked: boolean; children: (value: ScriptFrameContext) => ReactNode }) {
   const { t } = useScriptTranslation();
+  const { t: library } = useLibraryTranslation();
   const [result, setResult] = useState<{ api: CreatorProjectsPort; projectId: string; items: ScriptDocument[]; total: number }>();
   const [explicitDetail, setDetail] = useState<{ api: CreatorProjectsPort; document: ScriptDocument }>();
   const [selection, setSelection] = useState<{ prop: string | undefined; id: string | undefined }>({ prop: selectedScriptId, id: selectedScriptId });
@@ -141,6 +143,14 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
   const read = useCallback(async (append = false) => {
     const request = ++sequence.current; setReading(true); setError(undefined);
     try {
+      // An episode link already names its document. Read it without downloading other episodes and their histories.
+      if (preferred && api.getScript && !append && !query.trim() && locked === "all") {
+        const document = await api.getScript(projectId, preferred);
+        if (request !== sequence.current) return;
+        if (!completeScript(document) || document.projectId !== projectId || document.id !== preferred) throw new Error(t("invalidResponse"));
+        setResult({ api, projectId, items: [document], total: 1 });
+        return;
+      }
       const page = await api.listScripts(projectId, { offset: append ? itemsRef.current.length : 0, limit: 50, query: query.trim() || undefined, locked: locked === "all" ? undefined : locked === "locked" });
       if (request !== sequence.current) return;
       if (page.items.some((item) => !completeScript(item) || item.projectId !== projectId)) throw new Error(t("invalidResponse"));
@@ -154,14 +164,14 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
       }
     }
     finally { if (request === sequence.current) setReading(false); }
-  }, [api, projectId, query, locked, t]);
+  }, [api, projectId, query, locked, preferred, t]);
   useEffect(() => { const timer = window.setTimeout(() => { void read(); }, 0); return () => { window.clearTimeout(timer); sequence.current += 1; }; }, [read, reload]);
   useEffect(() => {
-    if (!items || !selected || items.some((item) => item.id === selected) || !api.getScript) return;
+    if (!items || !selected || items.some((item) => item.id === selected) || !api.getScript || (preferred && !query.trim() && locked === "all")) return;
     const abort = new AbortController();
     void api.getScript(projectId, selected, abort.signal).then((document) => { if (!abort.signal.aborted) { if (!completeScript(document) || document.projectId !== projectId || document.id !== selected) throw new Error(t("invalidResponse")); setDetail({ api, document }); } }).catch((problem: unknown) => { if (!abort.signal.aborted) setError(problem); });
     return () => abort.abort();
-  }, [api, projectId, selected, items, reload, t]);
+  }, [api, projectId, selected, preferred, query, locked, items, reload, t]);
   const navigate = (step: string, id = script?.id) => { if (!blocked) onNavigate?.(scriptTarget(step, id)); };
   const accept = (document: ScriptDocument) => {
     if (!completeScript(document) || document.projectId !== projectId) { setReload((value) => value + 1); return; }
@@ -169,10 +179,10 @@ export function ScriptPageFrame({ api, projectId, selectedScriptId, onNavigate, 
     setResult((previous) => ({ api, projectId, items: previous?.api === api && previous.projectId === projectId ? [document, ...previous.items.filter((item) => item.id !== document.id)] : [document], total: previous?.api === api && previous.projectId === projectId ? previous.total + (previous.items.some((item) => item.id === document.id) ? 0 : 1) : 1 }));
   };
   return <CreatorPage api={api} permission="script.view" title={t(scriptSteps.find(([step]) => step === page)![1])}>{(context) => <div className="space-y-5">
-    <nav aria-label={t("workflow")} className="flex flex-wrap gap-2">{scriptSteps.map(([step, key]) => <button type="button" key={step} className={scriptButton + (step === page ? " border-violet-300/50 bg-violet-400/10 text-violet-100" : "")} aria-current={step === page ? "step" : undefined} disabled={blocked || !onNavigate} onClick={() => navigate(step)}>{t(key)}</button>)}</nav>
+    <nav aria-label={t("workflow")} className="flex flex-wrap gap-2">{scriptSteps.map(([step, key]) => <button type="button" key={step} className={scriptButton + (step === page ? " border-violet-300/50 bg-violet-400/10 text-violet-100" : "")} aria-current={step === page ? "step" : undefined} disabled={blocked || !onNavigate} onClick={() => navigate(step)}>{step === "script-import" ? library("library") : t(key)}</button>)}</nav>
     {blocked ? <p role="status" className="text-xs leading-6 text-amber-200">{t("unsaved")}</p> : null}
-    <div className="flex flex-wrap items-end gap-3"><label className="min-w-56 flex-1 text-xs text-slate-400">{t("choose")}<select className={scriptField} value={selected ?? ""} disabled={blocked || reading} onChange={(event) => { const id = event.target.value || undefined; setSelection({ prop: selectedScriptId, id }); setDetail(undefined); if (id) navigate(page, id); }}><option value="">{t("choosePlaceholder")}</option>{selected && !items?.some((item) => item.id === selected) ? <option value={selected}>{script?.title ?? selected}</option> : null}{items?.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.id} · v{currentVersion(item)?.number ?? "—"}</option>)}</select></label><button type="button" className={scriptButton} disabled={blocked || reading} onClick={() => setReload((value) => value + 1)}><RefreshCw size={15} aria-hidden="true" />{t("refresh")}</button></div>
-    {script ? <section className={scriptPanel}><p className="text-xs text-slate-500">{t("current")}</p><h2 className="mt-2 break-words text-lg font-semibold">{script.title}</h2><p className="mt-2 break-all font-mono text-[11px] text-slate-500">{script.sourceDocument.filename} · {t("textLength", { count: characterCount(contentOf(script)) })} · {script.id}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400"><span>{t("version", { number: currentVersion(script)?.number ?? "—" })}</span><span>{t("revision", { number: script.revision })}</span><span className={script.lockedVersionNumber ? "text-violet-200" : "text-amber-200"}>{script.lockedVersionNumber ? t("frozenVersion", { number: script.lockedVersionNumber }) : t("notFrozen")}</span></div></section> : null}
+    <div className="flex flex-wrap items-end gap-3"><label className="min-w-56 flex-1 text-xs text-slate-400">{t("choose")}<select className={scriptField} value={selected ?? ""} disabled={blocked || reading} onChange={(event) => { const id = event.target.value || undefined; setSelection({ prop: selectedScriptId, id }); setDetail(undefined); if (id) navigate(page, id); }}><option value="">{t("choosePlaceholder")}</option>{selected && !items?.some((item) => item.id === selected) ? <option value={selected}>{script?.title ?? t("loading")}</option> : null}{items?.map((item) => <option key={item.id} value={item.id}>{item.title} · v{currentVersion(item)?.number ?? "—"}</option>)}</select></label><button type="button" className={scriptButton} disabled={blocked || reading} onClick={() => setReload((value) => value + 1)}><RefreshCw size={15} aria-hidden="true" />{t("refresh")}</button></div>
+    {script ? <section className={scriptPanel}><p className="text-xs text-slate-500">{t("current")}</p><h2 className="mt-2 break-words text-lg font-semibold">{script.title}</h2><p className="mt-2 text-xs text-slate-400">{t("textLength", { count: characterCount(contentOf(script)) })}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-400"><span>{t("version", { number: currentVersion(script)?.number ?? "—" })}</span><span>{t("revision", { number: script.revision })}</span><span className={script.lockedVersionNumber ? "text-violet-200" : "text-amber-200"}>{script.lockedVersionNumber ? t("frozenVersion", { number: script.lockedVersionNumber }) : t("notFrozen")}</span></div></section> : null}
     {!context.permissions.includes("script.manage") ? <p role="status" className="text-sm text-slate-400">{t("readonly")}</p> : null}
     {error ? <ScriptError error={error} reload={() => { void read(); }} /> : null}
     {!items && !error ? <p role="status" className="py-8 text-slate-400">{t("loading")}</p> : null}

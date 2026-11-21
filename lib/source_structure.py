@@ -28,20 +28,25 @@ _CHAPTER = re.compile(
 )
 
 
-def heading_title(line: str) -> str | None:
+def heading_title(line: str, *, book_titles: tuple[str, ...] = ()) -> str | None:
     stripped = line.strip()
     title = re.sub(r"^#{1,6}\s+", "", stripped).strip()
     if not title or len(title) > 100 or re.search(r"[。！？!?]", title):
         return None
     chapter_title = re.sub(r"^(?:正文|文)\s*[:：]?\s*(?=第)", "", title)
+    for name in book_titles:
+        if name and chapter_title.startswith(name):
+            candidate = chapter_title[len(name) :].lstrip(" ·:：-")
+            if _CHAPTER.match(candidate):
+                return candidate
     return chapter_title if title != stripped or _CHAPTER.match(chapter_title) else None
 
 
-def chapters(text: str, snapshot_id: str) -> tuple[SourceChapter, ...]:
+def chapters(text: str, snapshot_id: str, *, book_titles: tuple[str, ...] = ()) -> tuple[SourceChapter, ...]:
     headings = []
     offset = 0
     for line in text.splitlines(keepends=True):
-        title = heading_title(line)
+        title = heading_title(line, book_titles=book_titles)
         if title:
             headings.append((offset, title))
         offset += len(line)

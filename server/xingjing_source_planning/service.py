@@ -54,10 +54,12 @@ def require_key(key: str) -> None:
         raise EpisodeEditError("SOURCE_PLAN_KEY_REQUIRED", 422)
 
 
-def snapshot_id(context: TrustedWorkspaceContext, project_id: str, source_id: str, digest: str) -> str:
-    return str(
-        uuid5(NAMESPACE_URL, fingerprint([context.tenant_id, context.workspace_id, project_id, source_id, digest]))
-    )
+def snapshot_id(
+    context: TrustedWorkspaceContext, project_id: str, source_id: str, digest: str, book_titles: tuple[str, ...]
+) -> str:
+    # The title prefixes affect chapter boundaries. Saved plans retain their original snapshot.
+    scope = [context.tenant_id, context.workspace_id, project_id, source_id, digest, book_titles]
+    return str(uuid5(NAMESPACE_URL, fingerprint(scope)))
 
 
 def editable(item: dict) -> EpisodeEdit:
@@ -71,6 +73,12 @@ class SourcePlanningService:
     async def project(
         self, session: AsyncSession, context: TrustedWorkspaceContext, project_id: str, *, write=False, lock=False
     ):
+        access, _ = await self._project_record(session, context, project_id, write=write, lock=lock)
+        return access
+
+    async def _project_record(
+        self, session: AsyncSession, context: TrustedWorkspaceContext, project_id: str, *, write=False, lock=False
+    ) -> tuple[TrustedWorkspaceContext, ProjectRow]:
         context = await authorize(session, context, project_id)
         required = MANAGE if write else {"project.view", "script.view"}
         if not required.issubset(context.permissions):
@@ -85,17 +93,19 @@ class SourcePlanningService:
             await session.execute(
                 update(ProjectRow).where(*scoped(ProjectRow, context, project_id)).values(version=ProjectRow.version)
             )
-        return context
+        return context, row
 
     async def catalog(self, context: TrustedWorkspaceContext, project_id: str, source_id: str) -> dict:
         async with self.sessions() as session:
-            await self.project(session, context, project_id)
+            context, project = await self._project_record(session, context, project_id)
+            project_name = project.name
             collection = await sources(session, context, project_id)
         option = next((option for option in collection.options if option["path"] == source_id), None)
         if option is None:
             raise EpisodeEditError("EPISODE_SOURCE_NOT_FOUND", 404)
         content = collection.texts[source_id]
-        identity = snapshot_id(context, project_id, source_id, option["digest"])
+        names = (project_name, option["label"])
+        identity = snapshot_id(context, project_id, source_id, option["digest"], names)
         snapshot = await asyncio.to_thread(read_episodes, self.manager, project_id, source_texts=collection.texts)
         affected = [
             item
@@ -105,7 +115,7 @@ class SourcePlanningService:
         changed = any("source_changed" in item["issues"] for item in affected)
         covered = [(item["sourceRange"]["start"], item["sourceRange"]["end"]) for item in affected]
         try:
-            structure = chapters(content, identity)
+            structure = chapters(content, identity, book_titles=names)
             available = [] if changed else uncovered_ranges(content, covered)
         except SourceStructureError as error:
             raise EpisodeEditError(str(error)) from error
@@ -128,7 +138,7 @@ class SourcePlanningService:
         digest = fingerprint(command.model_dump(mode="json", by_alias=True))
         async with PersistenceUnitOfWork(self.sessions, Scope(context.tenant_id, context.workspace_id)) as uow:
             session = uow.session
-            context = await self.project(session, context, project_id, write=True)
+            context, project = await self._project_record(session, context, project_id, write=True)
             previous = await session.scalar(
                 select(EpisodePlanRow).where(
                     *scoped(EpisodePlanRow, context, project_id),
@@ -162,9 +172,10 @@ class SourcePlanningService:
             if any("source_changed" in item["issues"] for item in affected):
                 raise EpisodeEditError("SOURCE_PLAN_SOURCE_CHANGED", 409)
             content = collection.texts[command.source_id]
-            identity = snapshot_id(context, project_id, command.source_id, command.source_digest)
+            names = (project.name, option["label"])
+            identity = snapshot_id(context, project_id, command.source_id, command.source_digest, names)
             try:
-                structure = chapters(content, identity)
+                structure = chapters(content, identity, book_titles=names)
                 chosen = None
                 if command.chapter_ids is not None:
                     if len(set(command.chapter_ids)) != len(command.chapter_ids) or not set(
