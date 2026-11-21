@@ -105,7 +105,7 @@ export function ShotDetailsEditor({ shot, scope, api, writable, onClose, onSaved
       if (result.batch?.failed || !result.shots?.some(item => item.id === base.id && item.storyboardId === base.storyboardId)) throw new Error("SHOT_SAVE_FAILED");
       onSaved(values.shotNo.trim());
     } catch (e) {
-      setNotice(e instanceof AssetsStoryboardApiError && (e.status === 409 || e.code === "STORYBOARD_FROZEN") ? "conflict" :
+      setNotice(e instanceof AssetsStoryboardApiError && (e.code === "VERSION_CONFLICT" || e.code === "STORYBOARD_FROZEN") ? "conflict" :
         e instanceof AssetsStoryboardApiError && e.code === "DUPLICATE_SHOT_NUMBER" ? "duplicate" : "failed");
     } finally { latch.current = false; setBusy(false); }
   }

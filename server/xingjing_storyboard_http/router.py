@@ -32,7 +32,7 @@ from server.xingjing_storyboard.errors import (
 from server.xingjing_storyboard.exchange import ExportFormat, import_shots
 from server.xingjing_storyboard.models import AssetKind, AssetReference, Shot, Storyboard, StoryboardStatus
 from server.xingjing_storyboard.ports import AuditEvent
-from server.xingjing_storyboard.service import AccessContext, ShotEdit, SmartDraftResult
+from server.xingjing_storyboard.service import AccessContext, ShotEdit, SmartDraftResult, shot_generation_references
 
 from .dependencies import ProjectScopeAuthorizer, StoryboardHttpDependencies
 from .projection import project_shot
@@ -319,11 +319,13 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                                     "version": board.version,
                                     "status": board.status.value,
                                     "count": len(board.shots),
+                                    "selectedFrames": sum(bool(shot.selected_media_id) for shot in board.shots),
                                 }
                                 for board in boards
                             ],
                             "boardId": storyboards[0].storyboard_id if storyboards else None,
                             "canEdit": "shot.manage" in context.permissions,
+                            "canGenerate": {"shot.manage", "generation.manage"}.issubset(context.permissions),
                             "requestedBoardUnavailable": bool(
                                 board_id and all(b.storyboard_id != board_id for b in boards)
                             ),
@@ -493,15 +495,19 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             if media_type not in {"image", "video"}:
                 raise HttpContractError("GENERATION_MEDIA_TYPE_INVALID")
             target_shot = next(item for item in storyboard.shots if item.shot_id == _required_text(body, "targetId"))
-            if len({item.asset_id for item in target_shot.asset_references}) != len(target_shot.asset_references):
-                raise HttpContractError("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
             prior = target_shot.generation_submission or {}
+            reference_mode = payload.get(
+                "referenceMode", prior.get("reference_mode", "linked") if prior.get("state") == "pending" else "linked"
+            )
+            if not isinstance(reference_mode, str) or reference_mode not in {"linked", "description", "visual"}:
+                raise HttpContractError("GENERATION_INPUT_REFERENCE_MODE_INVALID")
             prepared = dependencies.service.prepare_shot_generation(
                 context,
                 storyboard_id=storyboard.storyboard_id,
                 expected_version=expected,
                 shot_id=_required_text(body, "targetId"),
                 media_type=media_type,
+                reference_mode=reference_mode,
                 provider_id=cast(str | None, prior.get("provider_id")) if prior.get("state") == "pending" else None,
                 model_id=cast(str | None, prior.get("model_id")) if prior.get("state") == "pending" else None,
                 idempotency_key=request.headers.get("Idempotency-Key", ""),
@@ -509,6 +515,7 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
             shot = prepared.shot
             submission = cast(dict[str, object], shot.generation_submission)
             media_type = cast(str, submission["media_type"])
+            references = shot_generation_references(shot, cast(str, submission.get("reference_mode", "linked")))
             trusted = TrustedWorkspaceContext(
                 tenant_id=context.tenant_id,
                 workspace_id=context.workspace_id,
@@ -527,15 +534,15 @@ def create_storyboard_router(dependencies: StoryboardHttpDependencies) -> APIRou
                     "storyboard_id": storyboard.storyboard_id,
                     "storyboard_version": submission["source_version"],
                     "shot_id": shot.shot_id,
-                    "negative_prompt": shot.negative_prompt,
+                    **({"negative_prompt": shot.negative_prompt} if shot.negative_prompt else {}),
                     "prompt_template_id": shot.prompt_template_id,
                     "prompt_model_adapter_version": shot.prompt_model_adapter_version,
                     "duration_ms": shot.duration_ms,
                 },
-                input_asset_ids=tuple(dict.fromkeys(item.asset_id for item in shot.asset_references)),
+                input_asset_ids=tuple(item.asset_id for item in references),
                 input_asset_references=tuple(
                     GenerationAssetReference(asset_id=item.asset_id, asset_version_id=item.asset_version_id)
-                    for item in shot.asset_references
+                    for item in references
                 ),
             )
             submission_key = cast(str, submission["idempotency_key"])

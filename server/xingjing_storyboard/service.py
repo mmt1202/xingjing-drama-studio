@@ -20,6 +20,7 @@ from .errors import (
 )
 from .exchange import ExportFormat, ExportResult, ImportedShot, export_storyboard, import_shots
 from .models import (
+    AssetKind,
     AssetReference,
     FrozenStoryboard,
     GenerationStatus,
@@ -163,6 +164,21 @@ class ShotGenerationPreparation:
     storyboard: Storyboard
     shot: Shot
     replayed: bool
+
+
+def shot_generation_references(shot: Shot, mode: str) -> tuple[AssetReference, ...]:
+    if mode == "description":
+        return ()
+    references = shot.asset_references
+    if mode == "visual":
+        references = tuple(ref for ref in references if ref.kind != AssetKind.VOICE)
+        if not references:
+            raise ContractViolation("GENERATION_INPUT_REQUIRED")
+    elif mode != "linked":
+        raise ContractViolation("GENERATION_INPUT_REFERENCE_MODE_INVALID")
+    if len({ref.asset_id for ref in references}) != len(references):
+        raise ContractViolation("GENERATION_INPUT_ASSET_REFERENCE_INVALID")
+    return references
 
 
 class UuidIdentifierFactory:
@@ -823,6 +839,7 @@ class StoryboardService:
         provider_id: str | None,
         model_id: str | None,
         idempotency_key: str,
+        reference_mode: str = "linked",
     ) -> ShotGenerationPreparation:
         """Reserve a real request before submission, without inventing a task or queue state."""
         action = "storyboard.shot_generation_prepared"
@@ -830,6 +847,8 @@ class StoryboardService:
         self._require_idempotency_key(idempotency_key)
         if media_type not in {"image", "video"}:
             raise ContractViolation("GENERATION_MEDIA_TYPE_INVALID")
+        if reference_mode not in {"linked", "description", "visual"}:
+            raise ContractViolation("GENERATION_INPUT_REFERENCE_MODE_INVALID")
         identity = _fingerprint(
             {
                 "scope": _scope_dict(context.scope),
@@ -847,6 +866,7 @@ class StoryboardService:
                 "expected_version": expected_version,
                 "shot_id": shot_id,
                 "media_type": media_type,
+                **({"reference_mode": reference_mode} if reference_mode != "linked" else {}),
                 "provider_id": provider_id,
                 "model_id": model_id,
             }
@@ -866,6 +886,8 @@ class StoryboardService:
                 raise ContractViolation("GENERATION_MODEL_PROVIDER_REQUIRED")
             pending = shot.generation_submission
             if pending is not None and pending.get("state") == "pending":
+                if pending.get("reference_mode", "linked") != reference_mode:
+                    raise ContractViolation("SHOT_GENERATION_SUBMISSION_PENDING")
                 if any(
                     pending.get(name) != value
                     for name, value in (
@@ -877,10 +899,12 @@ class StoryboardService:
                     raise ContractViolation("SHOT_GENERATION_SUBMISSION_PENDING")
                 submission = pending
             else:
+                shot_generation_references(shot, reference_mode)
                 submission = {
                     "idempotency_key": f"m05-generation:{identity}",
                     "source_version": board.version,
                     "media_type": media_type,
+                    **({"reference_mode": reference_mode} if reference_mode != "linked" else {}),
                     "provider_id": provider_id,
                     "model_id": model_id,
                     "state": "pending",

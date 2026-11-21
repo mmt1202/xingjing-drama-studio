@@ -52,9 +52,10 @@ export interface PageResult<T> {
 }
 
 export interface ShotListInfo {
-  readonly boards: readonly { id: string; episodeId: string; version: number; status: WorkStatus; count: number }[];
+  readonly boards: readonly { id: string; episodeId: string; version: number; status: WorkStatus; count: number; selectedFrames?: number }[];
   readonly boardId: string | null;
   readonly canEdit?: boolean;
+  readonly canGenerate?: boolean;
   readonly requestedBoardUnavailable?: boolean;
   readonly order: readonly string[];
   readonly offset: number;
@@ -472,7 +473,7 @@ export interface AssetsStoryboardPort {
     input: ActionInput<AssetAction>,
     signal?: AbortSignal,
   ): Promise<AssetActionResult>;
-  getGenerationServices?(scope: WorkspaceProjectScope, capabilities: readonly string[], signal?: AbortSignal): Promise<readonly GenerationService[]>;
+  getGenerationServices?(scope: WorkspaceProjectScope, capabilities: readonly string[], signal?: AbortSignal, mediaType?: "image" | "video"): Promise<readonly GenerationService[]>;
   getAssetGenerationReceipt?(scope: WorkspaceProjectScope, assetId: string, sourceVersionId: string, idempotencyKey: string, signal?: AbortSignal): Promise<TaskReceipt | null>;
   getGenerationTask(
     scope: WorkspaceProjectScope,

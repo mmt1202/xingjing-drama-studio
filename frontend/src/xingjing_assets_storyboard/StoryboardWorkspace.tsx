@@ -1,8 +1,8 @@
 import { useSmartShotsTranslation } from "./smart-i18n";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Clapperboard, Image as ImageIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Clapperboard } from "lucide-react";
 import { Pagination } from "@/components/ui/Pagination";
-import { ShotReviewList, ShotAssets } from "./ShotReviewList";
+import { ShotReviewList } from "./ShotReviewList";
 import { ShotDetailsEditor, useShotAssetChoices } from "./ShotDetailsEditor";
 import { useShotReviewTranslation } from "./shot-review-i18n";
 import { SHOTS_PER_PAGE, useShotCollection } from "./useShotCollection";
@@ -28,6 +28,8 @@ import { qualityErrorMessage, useStoryboardQualityTranslation } from "./quality-
 import { useProductionHandoffTranslation } from "./handoff-i18n";
 import { useDraftProtection } from "./useDraftProtection";
 import { SmartStoryboardWorkspace, type SmartNavigation } from "./SmartStoryboardWorkspace";
+import { BoardActionNotice, StoryboardStudio } from "./StoryboardStudio";
+import { useBoardText } from "./board-studio-i18n";
 import { StoryboardSourceNotice } from "./StoryboardSourceNotice";
 import {
   BatchResultPanel,
@@ -120,7 +122,7 @@ function forbidden(error: unknown): boolean {
   return apiError(error)?.status === 403;
 }
 function conflict(error: unknown): boolean {
-  return apiError(error)?.status === 409;
+  return apiError(error)?.code === "VERSION_CONFLICT";
 }
 
 function BatchEditor({
@@ -608,195 +610,6 @@ function ImportView({
   );
 }
 
-function StoryboardViewPanel({
-  shots,
-  canManage,
-  busy,
-  collectionVersion,
-  total,
-  onEdit,
-  onSelectCandidate,
-  onGenerateMedia,
-  onConfirm,
-}: {
-  readonly shots: readonly ShotItem[];
-  readonly canManage: boolean;
-  readonly busy: boolean;
-  readonly collectionVersion?: number;
-  readonly total: number;
-  readonly onEdit: (shot: ShotItem) => void;
-  readonly onSelectCandidate: (shot: ShotItem, candidateId: string) => void;
-  readonly onGenerateMedia: (
-    shot: ShotItem,
-    mediaType: "image" | "video",
-  ) => void;
-  readonly onConfirm: (storyboardId: string) => void;
-}) {
-  const { t } = useStoryboardQualityTranslation();
-  const [confirm, setConfirm] = useState(false);
-  const { t: review, i18n } = useShotReviewTranslation();
-  const seconds = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 3 });
-  const frozen = shots[0]?.status === "frozen";
-  const storyboardId = shots[0]?.storyboardId ?? "";
-  return (
-    <>
-      <section
-        className={`${panel} mb-4 flex flex-col gap-3 p-4 md:flex-row md:items-end md:justify-between`}
-      >
-        <div className="text-sm text-[#B8BECC]">
-          {review(frozen ? "frozenSummary" : "draftSummary")}
-        </div>
-        <button
-          type="button"
-          className={primaryButton}
-          disabled={
-            !canManage || busy || frozen || shots.length === 0 || !storyboardId.trim()
-          }
-          onClick={() => setConfirm(true)}
-        >
-          {frozen ? review("frozen") : review("freeze")}
-        </button>
-      </section>
-      <section
-        className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-        aria-label="故事板接触表"
-      >
-        {shots.map((shot) => {
-          const selected =
-            shot.candidates.find((candidate) => candidate.selected) ??
-            shot.candidates[0];
-          return (
-            <article key={shot.id} className={`${panel} overflow-hidden`}>
-              <div className="relative aspect-video bg-[#171922]">
-                {selected?.thumbnailUrl ? (
-                  <img
-                    src={selected.thumbnailUrl}
-                    alt={`镜头 ${shot.shotNo} 已选画面`}
-                    className="h-full w-full object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <div className="grid h-full place-content-center justify-items-center gap-2 text-sm text-slate-400">
-                    <ImageIcon size={24} aria-hidden="true"/>{review("blankFrame")}
-                  </div>
-                )}
-                <span className="absolute left-3 top-3 rounded-full bg-black/75 px-3 py-1 text-xs">
-                  镜头 {shot.shotNo}
-                </span>
-              </div>
-              <div className="p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-300">
-                  {[shot.shotSize, shot.cameraMove, review("sec", { n: seconds.format(shot.durationMs / 1000) })].filter(Boolean).join(" · ")}
-                </p><button type="button" className={button} disabled={busy} onClick={() => onEdit(shot)}>{review(canManage && !frozen ? "editNamed" : "review", { no: shot.shotNo })}</button></div>
-                <p className="mt-2 line-clamp-3 text-sm">
-                  {shot.prompt || "尚无提示词"}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <ShotAssets shot={shot}/>
-                  <span
-                    className={
-                      shot.issueCount
-                        ? "text-xs text-[#F59E0B]"
-                        : "text-xs text-[#22C55E]"
-                    }
-                  >
-                    {shot.issueCount} 个问题
-                  </span>
-                  <span className="text-xs text-[#8B5CF6]">
-                    {review("productionStatus")} · {review(shot.generationStatus === "failed" ? "generationFailed" : shot.generationStatus ?? "not_started")}
-                  </span>
-                  {shot.generationCurrency &&
-                  shot.estimatedCostMinor !== undefined ? (
-                    <span className="text-xs text-[#B8BECC]">
-                      费用：预估 {shot.estimatedCostMinor}{" "}
-                      {shot.generationCurrency}
-                      {shot.actualCostMinor !== undefined
-                        ? ` · 实际 ${shot.actualCostMinor} ${shot.generationCurrency}`
-                        : ""}
-                    </span>
-                  ) : null}
-                </div>
-                {shot.generationFailure ? (
-                  <p className="mt-2 rounded-lg border border-[#EF4444]/35 bg-[#2a1218] p-2 text-xs text-[#fca5a5]">
-                    {shot.generationFailure}
-                  </p>
-                ) : null}
-                {shot.generationTaskId ? (
-                  <details className="mt-2 text-xs text-slate-400"><summary className="cursor-pointer">{review("taskDetails")}</summary><code className="break-all">{shot.generationTaskId}</code></details>
-                ) : null}
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className={button}
-                    disabled={
-                      !canManage ||
-                      busy ||
-                      (shot.generationSubmissionPending && shot.generationPendingMediaType !== "image") ||
-                      !shot.prompt?.trim()
-                    }
-                    onClick={() => onGenerateMedia(shot, "image")}
-                  >
-                    生成候选图片
-                  </button>
-                  <button
-                    type="button"
-                    className={button}
-                    disabled={
-                      !canManage ||
-                      busy ||
-                      (shot.generationSubmissionPending && shot.generationPendingMediaType !== "video") ||
-                      !shot.prompt?.trim()
-                    }
-                    onClick={() => onGenerateMedia(shot, "video")}
-                  >
-                    生成候选视频
-                  </button>
-                </div>
-                {shot.generationSubmissionPending ? (
-                  <p className="mt-2 text-xs text-[#B8BECC]">{t("submissionPending")}</p>
-                ) : null}
-                {shot.candidates.length > 1 ? (
-                  <fieldset className="mt-4">
-                    <legend className="text-xs text-[#7E8494]">候选画面</legend>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {shot.candidates.map((candidate) => (
-                        <button
-                          key={candidate.id}
-                          type="button"
-                          className={
-                            candidate.selected ? primaryButton : button
-                          }
-                          disabled={!canManage || busy}
-                          aria-pressed={candidate.selected}
-                          onClick={() => onSelectCandidate(shot, candidate.id)}
-                        >
-                          {review("candidate", { n: candidate.version })}
-                        </button>
-                      ))}
-                    </div>
-                  </fieldset>
-                ) : null}
-              </div>
-            </article>
-          );
-        })}
-      </section>
-      <ConfirmDialog
-        open={confirm}
-        title="确认冻结故事板"
-        detail={t("freezePlanHelp", { count: total })}
-        confirmLabel={`确认冻结版本 ${collectionVersion ?? "—"}`}
-        busy={busy}
-        onCancel={() => setConfirm(false)}
-        onConfirm={() => {
-          setConfirm(false);
-          onConfirm(storyboardId);
-        }}
-      />
-    </>
-  );
-}
-
 function CompareView({
   shots,
   canManage,
@@ -1263,6 +1076,7 @@ export function StoryboardWorkspace({
   const shots = page?.items;
   const collectionVersion = page?.collectionVersion;
   const { t: review } = useShotReviewTranslation();
+  const { t: studio } = useBoardText();
   const [editor, setEditor] = useState<ShotItem>();
   const [revisionDialog, setRevisionDialog] = useState(false);
   const [notice, setNotice] = useState("");
@@ -1274,7 +1088,7 @@ export function StoryboardWorkspace({
   const [selected, setSelected] = useState<string[]>(shotId ? [shotId] : []);
   const [actionError, setError] = useState<unknown>();
   const error = actionError ?? collection.error;
-  const denied = forbidden(error) ? apiError(error) : undefined;
+  const denied = forbidden(collection.error) ? apiError(collection.error) : undefined;
   const [versionConflict, setVersionConflict] =
     useState<AssetsStoryboardApiError>();
   const [busy, setBusy] = useState(false);
@@ -1296,7 +1110,7 @@ export function StoryboardWorkspace({
     }
   }, [page]);
   useEffect(() => {
-    if (task || !shots) return;
+    if (activeView === "storyboard" || task || !shots) return;
     const pending = shots.find(
       (shot) =>
         shot.generationTaskId &&
@@ -1314,10 +1128,10 @@ export function StoryboardWorkspace({
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [scope.projectId, shots, task]);
+  }, [activeView, scope.projectId, shots, task]);
   useEffect(() => {
     if (
-      !task ||
+      (activeView === "storyboard" && taskShotId) || !task ||
       !["queued", "running", "retrying", "cancelling"].includes(task.status)
     )
       return undefined;
@@ -1334,7 +1148,7 @@ export function StoryboardWorkspace({
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [api, scope, task]);
+  }, [activeView, api, scope, task, taskShotId]);
   const canManage = page?.shotList?.canEdit ?? context?.permissions.includes("shot.manage") ?? false;
   const running = useRef(false);
   const run = async (
@@ -1374,6 +1188,7 @@ export function StoryboardWorkspace({
       if (conflict(cause))
         setVersionConflict(cause as AssetsStoryboardApiError);
       else setError(cause);
+      if (action === "generateShotMedia") await load();
       return undefined;
     } finally {
       running.current = false;
@@ -1429,6 +1244,8 @@ export function StoryboardWorkspace({
   const items = shots ?? [];
   const readBusy = busy || collection.loading;
   const workspaceView = ["list", "batch", "storyboard"].includes(activeView);
+  const episode = board?.episodeId ?? scope.episodeId;
+  const episodeNumber = episode && /^\d+$/.test(episode) ? Number(episode) : undefined;
   const here = page?.shotList;
   const selectedHere = selected.filter(id => order.includes(id));
   const pagination = <Pagination label={review("pages")} unit="shots" pageSize={SHOTS_PER_PAGE} total={total} offset={collection.offset}
@@ -1485,7 +1302,7 @@ export function StoryboardWorkspace({
       context={context}
       libraryHeader={workspaceView}
       title={activeView === "list" ? review("title") : activeView === "storyboard" ? review("boardTitle") : title[0]}
-      description={activeView === "list" ? review("intro") : activeView === "storyboard" ? review("boardHelp") : activeView === "prompts" ? storyboardText("promptHelp") : activeView === "batch" ? storyboardText("batchHelp") : title[1]}
+      description={activeView === "list" ? review("intro") : activeView === "storyboard" ? studio("intro") : activeView === "prompts" ? storyboardText("promptHelp") : activeView === "batch" ? storyboardText("batchHelp") : title[1]}
       eyebrow="M05 · SHOT CONTINUITY"
       projectName={projectName ?? context.project?.name}
       actions={actions}
@@ -1514,7 +1331,10 @@ export function StoryboardWorkspace({
         onSaved={no => { setEditor(undefined); setIssues([]); setNotice(review("saved", { no })); void load(); }} />}
       <ConfirmDialog open={revisionDialog} title={review("revise")} detail={review("reviseHelp")} confirmLabel={review("revise")} busy={busy}
         onCancel={() => setRevisionDialog(false)} onConfirm={() => void createRevision()} />
-      {versionConflict ? (
+      {activeView === "storyboard" && (versionConflict || error) ? (
+        <BoardActionNotice error={versionConflict ?? error} onReload={retryLoad} onQuality={() => navigate("quality")} onAssets={onOpenSmart ? () => onOpenSmart("assets", episodeNumber) : undefined} />
+      ) : null}
+      {activeView !== "storyboard" && versionConflict ? (
         <StatePanel
           title="版本冲突"
           detail="当前分镜集合已被其他成员更新。已保留本地选择，请重新读取服务端版本后再提交。"
@@ -1524,7 +1344,7 @@ export function StoryboardWorkspace({
           tone="warning"
         />
       ) : null}
-      {error ? (
+      {activeView !== "storyboard" && error ? (
         <StatePanel
           title="操作失败"
           detail={qualityErrorMessage(apiError(error)?.code) ?? review("actionFailed")}
@@ -1537,7 +1357,7 @@ export function StoryboardWorkspace({
       {resultMessage && !task ? (
         <StatePanel title={resultMessage} tone="success" />
       ) : null}
-      {task ? (
+      {task && (activeView !== "storyboard" || !taskShotId) ? (
         <TaskSummary
           task={task}
           message={resultMessage || undefined}
@@ -1662,35 +1482,18 @@ export function StoryboardWorkspace({
           }
         />
       ) : null}
-      {activeView === "storyboard" && items.length ? (
-        <StoryboardViewPanel
-          shots={items}
-          canManage={canManage}
-          busy={busy}
-          collectionVersion={collectionVersion}
-          total={total}
-          onEdit={setEditor}
-          onSelectCandidate={(shot, candidateId) =>
-            void run("selectStoryboardCandidate", { candidateId }, shot)
-          }
-          onGenerateMedia={(shot, mediaType) =>
-            void run("generateShotMedia", { mediaType }, shot)
-          }
-          onConfirm={(storyboardId) =>
-            void run(
-              "confirmStoryboard",
-              {
-                storyboardId,
-                baseVersion: collectionVersion,
-                shotIds: order,
-              },
-              undefined,
-              undefined,
-            )
-          }
-        />
-      ) : null}
-      {activeView === "storyboard" && pagination}
+      {activeView === "storyboard" && items.length > 0 && boardId && <StoryboardStudio
+        key={JSON.stringify([scope.workspaceId, scope.projectId, boardId])}
+        scope={scope} api={api} shots={items} order={order} offset={collection.offset} total={total}
+        frozen={frozen} canManage={canManage} canGenerate={here?.canGenerate ?? canManage} busy={readBusy}
+        version={collectionVersion ?? items[0].version} selectedFrames={board?.selectedFrames} pagination={pagination} submittedTask={task} submittedShotId={taskShotId}
+        onPage={next => { scrollAfterRead.current = true; collection.turnPage(next); }} onEdit={setEditor}
+        onSelect={(shot, candidateId) => void run("selectStoryboardCandidate", { candidateId }, shot)}
+        onAdopt={(shot, taskId, generatedAssetId) => void run("adoptShotMedia", { taskId, generatedAssetId }, shot)}
+        onGenerate={(shot, mediaType, referenceMode) => void run("generateShotMedia", { mediaType, ...(referenceMode ? { referenceMode } : {}) }, shot)}
+        onConfirm={() => { void run("confirmStoryboard", { storyboardId: boardId, baseVersion: collectionVersion, shotIds: order }).then(result => { if (result) onSmartChange?.(); }); }}
+        onNext={onOpenSmart ? () => onOpenSmart("generation", episodeNumber) : undefined}
+      />}
       {activeView === "compare" && items.length ? (
         <CompareView
           shots={items}

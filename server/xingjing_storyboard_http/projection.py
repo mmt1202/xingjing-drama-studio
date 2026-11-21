@@ -26,7 +26,7 @@ def project_shot(storyboard: Storyboard, shot: Shot, names: Mapping[str, str] | 
             }
         )
 
-    candidate_ids = [replacement.new_media_id for replacement in shot.replacements]
+    candidate_ids = list(dict.fromkeys(replacement.new_media_id for replacement in shot.replacements))
     generated_candidate_ids = {
         replacement.new_media_id
         for replacement in shot.replacements

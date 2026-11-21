@@ -636,9 +636,9 @@ export function createAssetsStoryboardApi(
       );
       return response.data;
     },
-    async getGenerationServices(scope, capabilities, signal) {
+    async getGenerationServices(scope, capabilities, signal, mediaType = "image") {
       if (!scope.projectId) throw new Error("PROJECT_REQUIRED");
-      return (await request<{ services: GenerationService[] }>(scope, generationServicesPath(scope.projectId, "image", capabilities), {}, signal)).data.services;
+      return (await request<{ services: GenerationService[] }>(scope, generationServicesPath(scope.projectId, mediaType, capabilities), {}, signal)).data.services;
     },
     async getAssetGenerationReceipt(scope, assetId, sourceVersionId, idempotencyKey, signal) {
       const query = new URLSearchParams({ sourceVersionId });

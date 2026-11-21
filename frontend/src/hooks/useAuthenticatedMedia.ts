@@ -5,7 +5,7 @@ import { createAuthenticatedFetcher, getToken, getTokenForSession } from "@/util
 export class AuthenticatedMediaError extends Error {
   constructor(readonly status: number, code: string) { super(code); }
 }
-interface MediaState { key: string; url?: string; error?: unknown }
+interface MediaState { key: string; url?: string; mimeType?: string; error?: unknown }
 
 export function useAuthenticatedMedia({ source, workspaceId, projectId }: { source: string; workspaceId?: string; projectId: string }) {
   const token = useAuthStore((state) => state.token);
@@ -35,12 +35,12 @@ export function useAuthenticatedMedia({ source, workspaceId, projectId }: { sour
       if (getToken() !== token) throw new AuthenticatedMediaError(401, "MEDIA_SESSION_CHANGED");
       if (!blob.size || /^(application\/json|text\/html)(?:;|$)/i.test(blob.type)) throw new AuthenticatedMediaError(502, "MEDIA_RESPONSE_INVALID");
       objectUrl = URL.createObjectURL(blob);
-      setState({ key, url: objectUrl });
+      setState({ key, url: objectUrl, mimeType: blob.type });
     }).catch((error: unknown) => { if (!controller.signal.aborted) { release(); setState({ key, error }); } });
     return () => { controller.abort(); release(); window.removeEventListener("storage", sessionChanged); };
   }, [key, token, workspaceId, projectId, source, fetcher]);
   const current = state?.key === key ? state : undefined;
-  return { url: current?.url, error: current?.error, loading: !current, retry: () => setRevision((value) => value + 1), decodeFailed: () => {
+  return { url: current?.url, mimeType: current?.mimeType, error: current?.error, loading: !current, retry: () => setRevision((value) => value + 1), decodeFailed: () => {
     if (current?.url) URL.revokeObjectURL(current.url);
     setState({ key, error: new AuthenticatedMediaError(502, "MEDIA_DECODE_FAILED") });
   } };
