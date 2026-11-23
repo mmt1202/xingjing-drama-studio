@@ -458,6 +458,16 @@ class _ModelUsageAccumulator:
 SessionFactory = async_sessionmaker[AsyncSession]
 
 
+async def _lock_sqlite_billing_account(session: AsyncSession, workspace_id: str) -> None:
+    # SQLite ignores FOR UPDATE. Take its write lock before reading the balance or a replay receipt.
+    if session.get_bind().dialect.name == "sqlite":
+        await session.execute(
+            update(GenerationBillingAccountRow)
+            .where(GenerationBillingAccountRow.workspace_id == workspace_id)
+            .values(version=GenerationBillingAccountRow.version)
+        )
+
+
 class SqlAlchemyGenerationTaskRepository:
     def __init__(
         self,
@@ -483,6 +493,7 @@ class SqlAlchemyGenerationTaskRepository:
         if amount_minor <= 0 or len(currency) != 3:
             raise GenerationBillingError("GENERATION_BILLING_GRANT_INVALID")
         async with self._session_factory.begin() as session:
+            await _lock_sqlite_billing_account(session, workspace_id)
             journal_id = _journal_id("grant", f"{workspace_id}:{event_id}")
             replay = await session.get(GenerationBillingJournalRow, journal_id)
             if replay is not None:
@@ -550,6 +561,7 @@ class SqlAlchemyGenerationTaskRepository:
             raise GenerationBillingError("GENERATION_ESTIMATED_COST_INVALID")
         try:
             async with self._session_factory.begin() as session:
+                await _lock_sqlite_billing_account(session, task.request.workspace_id)
                 existing = await session.scalar(
                     select(TaskRow).where(
                         TaskRow.workspace_id == task.request.workspace_id,
@@ -697,6 +709,7 @@ class SqlAlchemyGenerationTaskRepository:
         at: datetime,
     ) -> dict[str, object]:
         async with self._session_factory.begin() as session:
+            await _lock_sqlite_billing_account(session, workspace_id)
             hold = await session.get(
                 GenerationBillingHoldRow, (workspace_id, project_id, task_id), with_for_update=True
             )
@@ -754,6 +767,7 @@ class SqlAlchemyGenerationTaskRepository:
         at: datetime,
     ) -> dict[str, object]:
         async with self._session_factory.begin() as session:
+            await _lock_sqlite_billing_account(session, workspace_id)
             hold = await session.get(
                 GenerationBillingHoldRow, (workspace_id, project_id, task_id), with_for_update=True
             )

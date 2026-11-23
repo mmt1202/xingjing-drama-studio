@@ -393,6 +393,14 @@ class GenerationRuntime:
                     requested_model_id=None,
                     parameters={},
                     acquire=False,
+                    **(
+                        {"queue_native_images": True}
+                        if media_type == "image"
+                        and self._route_admission
+                        and self._native_images
+                        and self._native_images.enabled
+                        else {}
+                    ),
                 )
             except (ValueError, LookupError):
                 continue
@@ -501,7 +509,7 @@ class GenerationRuntime:
             reservation = await self._route_admission.task_reservation(task)
             if reservation is not None:
                 progress["modelReservation"] = {
-                    "reserved": reservation.released_at is None,
+                    "reserved": reservation.capacity_reserved and reservation.released_at is None,
                     "submissionUnconfirmed": bool(
                         reservation.dispatch_started_at is not None
                         and (
@@ -753,6 +761,7 @@ class GenerationRuntime:
                 requested_model_id=None,
                 parameters=_route_parameters(request),
                 acquire=self._route_admission is None,
+                **({"queue_native_images": True} if native_enabled and self._route_admission else {}),
             )
         except LookupError as error:
             raise ValueError(str(error)) from error

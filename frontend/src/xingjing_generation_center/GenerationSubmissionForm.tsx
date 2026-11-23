@@ -38,7 +38,7 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   const operation = useRef<SubmissionOperation | undefined>(recovered?.operation);
   const inFlight = useRef(false);
   const mounted = useRef(false);
-  const dirty = Boolean(prompt || inputs.length || parameters !== "{}" || budgetScope);
+  const dirty = Boolean(prompt || inputs.length || parameters !== "{}" || (budgetScope && !created));
   const locked = busy || uncertain;
   useEffect(() => {
     rememberSubmission(recoveryKey, { prompt, inputs, parameters, budgetScope, operation: operation.current, created });
@@ -66,7 +66,7 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
   const mediaType = ["video_extend", "video_stabilize", "video_upscale"].includes(capability) ? "video"
     : ["image_to_video", "first_last_video", "image_edit", "image_upscale", "reference_fusion", "inpaint"].includes(capability) ? "image" : undefined;
 
-  function reset() { setPrompt(""); setInputs([]); setParameters("{}"); setBudgetScope(undefined); setDiscard(false); operation.current = undefined; }
+  function reset(keepBudget = false) { setPrompt(""); setInputs([]); setParameters("{}"); if (!keepBudget) setBudgetScope(undefined); setDiscard(false); operation.current = undefined; }
   function changed() { operation.current = undefined; setError(undefined); setCreated(undefined); setRefreshFailed(false); }
   async function execute(original: SubmissionOperation) {
     if (inFlight.current) return;
@@ -77,8 +77,8 @@ export function GenerationSubmissionForm({ config, scope, api, onSubmitted }: Pr
     try {
       const task = await api.submit(scope.projectId, original.payload, original.key);
       if (!mounted.current) return;
-      rememberSubmission(recoveryKey, { prompt: "", inputs: [], parameters: "{}", created: task.task_id });
-      setCreated(task.task_id); setUncertain(false); reset();
+      rememberSubmission(recoveryKey, { prompt: "", inputs: [], parameters: "{}", budgetScope, created: task.task_id });
+      setCreated(task.task_id); setUncertain(false); reset(true);
       try { await onSubmitted(task); } catch { if (mounted.current) setRefreshFailed(true); }
     } catch (reason) {
       if (mounted.current) {

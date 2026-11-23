@@ -356,7 +356,55 @@
   padding: 12px 20px;
 }
 .xj-lib-selection {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  font-size: 0.85rem;
+}
+.xj-batch-select, .xj-batch-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.xj-batch-select input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--lib-accent);
+}
+.xj-batch-buttons {
+  margin-inline-start: auto;
+}
+.xj-batch-list {
+  margin-block: 0.85rem;
+  padding-inline: 0.8rem;
+  max-height: 13rem;
+  overflow: auto;
+  border: 1px solid var(--lib-line);
+  border-radius: 10px;
+}
+.xj-batch-list li {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.55rem;
+  font-size: 0.85rem;
+}
+.xj-batch-list li + li {
+  border-top: 1px solid var(--lib-line);
+}
+.xj-batch-list small {
+  display: block;
+  color: var(--lib-muted);
+}
+.xj-batch-list span {
+  color: #b5e2c7;
+}
+.xj-batch-list .xj-batch-error {
+  color: #ffc29d;
+}
+.xj-permission-dialog footer {
+  gap: 0.6rem;
 }
 .xj-lib-empty {
   display: grid;

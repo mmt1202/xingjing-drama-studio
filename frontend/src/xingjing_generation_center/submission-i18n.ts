@@ -46,7 +46,7 @@ const zh = {
   roleUnsupported: "局部重绘的原图与遮罩角色接线尚未完成，当前暂不开放提交。", inputLimit: "最多选择 12 项输入素材。",
   submit: "提交生成", submitting: "正在提交…", failed: "提交未完成，输入已保留。", uncertain: "尚未确认服务端是否接收本次任务。输入与请求编号已保留，请恢复原请求，避免重复生成。",
   retry: "恢复原请求", acknowledged: "已核对任务列表，结束本次恢复", acknowledgeHelp: "结束恢复不会取消服务端任务。请先核对下方任务列表，确认没有重复任务后再开始新提交。",
-  submitted: "任务已创建：{{id}}", refreshFailed: "任务已创建，但列表刷新失败。请刷新任务列表，不要重复提交。",
+  submitted: "已提交制作。可以继续提交下一项，在任务列表查看进度。", refreshFailed: "任务已创建，但列表刷新失败。请刷新任务列表，不要重复提交。",
   discard: "放弃草稿", discardConfirm: "确认清空这份尚未提交的制作要求和素材选择？", discardYes: "确认清空", keep: "继续编辑",
   estimate: "本次预计预留 {{currency}} {{amount}}，实际费用可在任务账单查看。", changedModel: "手选模型的预估费用以服务端提交校验为准。",
 };
@@ -96,7 +96,7 @@ const en: Copy = {
   roleUnsupported: "The original-image and mask roles for inpainting are not connected yet. Submission is unavailable.", inputLimit: "Select at most 12 input items.",
   submit: "Submit generation", submitting: "Submitting…", failed: "Submission did not complete. Your input is retained.", uncertain: "Server acceptance is unknown. Your input and request identity are retained. Resume the original request to avoid duplicate generation.",
   retry: "Resume original request", acknowledged: "I checked the task list; end recovery", acknowledgeHelp: "Ending recovery does not cancel a server task. Check the list below before starting another submission.",
-  submitted: "Task created: {{id}}", refreshFailed: "The task was created but the list refresh failed. Refresh the task list instead of submitting again.",
+  submitted: "Submitted. You can start another task and follow progress in the list.", refreshFailed: "The task was created but the list refresh failed. Refresh the task list instead of submitting again.",
   discard: "Discard draft", discardConfirm: "Clear these unsubmitted instructions and media selections?", discardYes: "Clear draft", keep: "Keep editing",
   estimate: "Estimated amount reserved: {{currency}} {{amount}}. See the task bill for the final charge.", changedModel: "Estimates for a manually selected model are checked by the server at submission.",
 };
@@ -145,7 +145,7 @@ const vi: Copy = {
   roleUnsupported: "Vai trò ảnh gốc và mặt nạ cho vẽ lại vùng chưa được kết nối; hiện chưa thể gửi.", inputLimit: "Chọn tối đa 12 mục đầu vào.",
   submit: "Gửi yêu cầu sinh", submitting: "Đang gửi…", failed: "Chưa gửi xong. Nội dung đã được giữ.", uncertain: "Chưa rõ máy chủ đã nhận tác vụ chưa. Nội dung và mã yêu cầu được giữ. Khôi phục yêu cầu gốc để tránh tạo trùng.",
   retry: "Khôi phục yêu cầu gốc", acknowledged: "Đã kiểm tra danh sách; kết thúc khôi phục", acknowledgeHelp: "Kết thúc khôi phục không hủy tác vụ trên máy chủ. Kiểm tra danh sách bên dưới trước khi gửi mới.",
-  submitted: "Đã tạo tác vụ: {{id}}", refreshFailed: "Đã tạo tác vụ nhưng tải lại danh sách thất bại. Hãy tải lại danh sách, không gửi trùng.",
+  submitted: "Đã gửi. Bạn có thể tiếp tục gửi tác vụ khác và theo dõi tiến độ trong danh sách.", refreshFailed: "Đã tạo tác vụ nhưng tải lại danh sách thất bại. Hãy tải lại danh sách, không gửi trùng.",
   discard: "Bỏ bản nháp", discardConfirm: "Xóa yêu cầu và phương tiện chưa gửi này?", discardYes: "Xóa bản nháp", keep: "Tiếp tục sửa",
   estimate: "Khoản dự kiến tạm giữ: {{currency}} {{amount}}. Xem mức phí cuối cùng trong hóa đơn tác vụ.", changedModel: "Máy chủ kiểm tra chi phí của mô hình chọn thủ công khi gửi.",
 };

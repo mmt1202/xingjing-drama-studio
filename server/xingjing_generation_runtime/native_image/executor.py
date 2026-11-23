@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -74,7 +73,7 @@ class NativeImageExecutor:
         self.sessions, self.repository, self.credentials = sessions, repository, credentials
         self.store, self.root, self.routes = store, root.resolve(), routes
         self.enabled = enabled
-        self._worker: asyncio.Task[None] | None = None
+        self._workers: list[asyncio.Task[None]] = []
 
     @staticmethod
     def supports(route: ModelRouteDecision) -> bool:
@@ -286,15 +285,14 @@ class NativeImageExecutor:
         await self.routes.release_once(registry_key=registry, release_key=key, succeeded=True)
 
     async def start(self) -> None:
-        if self._worker is None:
-            self._worker = asyncio.create_task(self._loop())
+        if not self._workers:
+            self._workers = [asyncio.create_task(self._loop()) for _ in range(3)]
 
     async def close(self) -> None:
-        if self._worker:
-            self._worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._worker
-            self._worker = None
+        for worker in self._workers:
+            worker.cancel()
+        await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
 
     async def _loop(self) -> None:
         import logging
@@ -310,7 +308,12 @@ class NativeImageExecutor:
                 await asyncio.sleep(5)
 
     async def run_once(self) -> bool:
-        from server.xingjing_model_control.runtime import ModelRouteReleaseRow
+        from server.xingjing_model_control.runtime import (
+            ModelDefinitionRow,
+            ModelHealthRow,
+            ModelRouteReleaseRow,
+            ModelRouteReservationRow,
+        )
 
         async with self.sessions() as session:
             terminal = await session.scalar(
@@ -333,11 +336,32 @@ class NativeImageExecutor:
             return True
         now, token = _now(), str(uuid4())
         async with self.sessions.begin() as session:
+            # Skip waiting jobs whose model is full so other models and completed results can move forward.
+            waiting_for_slot = (
+                select(ModelRouteReservationRow.release_key)
+                .join(ModelDefinitionRow, ModelDefinitionRow.registry_key == ModelRouteReservationRow.registry_key)
+                .join(ModelHealthRow, ModelHealthRow.registry_key == ModelDefinitionRow.registry_key)
+                .where(
+                    ModelRouteReservationRow.capacity_reserved.is_(False),
+                    or_(
+                        ModelHealthRow.active_calls >= ModelDefinitionRow.max_concurrency,
+                        ModelDefinitionRow.active.is_(False),
+                        ModelHealthRow.status == "unhealthy",
+                        ModelHealthRow.circuit_open_until > now,
+                    ),
+                )
+            )
             row = await session.scalar(
                 select(NativeImageExecutionRow)
                 .where(
                     or_(
-                        NativeImageExecutionRow.status == "queued"
+                        and_(
+                            NativeImageExecutionRow.status == "queued",
+                            or_(
+                                NativeImageExecutionRow.execution_id.not_in(waiting_for_slot),
+                                NativeImageExecutionRow.created_at <= now - timedelta(hours=6),
+                            ),
+                        )
                         if self.enabled
                         else NativeImageExecutionRow.status == "never-dispatch",
                         and_(
@@ -389,6 +413,34 @@ class NativeImageExecutor:
             if not changed.rowcount:  # pyright: ignore[reportAttributeAccessIssue]
                 return True
             identity = row.execution_id
+            if previous == "queued":
+                reservation = await session.get(ModelRouteReservationRow, identity)
+                if reservation is not None and not reservation.capacity_reserved:
+                    model = await session.get(ModelDefinitionRow, row.registry_key, with_for_update=True)
+                    if model is None or not model.active:
+                        acquired = False
+                    else:
+                        slot = await session.execute(
+                            update(ModelHealthRow)
+                            .where(
+                                ModelHealthRow.registry_key == model.registry_key,
+                                ModelHealthRow.active_calls < model.max_concurrency,
+                                ModelHealthRow.status != "unhealthy",
+                                or_(
+                                    ModelHealthRow.circuit_open_until.is_(None),
+                                    ModelHealthRow.circuit_open_until <= now,
+                                ),
+                            )
+                            .values(active_calls=ModelHealthRow.active_calls + 1)
+                        )
+                        acquired = bool(slot.rowcount)  # pyright: ignore[reportAttributeAccessIssue]
+                    if acquired:
+                        reservation.capacity_reserved = True
+                    else:
+                        parent = await session.get(TaskRow, (row.workspace_id, row.project_id, row.task_id))
+                        if parent is None or GenerationTask.model_validate(parent.snapshot).timeout_at > now:
+                            await session.rollback()
+                            return False
         await self._execute(identity, token, publish_only=previous == "result_ready")
         return True
 

@@ -36,6 +36,7 @@ async def choose_candidate(
     requested_model_id: str | None,
     parameters: Mapping[str, object],
     now: datetime,
+    queue_native_images: bool = False,
 ) -> tuple[Candidate, bool]:
     options = RoutingOptions.model_validate(policy.routing_options or {}) if policy else RoutingOptions()
     candidates: list[Candidate] = []
@@ -60,7 +61,15 @@ async def choose_candidate(
             health.status == "unhealthy"
             or health.circuit_open_until
             and _utc(health.circuit_open_until) > now
-            or health.active_calls >= model.max_concurrency
+            or (
+                health.active_calls >= model.max_concurrency
+                and not (
+                    queue_native_images
+                    and media_type == "image"
+                    and model.provider_id == "openai"
+                    and model.credential_ref.startswith("secret://provider-credential/")
+                )
+            )
             or options.maxLatencyMs is not None
             and health.latency_ms is not None
             and health.latency_ms > options.maxLatencyMs

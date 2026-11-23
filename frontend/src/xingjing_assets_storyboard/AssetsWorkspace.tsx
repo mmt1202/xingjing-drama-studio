@@ -14,14 +14,13 @@ import type {
   AssetItem,
   AssetType,
   AssetsStoryboardPort,
-  BatchReceipt,
   AssetListQuery,
   RightsStatus,
   SessionContext,
   TaskReceipt,
   WorkspaceProjectScope,
 } from "./contracts";
-import { BatchResultPanel, ConfirmDialog, LoadingState, StatePanel, TaskSummary, WorkspaceShell, button, panel, primaryButton } from "./ui";
+import { ConfirmDialog, LoadingState, StatePanel, TaskSummary, WorkspaceShell, button, panel, primaryButton } from "./ui";
 import { useProductionHandoffTranslation } from "./handoff-i18n";
 import { useDraftProtection } from "./useDraftProtection";
 import { clearProductionDraft, productionDraftSlot, type ProductionDraftScope } from "./draft-state";
@@ -383,7 +382,6 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const operationLatch = useRef(false);
   const [context, setContext] = useState<SessionContext>();
   const [assets, setAssets] = useState<readonly AssetItem[]>();
-  const [selectedAssetIds, setSelectedAssetIds] = useState<readonly string[]>([]);
   const [nextToken, setNextToken] = useState<string | null>(null);
   const { t: libraryText } = useAssetLibraryTranslation();
   const browseKey = JSON.stringify(["asset-library", sessionEpoch, scope.workspaceId, scope.projectId, scope.episodeId]);
@@ -393,12 +391,11 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const [libraryTotal, setLibraryTotal] = useState(0);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [permission, setPermission] = useState<{ asset: AssetItem; seed?: PermissionDraft }>();
-  const batchNames = useRef(new Map<string, string>());
   const [search, setSearch] = useState(""); const [type, setType] = useState<AssetType | "">(""); const [rights, setRights] = useState<RightsStatus | "">("");
   const [error, setError] = useState<unknown>(); const [forbidden, setForbidden] = useState<AssetsStoryboardApiError>(); const [conflict, setConflict] = useState<AssetsStoryboardApiError>();
   const [activeAction, setActiveAction] = useState<string>();
   const busy = activeAction !== undefined;
-  const [batch, setBatch] = useState<BatchReceipt>(); const [task, setTask] = useState<TaskReceipt>(); const [taskOwnerId, setTaskOwnerId] = useState<string>(); const [message, setMessage] = useState("");
+  const [task, setTask] = useState<TaskReceipt>(); const [taskOwnerId, setTaskOwnerId] = useState<string>(); const [message, setMessage] = useState("");
   const load = useCallback(async (query = activeQuery, append = false, offset = libraryOffset) => {
     loadAbort.current?.abort();
     const controller = new AbortController();
@@ -438,7 +435,6 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
           total = result.total ?? lastOffset + result.items.length;
         }
         setLibraryTotal(total);
-        setSelectedAssetIds((ids) => ids.filter((id) => result.items.some((asset) => asset.id === id && asset.rightsStatus === "pending")));
       }
       setAssets((current) => append && current ? [...current, ...result.items] : result.items); setNextToken(result.nextToken);
     } catch (cause) {
@@ -576,7 +572,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         if (exactDetail && saved.id === targetAssetId) setDetail({ key: detailKey, loading: false, asset: saved });
         setAssets((items) => items?.map((item) => item.id === saved.id ? saved : item));
       }
-      if (result.batch && action !== "extractAssets") setBatch(result.batch); if (result.message && receiptSaved) setMessage(result.message);
+      if (result.message && receiptSaved) setMessage(result.message);
       await load();
       return result;
     } catch (cause) {
@@ -631,27 +627,17 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     {taskStorageUnavailable ? <p role="status" className="mb-4 text-xs text-amber-200">{handoff("storageUnavailable")}</p> : null}
     {sourceError && (activeView === "extract" || activeView === "library") ? <StatePanel title={extractionText("operationFailed")} detail={sourceError.message} requestId={sourceError.requestId} tone="danger" /> : null}
     {activeView === "extract" ? <AssetExtraction {...sourceProps} api={api} scope={scope} task={taskOwnerId ? undefined : task} onLibrary={() => navigate("library")} onOpenAsset={(id) => navigate("editor", id)} onRun={(scriptVersionId, types, interpretNarration) => run("extractAssets", { scriptVersionId, assetTypes: types, ...(interpretNarration ? { interpretNarration } : {}) })} /> : null}
-    {activeView === "library" ? <AssetLibrary scopeTitle={scopeTitle} episode={Boolean(scope.episodeId)} project={hasProjectContext} manage={canManage}
+    {activeView === "library" ? <AssetLibrary key={browseKey} scope={scope} api={api} actorId={context.user.id} onRefresh={() => void load()} scopeTitle={scopeTitle} episode={Boolean(scope.episodeId)} project={hasProjectContext} manage={canManage}
+      onConfirm={async (action, payload) => (await run(action, payload, undefined, undefined))?.batch}
       ownerProject={scope.projectId} assets={assets} total={libraryTotal} offset={libraryOffset} query={activeQuery}
-      loading={libraryLoading} busy={busy} restoreFocus={browse.focusAsset} selected={selectedAssetIds}
+      loading={libraryLoading} busy={busy} restoreFocus={browse.focusAsset}
       manual={hasProjectContext && canManage ? <ManualAssetCreate key={draftReset} {...sourceProps} onDirty={setDraftBlocked}
         onCreate={(payload) => void run("createAsset", payload, undefined, undefined)} /> : undefined}
       onApply={(query, offset) => {
-        setActiveQuery(query); setLibraryOffset(offset); setSelectedAssetIds([]); setBatch(undefined);
+        setActiveQuery(query); setLibraryOffset(offset);
         rememberLibrary(browseKey, { query, offset }); void load(query, false, offset);
       }}
-      onSelect={(id) => setSelectedAssetIds((ids) => ids.includes(id) ? ids.filter((old) => old !== id) : [...ids, id])}
-      onBatch={() => {
-        batchNames.current = new Map(assets.map((asset) => [asset.id, asset.name]));
-        const records = Object.fromEntries(assets.filter((asset) => selectedAssetIds.includes(asset.id) && asset.rights?.id)
-          .map((asset) => [asset.id, { version: asset.version, rightsId: asset.rights?.id }]));
-        void run("confirmAssets", { itemIds: selectedAssetIds, ...(Object.keys(records).length ? { records } : {}) }, undefined, undefined);
-      }}
-      onOpen={openFromLibrary} onRights={(asset) => setPermission({ asset })}
-      batchReport={batch ? <BatchResultPanel hideOperationId receipt={{...batch, items: batch.items.map((item) => ({ ...item,
-        name: item.name ?? batchNames.current.get(item.id) ?? libraryText("assetLabel"),
-        message: item.message && /^[A-Z_]+$/.test(item.message) ? libraryText(["RIGHTS_SELECTION_CHANGED", "VERSION_CONFLICT"].includes(item.message) ? "conflict" : "proofError") : item.message }))}}
-        busy={busy} onRetry={(itemIds) => void run("retryFailedItems", { itemIds, previousOperationId: batch.operationId }, undefined, undefined)} /> : undefined} /> : null}
+      onOpen={openFromLibrary} onRights={(asset) => setPermission({ asset })} /> : null}
     {permission ? <AssetPermissionDialog key={permission.asset.id} initial={permission.asset} seed={permission.seed} api={api} scope={scope}
       editable={canManage && !editingLocked && (!scope.projectId || scope.projectId === permission.asset.projectId)}
       onClose={() => setPermission(undefined)} onSaved={(updated) => {

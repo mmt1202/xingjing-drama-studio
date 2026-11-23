@@ -114,8 +114,22 @@ class ModelRouteAdmission:
             requested_model_id=route.model_id,
             parameters=parameters,
             now=now,
+            queue_native_images=kind == "native_image",
         )
-        health.active_calls += 1
+        has_slot = health.active_calls < model.max_concurrency
+        if kind == "native_image" and has_slot:
+            waiting = await session.scalar(
+                select(ModelRouteReservationRow.release_key)
+                .where(
+                    ModelRouteReservationRow.registry_key == model.registry_key,
+                    ModelRouteReservationRow.capacity_reserved.is_(False),
+                    ModelRouteReservationRow.released_at.is_(None),
+                )
+                .limit(1)
+            )
+            has_slot = waiting is None
+        if has_slot:
+            health.active_calls += 1
         session.add(
             ModelRouteReservationRow(
                 release_key=release_key,
@@ -127,6 +141,7 @@ class ModelRouteAdmission:
                 request_fingerprint=task.request_fingerprint,
                 pricing_version=route.pricing_version,
                 kind=kind,
+                capacity_reserved=has_slot,
             )
         )
 

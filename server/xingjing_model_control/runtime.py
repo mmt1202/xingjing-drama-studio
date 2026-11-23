@@ -13,7 +13,22 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, and_, func, or_, select
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    and_,
+    func,
+    or_,
+    select,
+    true,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -115,6 +130,7 @@ class ModelRouteReservationRow(ModelControlBase):
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     pricing_version: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    capacity_reserved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     dispatch_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -196,6 +212,7 @@ class ModelRouteResolver:
         requested_model_id: str | None,
         parameters: Mapping[str, object],
         acquire: bool = False,
+        queue_native_images: bool = False,
     ) -> ModelRouteDecision:
         from .routing import choose_candidate
 
@@ -238,13 +255,14 @@ class ModelRouteResolver:
                 requested_model_id=requested_model_id,
                 parameters=parameters,
                 now=now,
+                queue_native_images=queue_native_images and not acquire,
             )
         if acquire:
             async with self._sessions() as session, session.begin():
                 definition = await session.get(ModelDefinitionRow, selected[0].registry_key, with_for_update=True)
                 if definition is None or not definition.active or definition.version != selected[0].version:
                     raise LookupError("MODEL_CONFIGURATION_CHANGED")
-                health = await session.get(ModelHealthRow, selected[0].registry_key, with_for_update=True)
+                health = await _lock_health(session, selected[0].registry_key)
                 if health is None:
                     health = ModelHealthRow(registry_key=selected[0].registry_key, status="unknown")
                     session.add(health)
@@ -271,7 +289,7 @@ class ModelRouteResolver:
         self, *, registry_key: str, release_key: str, succeeded: bool, evidence: ModelCallEvidenceRow | None = None
     ) -> None:
         async with self._sessions.begin() as session:
-            health = await session.get(ModelHealthRow, registry_key, with_for_update=True)
+            health = await _lock_health(session, registry_key)
             previous = await session.get(ModelRouteReleaseRow, release_key)
             if previous is not None:
                 if previous.registry_key != registry_key or previous.succeeded != succeeded:
@@ -285,7 +303,7 @@ class ModelRouteResolver:
                 reservation.released_at = _now()
             if evidence is not None:
                 session.add(evidence)
-            if health is not None:
+            if health is not None and (reservation is None or reservation.capacity_reserved):
                 health.active_calls = max(await _reserved_calls(session, registry_key), health.active_calls - 1)
                 if succeeded:
                     health.status, health.consecutive_failures, health.circuit_open_until = "healthy", 0, None
@@ -312,7 +330,7 @@ class ModelRouteResolver:
             )
             if model is None:
                 return
-            health = await session.get(ModelHealthRow, model.registry_key, with_for_update=True)
+            health = await _lock_health(session, model.registry_key)
             if health is None:
                 return
             health.active_calls = max(await _reserved_calls(session, model.registry_key), health.active_calls - 1)
@@ -330,6 +348,17 @@ class ModelRouteResolver:
             health.checked_at = _now()
 
 
+async def _lock_health(session: AsyncSession, registry_key: str) -> ModelHealthRow | None:
+    if session.get_bind().dialect.name == "sqlite":
+        # Acquire SQLite's write lock before reading counters shared by concurrent workers.
+        await session.execute(
+            update(ModelHealthRow)
+            .where(ModelHealthRow.registry_key == registry_key)
+            .values(active_calls=ModelHealthRow.active_calls)
+        )
+    return await session.get(ModelHealthRow, registry_key, with_for_update=True, populate_existing=True)
+
+
 async def _reserved_calls(session: AsyncSession, registry_key: str) -> int:
     return int(
         await session.scalar(
@@ -338,6 +367,7 @@ async def _reserved_calls(session: AsyncSession, registry_key: str) -> int:
             .where(
                 ModelRouteReservationRow.registry_key == registry_key,
                 ModelRouteReservationRow.released_at.is_(None),
+                ModelRouteReservationRow.capacity_reserved.is_(True),
             )
         )
         or 0
@@ -431,7 +461,7 @@ class ModelControlRuntime:
             if outcome not in {"healthy", "failed"}:
                 return _error(request.headers.get("X-Request-Id", ""), "MODEL_HEALTH_OUTCOME_INVALID", 400)
             async with self._session() as session, session.begin():
-                row = await session.get(ModelHealthRow, key, with_for_update=True)
+                row = await _lock_health(session, key)
                 if row is None:
                     row = ModelHealthRow(registry_key=key, consecutive_failures=0, active_calls=0)
                     session.add(row)
