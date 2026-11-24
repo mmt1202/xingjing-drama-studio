@@ -9,6 +9,8 @@ export const assetImageCapabilities = {
   generateExpressions: "character_expressions",
 } as const;
 
+export type AssetImageCapability = (typeof assetImageCapabilities)[keyof typeof assetImageCapabilities];
+
 export function useAssetImageModels(api: AssetsStoryboardPort, workspaceId: string, projectId?: string) {
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<{ key: string; value?: readonly GenerationService[]; error?: "modelDenied" | "modelError" }>();
@@ -40,6 +42,6 @@ export interface AssetImageControls {
   readonly activeAction?: string;
   readonly pending: boolean;
   readonly rejection?: string;
-  readonly billingHref?: string;
-  readonly canManageBilling: boolean;
+  readonly creditRejection?: AssetImageCapability;
+  readonly getCreditBalance: AssetsStoryboardPort["getGenerationCreditBalance"];
 }

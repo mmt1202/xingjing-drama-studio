@@ -2,10 +2,14 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
-  askOwner: "工作区可用余额不足，请联系负责账单的成员补充算力后再试。",
-  topUpLink: "查看余额与充值",
-  balanceLink: "查看算力余额",
-  insufficient: "可用余额不足，本次生成尚未开始。请先为工作区补充算力。",
+  askOwner: "可以请管理账单的成员核对预留或补充算力。",
+  balanceLink: "查看算力账单",
+  showBalance: "查看可用余额", hideBalance: "收起余额",
+  balanceLoading: "正在读取余额…", balanceUnavailable: "暂时无法读取余额，可以打开账单查看。",
+  insufficient: "这次出图没有开始，工作区可用余额低于提交需要的预留金额。",
+  balanceAmounts: "当前可用 {{available}}，已预留 {{held}}。",
+  heldHint: "预留释放后，可以再试。",
+  freeReserve: "本次出图免费。提交时需要临时预留 {{amount}}，结算后会全额释放。",
   estimate: "本次预计预留 {{amount}}。",
   charge: "成功交付后收费 {{amount}}。",
   checking: "正在查看参考图生成是否可用…", modelMissing: "参考图生成暂时不可用。你可以继续编辑并保存这份资产，稍后再来生成。",
@@ -31,10 +35,14 @@ const zh = {
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
-  askOwner: "The workspace balance is too low. Ask a billing manager to add funds before trying again.",
-  topUpLink: "Balance and top-up",
-  balanceLink: "View balance",
-  insufficient: "The available balance is too low to start. Add funds to the workspace before trying again.",
+  askOwner: "A billing manager can check reservations or add funds.",
+  balanceLink: "View workspace billing",
+  showBalance: "Check available balance", hideBalance: "Hide balance",
+  balanceLoading: "Checking the balance…", balanceUnavailable: "Balance unavailable here. Open billing to check it.",
+  insufficient: "Image generation did not start. The available workspace balance was below the required reservation.",
+  balanceAmounts: "Currently available {{available}}, with {{held}} reserved.",
+  heldHint: "You can try again once reserved funds are released.",
+  freeReserve: "This image is free. Starting it requires a temporary reservation of {{amount}}, which is released in full at settlement.",
   estimate: "Estimated amount reserved for this request: {{amount}}.",
   charge: "Charge on successful delivery: {{amount}}.",
   checking: "Checking reference image availability…", modelMissing: "Reference images are temporarily unavailable. You can edit and save this asset and try again later.",
@@ -59,10 +67,14 @@ const en: Copy = {
   firstImage: "Generate and adopt a reference first", sourceMissing: "No primary version is available. Save the asset first.", failure: "The image could not be generated. Check the task record and try again later.",
 };
 const vi: Copy = {
-  askOwner: "Số dư không đủ. Hãy nhờ người phụ trách thanh toán nạp thêm rồi thử lại.",
-  topUpLink: "Số dư và nạp tiền",
-  balanceLink: "Xem số dư",
-  insufficient: "Số dư khả dụng không đủ để bắt đầu. Hãy nạp thêm vào không gian làm việc.",
+  askOwner: "Bạn có thể nhờ người quản lý thanh toán kiểm tra khoản tạm giữ hoặc nạp thêm.",
+  balanceLink: "Xem chi tiết thanh toán",
+  showBalance: "Xem số dư khả dụng", hideBalance: "Ẩn số dư",
+  balanceLoading: "Đang đọc số dư…", balanceUnavailable: "Tạm thời chưa đọc được số dư. Bạn có thể mở trang thanh toán để kiểm tra.",
+  insufficient: "Ảnh chưa bắt đầu được tạo vì số dư khả dụng không đủ cho khoản cần tạm giữ.",
+  balanceAmounts: "Hiện còn {{available}} khả dụng và {{held}} đang được tạm giữ.",
+  heldHint: "Bạn có thể thử lại khi khoản tạm giữ được giải phóng.",
+  freeReserve: "Ảnh này miễn phí. Khi gửi yêu cầu, hệ thống tạm giữ {{amount}} và hoàn lại toàn bộ sau quyết toán.",
   estimate: "Khoản dự kiến tạm giữ cho lần tạo này: {{amount}}.",
   charge: "Phí khi bàn giao thành công: {{amount}}.",
   checking: "Đang kiểm tra tính khả dụng của ảnh tham chiếu…", modelMissing: "Tạm thời chưa thể tạo ảnh tham chiếu. Bạn có thể tiếp tục chỉnh sửa, lưu tài sản và thử lại sau.",

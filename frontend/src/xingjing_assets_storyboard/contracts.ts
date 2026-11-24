@@ -8,6 +8,12 @@ export interface WorkspaceProjectScope {
   readonly episodeId?: string;
 }
 
+export interface GenerationCreditBalance {
+  readonly currency: string;
+  readonly availableMinor: number;
+  readonly heldMinor: number;
+}
+
 export interface SessionContext {
   readonly user: { readonly id: string; readonly name: string };
   readonly workspace: { readonly id: string; readonly name: string };
@@ -474,6 +480,7 @@ export interface AssetsStoryboardPort {
     signal?: AbortSignal,
   ): Promise<AssetActionResult>;
   getGenerationServices?(scope: WorkspaceProjectScope, capabilities: readonly string[], signal?: AbortSignal, mediaType?: "image" | "video"): Promise<readonly GenerationService[]>;
+  readonly getGenerationCreditBalance?: (workspaceId: string, signal: AbortSignal) => Promise<GenerationCreditBalance | null>;
   getAssetGenerationReceipt?(scope: WorkspaceProjectScope, assetId: string, sourceVersionId: string, idempotencyKey: string, signal?: AbortSignal): Promise<TaskReceipt | null>;
   getGenerationTask(
     scope: WorkspaceProjectScope,

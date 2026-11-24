@@ -1,8 +1,9 @@
-import type { AssetItem, TaskReceipt } from "./contracts";
+import { useEffect, useState } from "react";
+import type { AssetItem, GenerationCreditBalance, TaskReceipt } from "./contracts";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
 import { button, panel, primaryButton, TaskSummary } from "./ui";
 import { useAuthenticatedMedia } from "@/hooks/useAuthenticatedMedia";
-import type { AssetImageControls } from "./asset-image-models";
+import type { AssetImageCapability, AssetImageControls } from "./asset-image-models";
 
 export function assetHasReferenceImage(asset: AssetItem) {
   const version = asset.versions.find((item) => item.id === asset.currentVersionId);
@@ -19,12 +20,56 @@ function ReferencePreview({ source, alt, workspaceId, projectId }: { source: str
     <p role="status" className="mt-2 text-xs text-slate-400">{t("loadingImage")}</p>;
 }
 
+function imagePrice(minor: number, currency: string, language: string | undefined) {
+  const formatter = new Intl.NumberFormat(language, { style: "currency", currency });
+  return formatter.format(minor / 10 ** (formatter.resolvedOptions().maximumFractionDigits ?? 2));
+}
+
+export function AssetImageBilling({ generation, capability }: { generation: AssetImageControls; capability: AssetImageCapability }) {
+  const { t, i18n } = useAssetGenerationTranslation();
+  const { models, getCreditBalance } = generation;
+  const offer = models.offer(capability);
+  const workspaceId = models.workspaceId;
+  const canView = offer?.canViewBilling === true;
+  const rejected = generation.creditRejection === capability;
+  const [expanded, setExpanded] = useState(false);
+  const [balance, setBalance] = useState<GenerationCreditBalance | null>();
+  const showBalance = canView && (expanded || rejected);
+
+  useEffect(() => {
+    if (!showBalance || !getCreditBalance) return;
+    const controller = new AbortController();
+    void getCreditBalance(workspaceId, controller.signal).then(
+      (value) => { if (!controller.signal.aborted) setBalance(value); },
+      () => { if (!controller.signal.aborted) setBalance(null); },
+    );
+    return () => controller.abort();
+  }, [showBalance, rejected, getCreditBalance, workspaceId]);
+
+  return <>
+    {models.supports(capability) && offer?.currency && offer.estimatedMinor != null ? <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-slate-300">
+      <p>{t(offer.successfulOutputMinor === 0 ? "freeReserve" : "estimate", { amount: imagePrice(offer.estimatedMinor, offer.currency, i18n.resolvedLanguage) })}
+        {offer.successfulOutputMinor != null && offer.successfulOutputMinor > 0 ? ` ${t("charge", { amount: imagePrice(offer.successfulOutputMinor, offer.currency, i18n.resolvedLanguage) })}` : null}</p>
+      {canView && !rejected ? <button type="button" aria-expanded={expanded} className="text-violet-300 underline underline-offset-2" onClick={() => { setBalance(undefined); setExpanded(!expanded); }}>{t(expanded ? "hideBalance" : "showBalance")}</button> : null}
+    </div> : null}
+    {rejected || showBalance ? <div role="status" className={`mt-3 space-y-1 rounded-lg border px-3 py-2 text-sm leading-6 ${rejected ? "border-amber-300/20 bg-amber-300/5 text-amber-100" : "border-white/10 text-slate-300"}`}>
+      {rejected ? <p>{t("insufficient")}</p> : null}
+      {showBalance && (balance ? <p>{t("balanceAmounts", {
+        available: imagePrice(balance.availableMinor, balance.currency, i18n.resolvedLanguage),
+        held: imagePrice(balance.heldMinor, balance.currency, i18n.resolvedLanguage),
+      })} {rejected && balance.heldMinor > 0 ? t("heldHint") : null}</p> : <p>{t(balance === undefined && getCreditBalance ? "balanceLoading" : "balanceUnavailable")}</p>)}
+      {rejected && offer && !offer.canManageBilling ? <p>{t("askOwner")}</p> : null}
+      {showBalance ? <a className="inline-block underline underline-offset-2" href={`/app/workspaces/${encodeURIComponent(workspaceId)}/billing`}>{t("balanceLink")}</a> : null}
+    </div> : null}
+  </>;
+}
+
 export function AssetReferenceGeneration({ asset, canManage, busy, generation, draftBlocked = false, ownerProject = true, profileEditor = false, task, onGenerate, onAdopt }: {
   asset: AssetItem; canManage: boolean; busy: boolean; draftBlocked?: boolean; ownerProject?: boolean; task?: TaskReceipt;
   generation: AssetImageControls; profileEditor?: boolean;
   onGenerate: () => void; onAdopt: (generatedAssetId: string) => void;
 }) {
-  const { t, i18n } = useAssetGenerationTranslation();
+  const { t } = useAssetGenerationTranslation();
   const version = asset.versions.find((item) => item.id === asset.currentVersionId);
   const hasReference = assetHasReferenceImage(asset);
   const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
@@ -32,7 +77,6 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
   const blocked = busy || generation.pending || draftBlocked || !canManage || !ownerProject;
   const { models } = generation;
   const ready = models.supports("image_generation");
-  const offer = models.offer("image_generation");
   const projectId = asset.projectId ?? models.projectId;
   const source = hasReference && projectId && version?.generatedAssetId
     ? `/api/v1/generation-assets/${encodeURIComponent(version.generatedAssetId)}/content?projectId=${encodeURIComponent(projectId)}` : undefined;
@@ -45,17 +89,14 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
       <p className="mt-3 text-xs leading-6 text-slate-400">{!version ? t("sourceMissing") : hasReference ? t("sourceVersion", { number: version.versionNo }) : t("plainAsset")}</p>
       {profileEditor && canManage && ownerProject && !asset.description?.trim() ? <p className="mt-2 text-xs leading-6 text-slate-400">{t("noDescription")}</p> : null}
       {draftBlocked ? <p role="status" className="mt-3 text-xs text-amber-200">{t("savedFirst")}</p> : null}
-      {generation.rejection ? <p role="status" className="mt-3 text-sm text-amber-200">{generation.rejection} {generation.billingHref ? <a className="underline" href={generation.billingHref}>{t(generation.canManageBilling ? "topUpLink" : "balanceLink")}</a> : null}</p> : null}
+      {generation.rejection ? <p role="status" className="mt-3 text-sm text-amber-200">{generation.rejection}</p> : null}
       {ownerProject && !ready ? <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/5 p-3">
         <p role="status" className="text-sm leading-6 text-amber-100">{t(models.notice ?? "modelMissing")}</p>
         {models.notice === "checking" ? null : <div className="mt-2 flex flex-wrap items-center gap-3">
           <button type="button" className={button} onClick={models.recheck}>{t("checkModels")}</button>
         </div>}
       </div> : null}
-      {ready && offer?.currency && offer.estimatedMinor != null ? <p className="mt-3 text-sm text-slate-300">
-        {t("estimate", { amount: new Intl.NumberFormat(i18n.resolvedLanguage, { style: "currency", currency: offer.currency }).format(offer.estimatedMinor / 100) })}
-        {offer.successfulOutputMinor != null ? ` ${t("charge", { amount: new Intl.NumberFormat(i18n.resolvedLanguage, { style: "currency", currency: offer.currency }).format(offer.successfulOutputMinor / 100) })}` : null}
-      </p> : null}
+      <AssetImageBilling key={asset.id} generation={generation} capability="image_generation" />
       <button type="button" className={`${primaryButton} mt-4 disabled:cursor-not-allowed disabled:opacity-50`} disabled={blocked || working || !version || !ready} onClick={onGenerate}>{t(generation.activeAction === "generateReferenceImage" ? "submitting" : hasReference ? "regenerate" : "generate")}</button>
     </>}
     {task ? <>

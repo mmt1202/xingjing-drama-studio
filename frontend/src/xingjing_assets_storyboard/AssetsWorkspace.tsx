@@ -26,9 +26,9 @@ import { useDraftProtection } from "./useDraftProtection";
 import { clearProductionDraft, productionDraftSlot, type ProductionDraftScope } from "./draft-state";
 import { useRecoverableDraft } from "./useRecoverableDraft";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
-import { AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferenceGeneration";
+import { AssetImageBilling, AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferenceGeneration";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
-import { assetImageCapabilities, useAssetImageModels, type AssetImageControls } from "./asset-image-models";
+import { assetImageCapabilities, useAssetImageModels, type AssetImageCapability, type AssetImageControls } from "./asset-image-models";
 import { useAssetExtractionTranslation } from "./asset-extraction-i18n";
 import { FrozenScriptSelect, useFrozenScriptSource, type EpisodeScriptBinding, type FrozenScriptSource } from "./FrozenScriptSelect";
 import { ExtractionResults, extractionTypes, useExtractionLocation } from "./ExtractionResults";
@@ -350,6 +350,7 @@ function CharacterDerivative({ asset, mode, canManage, busy, generation, ownerPr
     {!hasReference ? <p role="status" className="mt-4 text-sm text-amber-200">{t("firstImage")}</p> : null}
     <label className="mt-5 block text-sm">{mode === "turnaround" ? "需要生成的视图（逗号分隔）" : "需要生成的表情（逗号分隔）"}<textarea rows={3} value={values} onChange={(event) => setValues(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label>
     {hasReference && !available ? <p role="status" className="mt-3 text-sm text-amber-200">{t(generation.models.notice ?? "noDerivative")}</p> : null}
+    {hasReference ? <AssetImageBilling key={action + asset.id} generation={generation} capability={assetImageCapabilities[action]} /> : null}
     <button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || generation.pending || !available || working || !hasReference || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{generation.activeAction === action ? t("submitting") : mode === "turnaround" ? "生成三视图版本" : "生成表情集版本"}</button>
     <AssetReferenceGeneration asset={asset} generation={generation} ownerProject={ownerProject} canManage={canManage} busy={busy} task={task} onGenerate={onGenerateReference} onAdopt={onAdopt} />
   </section>;
@@ -375,7 +376,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const { t: handoff } = useProductionHandoffTranslation();
   const { t: generationText } = useAssetGenerationTranslation();
   const { t: extractionText } = useAssetExtractionTranslation();
-  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string; assetId?: string; insufficient?: boolean }>();
+  const [sourceError, setSourceError] = useState<{ message: string; requestId?: string; assetId?: string; creditCapability?: AssetImageCapability }>();
   const [pendingRecovery, setPendingRecovery] = useState<{ key: string; operation?: PendingAssetSubmission }>();
   const [taskStorageUnavailable, setTaskStorageUnavailable] = useState(false);
   const [draftBlocked, setDraftBlocked] = useState(false), [draftReset, setDraftReset] = useState(0), [discardConfirm, setDiscardConfirm] = useState(false);
@@ -485,7 +486,13 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const protection = useDraftProtection(draftBlocked || busy || editingLocked);
   const projectId = scope.projectId ?? currentAsset?.projectId;
   const models = useAssetImageModels(api, scope.workspaceId, detailView && currentAsset && currentAsset.type !== "voice" ? projectId : undefined);
-  const generation = { models, activeAction, pending: Boolean(pendingSubmission), canManageBilling: Boolean(context?.permissions.includes("billing.manage")), billingHref: sourceError?.assetId === currentAssetId && sourceError?.insufficient && context?.permissions.includes("billing.view") ? `/app/workspaces/${encodeURIComponent(scope.workspaceId)}/billing` : undefined, rejection: sourceError?.assetId && sourceError.assetId === currentAssetId ? sourceError.message : undefined };
+  const assetError = sourceError?.assetId && sourceError.assetId === currentAssetId ? sourceError : undefined;
+  const generation: AssetImageControls = {
+    models, activeAction, pending: Boolean(pendingSubmission),
+    rejection: assetError?.creditCapability ? undefined : assetError?.message,
+    creditRejection: assetError?.creditCapability,
+    getCreditBalance: api.getGenerationCreditBalance,
+  };
   const assetRevision = currentAsset?.version;
   useEffect(() => {
     if (busy || !taskStorageKey || !projectId || !pendingSubmission || pendingSubmission.action === "adoptGenerationOutput" || !api.getAssetGenerationReceipt) return;
@@ -580,8 +587,8 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         && "submissionState" in cause.details && cause.details.submissionState === "rejected";
       const uncertain = !rejected && (!(cause instanceof AssetsStoryboardApiError) || cause.status === null || cause.status >= 500 || cause.status === 408);
       if (retained && storageKey && !uncertain) { clearPendingAssetSubmission(storageKey); setPendingRecovery({ key: storageKey }); }
-      if (retained && cause instanceof AssetsStoryboardApiError && cause.code === "GENERATION_INSUFFICIENT_CREDITS") {
-        setSourceError({ message: generationText(context?.permissions.includes("billing.manage") ? "insufficient" : "askOwner"), assetId: target?.id, insufficient: true });
+      if (retained && retained.action !== "adoptGenerationOutput" && cause instanceof AssetsStoryboardApiError && cause.code === "GENERATION_INSUFFICIENT_CREDITS") {
+        setSourceError({ message: generationText("insufficient"), assetId: retained.targetId, creditCapability: assetImageCapabilities[retained.action] });
       } else if (retained && !uncertain && (rejected || cause instanceof AssetsStoryboardApiError && /^(MODEL_|GENERATION_(NATIVE_|MODEL_|PROVIDER_))/.test(cause.code))) {
         models.recheck();
         setSourceError({ message: generationText("notSubmitted"), assetId: target?.id, requestId: errorRequestId(cause) });
@@ -625,7 +632,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       {(!pendingCapability || missingReceipt && models.supports(pendingCapability)) ? <button type="button" className={button + " ml-2 mt-3"} disabled={draftBlocked} onClick={() => void run(pendingSubmission.action, pendingSubmission.payload, { id: pendingSubmission.targetId, projectId: pendingSubmission.projectId }, pendingSubmission.version, pendingSubmission)}>{generationText(pendingCapability ? "retryOriginal" : "recoverSubmission")}</button> : null}
     </section> : null}
     {taskStorageUnavailable ? <p role="status" className="mb-4 text-xs text-amber-200">{handoff("storageUnavailable")}</p> : null}
-    {sourceError && (activeView === "extract" || activeView === "library") ? <StatePanel title={extractionText("operationFailed")} detail={sourceError.message} requestId={sourceError.requestId} tone="danger" /> : null}
+    {sourceError && !sourceError.assetId && (activeView === "extract" || activeView === "library") ? <StatePanel title={extractionText("operationFailed")} detail={sourceError.message} requestId={sourceError.requestId} tone="danger" /> : null}
     {activeView === "extract" ? <AssetExtraction {...sourceProps} api={api} scope={scope} task={taskOwnerId ? undefined : task} onLibrary={() => navigate("library")} onOpenAsset={(id) => navigate("editor", id)} onRun={(scriptVersionId, types, interpretNarration) => run("extractAssets", { scriptVersionId, assetTypes: types, ...(interpretNarration ? { interpretNarration } : {}) })} /> : null}
     {activeView === "library" ? <AssetLibrary key={browseKey} scope={scope} api={api} actorId={context.user.id} onRefresh={() => void load()} scopeTitle={scopeTitle} episode={Boolean(scope.episodeId)} project={hasProjectContext} manage={canManage}
       onConfirm={async (action, payload) => (await run(action, payload, undefined, undefined))?.batch}

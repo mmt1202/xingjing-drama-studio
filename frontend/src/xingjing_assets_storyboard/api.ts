@@ -640,6 +640,16 @@ export function createAssetsStoryboardApi(
       if (!scope.projectId) throw new Error("PROJECT_REQUIRED");
       return (await request<{ services: GenerationService[] }>(scope, generationServicesPath(scope.projectId, mediaType, capabilities), {}, signal)).data.services;
     },
+    async getGenerationCreditBalance(workspaceId, signal) {
+      const path = `/workspaces/${encodeURIComponent(workspaceId)}/credit-account`;
+      const { data } = await request<{ object: {
+        workspace_id: string; currency: string; available_minor: number; held_minor: number; version: number;
+      } }>({ workspaceId }, path, { cache: "no-store", headers: { "X-Workspace-Id": workspaceId } }, signal);
+      const account = data.object;
+      if (!account || account.workspace_id !== workspaceId || !account.version || !/^[A-Z]{3}$/.test(account.currency)
+        || !Number.isSafeInteger(account.available_minor) || !Number.isSafeInteger(account.held_minor)) return null;
+      return { currency: account.currency, availableMinor: account.available_minor, heldMinor: account.held_minor };
+    },
     async getAssetGenerationReceipt(scope, assetId, sourceVersionId, idempotencyKey, signal) {
       const query = new URLSearchParams({ sourceVersionId });
       const path = `/projects/${requireProject(scope)}/assets/${encodeURIComponent(assetId)}/generation-receipt?${query}`;
