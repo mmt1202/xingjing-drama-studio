@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useAssetEditorTranslation } from "./editor-i18n";
 import {
   BookOpen,
   Boxes,
@@ -102,6 +103,7 @@ interface LibraryProps {
 
 export function AssetLibrary(props: LibraryProps) {
   const { t } = useAssetLibraryTranslation();
+  const { t: editor } = useAssetEditorTranslation();
   const { query, assets, offset, total } = props;
   const [search, setSearch] = useState(query.search ?? "");
   const [selected, setSelected] = useState<readonly AssetItem[]>([]);
@@ -342,7 +344,7 @@ export function AssetLibrary(props: LibraryProps) {
                       disabled={props.loading || props.busy}
                       onClick={() => props.onOpen(asset)}
                     >
-                      {t(manage ? "edit" : "open")}
+                      {editor(asset.type + "Title")}
                     </button>
                     {manageable(asset) ? (
                       <input

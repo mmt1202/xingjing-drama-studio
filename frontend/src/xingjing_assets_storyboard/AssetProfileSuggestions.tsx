@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, LoaderCircle, Sparkles } from "lucide-react";
 import { AssetsStoryboardApiError } from "./api";
 import { profileDetails, profileLabel, useAssetProfileTranslation } from "./asset-profile-i18n";
+import { useAssetEditorTranslation } from "./editor-i18n";
 import type { AssetItem, AssetProfileDraft, AssetsStoryboardPort, WorkspaceProjectScope } from "./contracts";
 import { button } from "./ui";
 
@@ -14,6 +15,7 @@ type Props = {
 
 export function AssetProfileSuggestions({ asset, scope, api, disabled, values, onApply }: Props) {
   const { t } = useAssetProfileTranslation();
+  const { t: editor } = useAssetEditorTranslation();
   const [direction, setDirection] = useState("");
   const [result, setResult] = useState<AssetProfileDraft>();
   const [selected, setSelected] = useState<Record<string, string>>({});
@@ -93,7 +95,7 @@ export function AssetProfileSuggestions({ asset, scope, api, disabled, values, o
             if (event.target.checked) next[key] = values[key]; else delete next[key];
             setSelected(next);
           }} />
-        <span className="min-w-0 break-words"><strong className="block text-violet-200">{t(profileLabel(asset.type, key))}</strong>
+        <span className="min-w-0 break-words"><strong className="block text-violet-200">{key === "name" ? editor(asset.type + "Name") : key === "description" ? editor(asset.type + "Brief") : t(profileLabel(asset.type, key))}</strong>
           <span className="mt-1 block leading-6 text-slate-100">{result.fields[key]}</span>
           {values[key]?.trim() ? <span className="mt-1 block text-xs leading-5 text-slate-400">{t("current")} · {values[key]}</span> : null}
         </span>

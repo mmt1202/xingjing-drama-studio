@@ -103,6 +103,7 @@ export type WorkStatus =
 export interface AssetVersion {
   readonly id: string;
   readonly versionNo: number;
+  readonly profile?: Readonly<Record<string, string>>;
   readonly label?: string;
   readonly status: WorkStatus;
   readonly source: string;

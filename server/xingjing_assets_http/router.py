@@ -272,7 +272,9 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
             and not any(reference.project_id == project_id for reference in asset.references)
         ):
             raise AssetHttpError("ASSET_NOT_FOUND", 404)
-        return _success(context, {"asset": _asset_item(runtime, context, project_id, asset)})
+        return _success(
+            context, {"asset": _asset_item(runtime, context, project_id, asset, include_profile_history=True)}
+        )
 
     @router.get("/workspaces/{workspace_id}/assets/{asset_id}")
     async def get_workspace_asset(request: Request, workspace_id: str, asset_id: str) -> JSONResponse:
@@ -280,7 +282,10 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         asset = _repository(runtime).get(AssetScope(context.tenant_id, context.workspace_id), asset_id)
         if asset is None:
             raise AssetHttpError("ASSET_NOT_FOUND", 404)
-        return _success(context, {"asset": _asset_item(runtime, context, asset.owner_project_id, asset)})
+        return _success(
+            context,
+            {"asset": _asset_item(runtime, context, asset.owner_project_id, asset, include_profile_history=True)},
+        )
 
     @router.post("/projects/{project_id}/assets/{asset_id}/rights-evidence")
     async def upload_rights_evidence(
@@ -760,6 +765,8 @@ def _asset_item(
     project_id: str,
     asset: Asset,
     impacted: tuple[str, ...] | None = None,
+    *,
+    include_profile_history: bool = False,
 ) -> dict[str, object]:
     rights = asset.rights[-1] if asset.rights else None
     rights_status = _rights_status(asset)
@@ -791,6 +798,19 @@ def _asset_item(
                 "status": "draft",
                 "source": asset.source.source_type,
                 "createdAt": version.created_at,
+                **(
+                    {
+                        "profile": {
+                            field: text
+                            for field in PROFILE_TYPES[asset.kind].model_fields
+                            if field != "name"
+                            and isinstance((text := version.content.get(field)), str)
+                            and text.strip()
+                        }
+                    }
+                    if include_profile_history
+                    else {}
+                ),
                 "assetContentSha256": version.content_sha256,
                 "imageCapability": (version.content.get("generationMetadata") or {}).get("capability")
                 if isinstance(version.content.get("generationMetadata"), dict)

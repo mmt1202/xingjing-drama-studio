@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   failedBatchItemIds,
@@ -155,6 +156,7 @@ export function ConfirmDialog({
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
 }) {
+  const { t } = useTranslation("common");
   if (!open) return null;
   return (
     <div
@@ -179,7 +181,7 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={onCancel}
           >
-            取消
+            {t("cancel")}
           </button>
           <button
             type="button"
@@ -187,7 +189,7 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={onConfirm}
           >
-            {busy ? "提交中…" : confirmLabel}
+            {busy ? t("loading") : confirmLabel}
           </button>
         </div>
       </section>
