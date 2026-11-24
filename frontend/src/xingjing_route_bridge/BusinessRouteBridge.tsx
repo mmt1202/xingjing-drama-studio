@@ -1,7 +1,7 @@
 import { paymentButton, usePaymentTranslation } from "@/xingjing_payments/i18n";
 import { PaymentsWorkspace } from "@/xingjing_payments/PaymentsWorkspace";
 import { VersionWorkspace } from "@/xingjing_versions/VersionWorkspace";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useProductionHandoffTranslation } from "@/xingjing_assets_storyboard/handoff-i18n";
 import type { StoryboardView } from "@/xingjing_assets_storyboard/StoryboardWorkspace";
 import { EpisodeWorkspace } from "@/xingjing_creator_projects/EpisodeWorkspace";
@@ -257,6 +257,10 @@ function ProjectBusinessContent({
     () => new URLSearchParams(search),
     [search],
   );
+  const replaceTaskQuery = useCallback((params: URLSearchParams) => {
+    const path = `/app/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/tasks`;
+    navigate(params.size ? `${path}?${params}` : path, { replace: true });
+  }, [workspaceId, projectId, navigate]);
   const go = (target: string, nextProjectId = projectId) => {
     if (projectFlow && nextProjectId === projectId) { projectFlow.go(target); return; }
     const [path, rawQuery = ""] = target.split("?");
@@ -344,11 +348,13 @@ function ProjectBusinessContent({
     case "generation":
       return (
         <GenerationWorkbench
-          key={complianceQuery.get("taskId") ?? "generation"}
-          scope={{ workspaceId, projectId }}
+          key={`${workspaceId}:${projectId}:${surface.view}:${sessionEpoch}`}
+          scope={{ workspaceId, projectId, projectName: projectFlow?.data.project.name }}
           view={surface.view}
           api={generationCenterApi}
           initialTaskId={complianceQuery.get("taskId") ?? undefined}
+          query={slug === "tasks" ? complianceQuery : undefined}
+          replaceQuery={slug === "tasks" ? replaceTaskQuery : undefined}
         />
       );
     case "audio": {

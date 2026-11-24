@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { AssetItem, GenerationCreditBalance, TaskReceipt } from "./contracts";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
-import { button, panel, primaryButton, TaskSummary } from "./ui";
+import { button, panel, primaryButton } from "./ui";
+import { useQueueText } from "@/xingjing_generation_center/queue-i18n";
 import { useAuthenticatedMedia } from "@/hooks/useAuthenticatedMedia";
 import type { AssetImageCapability, AssetImageControls } from "./asset-image-models";
 
@@ -70,6 +71,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
   onGenerate: () => void; onAdopt: (generatedAssetId: string) => void;
 }) {
   const { t } = useAssetGenerationTranslation();
+  const { t: queue } = useQueueText();
   const version = asset.versions.find((item) => item.id === asset.currentVersionId);
   const hasReference = assetHasReferenceImage(asset);
   const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
@@ -100,8 +102,12 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
       <button type="button" className={`${primaryButton} mt-4 disabled:cursor-not-allowed disabled:opacity-50`} disabled={blocked || working || !version || !ready} onClick={onGenerate}>{t(generation.activeAction === "generateReferenceImage" ? "submitting" : hasReference ? "regenerate" : "generate")}</button>
     </>}
     {task ? <>
-      <TaskSummary task={{ ...task, outputAssetIds: [] }} message={t("taskTitle")} />
-      {working ? <p role="status" className="mt-3 text-xs text-violet-200">{t("waiting")}</p> : null}
+      <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+        <strong>{t("taskTitle")}</strong>
+        <span>{queue(task.waitingStopped ? "waiting_stopped" : working && task.executionUnconfirmed ? "checking" : task.status)}</span>
+        {projectId && <a className="text-violet-200 underline" href={`/app/workspaces/${encodeURIComponent(models.workspaceId)}/projects/${encodeURIComponent(projectId)}/tasks?taskId=${encodeURIComponent(task.taskId)}`}>{queue("detail")}</a>}
+      </div>
+      {working ? <p role="status" className="mt-3 text-xs text-violet-200">{task.waitingStopped ? queue("stoppedHelp") : task.executionUnconfirmed ? queue("checkHelp") : t("waiting")}</p> : null}
       {["failed", "cancelled", "timeout"].includes(task.status) ? <p className="mt-3 text-xs text-amber-200">{t("failure")}</p> : null}
       {task.status === "succeeded" && task.outputAssetIds?.length ? <div className="mt-4">
         <h3 className="text-sm font-semibold">{t("candidateTitle")}</h3><p className="mt-2 text-xs leading-6 text-slate-400">{t("candidateHint")}</p>

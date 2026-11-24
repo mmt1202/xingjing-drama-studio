@@ -59,6 +59,7 @@ from server.xingjing_model_control.reservations import ModelRouteAdmission
 from server.xingjing_platform_persistence.persistence import ProjectRow
 
 from .artifact_storage import GeneratedArtifactStorageError, LocalGenerationArtifactStore
+from .creator_queue import CreatorQueue
 from .input_assets import GenerationInputResolver, validate_input_media
 from .native_image.credentials import ExactImageCredentialResolver, NativeImageConfigurationError
 from .native_image.executor import NativeImageExecutor
@@ -245,6 +246,11 @@ class GenerationRuntime:
             media_type=media_type,
             capability=capability,
         )
+
+    def creator_queue(self) -> CreatorQueue:
+        if self._session_factory is None:
+            raise GenerationRuntimeUnavailable("GENERATION_RUNTIME_UNAVAILABLE")
+        return CreatorQueue(self._session_factory, gateway_available=self._provider_gateway is not None)
 
     def model_availability(self) -> GenerationModelAvailability:
         gateway = self._provider_gateway
@@ -599,6 +605,8 @@ class GenerationRuntime:
         expected_version: int,
     ) -> GenerationTask:
         current = await self.get_task(context, project_id, task_id)
+        if current.status in {TaskStatus.CANCELLED, TaskStatus.CANCELLING}:
+            return current
         if current.version != expected_version:
             raise ValueError("GENERATION_TASK_VERSION_CONFLICT")
         if current.status is TaskStatus.QUEUED and self._route_admission:
@@ -629,32 +637,14 @@ class GenerationRuntime:
                 )
             )
             try:
-                await gateway.cancel(cancelling.provider_job_id or "")
+                confirmed = await gateway.cancel(cancelling.provider_job_id or "")
             except GenerationProviderGatewayError as error:
                 raise GenerationRuntimeUnavailable(str(error)) from error
-            cancelled = mark_cancelled(cancelling, at=datetime.now(UTC))
-            cancelled = await self._repository_or_raise().save_with_billing_release(
-                cancelled,
-                expected_version=cancelling.version,
-                event_id=f"cancel:{cancelled.task_id}:{cancelled.version}",
+            if confirmed is False:
+                return cancelling
+            return await self._confirm_cancellation(
+                cancelling, actor=context.actor_id, receipt=context.request_id or task_id
             )
-            await self._release_task_route(cancelled, succeeded=True)
-            await self._repository_or_raise().append_audit(
-                ImmutableAuditRecord(
-                    audit_id=str(uuid4()),
-                    workspace_id=context.workspace_id,
-                    project_id=project_id,
-                    task_id=cancelled.task_id,
-                    request_id=context.request_id or cancelled.task_id,
-                    actor_id=context.actor_id,
-                    action="generation.cancel_confirmed",
-                    result="cancelled",
-                    before=cancelling.model_dump(mode="json"),
-                    after=cancelled.model_dump(mode="json"),
-                    occurred_at=cancelled.updated_at,
-                )
-            )
-            return cancelled
         if current.status not in {TaskStatus.QUEUED, TaskStatus.RETRYING}:
             raise ValueError("GENERATION_TASK_NOT_CANCELLABLE")
         updated = cancel_task(current, at=datetime.now(UTC))
@@ -683,6 +673,46 @@ class GenerationRuntime:
             )
         )
         return updated
+
+    async def _confirm_cancellation(
+        self, task: GenerationTask, *, actor: str, receipt: str, cost: CostEvidence | None = None
+    ) -> GenerationTask:
+        repository = self._repository_or_raise()
+        cancelled = mark_cancelled(task, at=datetime.now(UTC))
+        try:
+            cancelled = await repository.save_with_billing_release(
+                cancelled,
+                expected_version=task.version,
+                event_id=f"cancel:{task.task_id}:{cancelled.version}",
+                cost=cost,
+            )
+        except VersionConflict:
+            latest = await repository.get(task.request.workspace_id, task.request.project_id, task.task_id)
+            if latest is not None and latest.status in {
+                TaskStatus.CANCELLED,
+                TaskStatus.SUCCEEDED,
+                TaskStatus.FAILED,
+                TaskStatus.TIMEOUT,
+            }:
+                return latest
+            raise
+        await self._release_task_route(cancelled, succeeded=True)
+        await repository.append_audit(
+            ImmutableAuditRecord(
+                audit_id=str(uuid4()),
+                workspace_id=task.request.workspace_id,
+                project_id=task.request.project_id,
+                task_id=task.task_id,
+                request_id=receipt,
+                actor_id=actor,
+                action="generation.cancel_confirmed",
+                result="cancelled",
+                before=task.model_dump(mode="json"),
+                after=cancelled.model_dump(mode="json"),
+                occurred_at=cancelled.updated_at,
+            )
+        )
+        return cancelled
 
     async def retry_task(
         self,
@@ -1112,6 +1142,23 @@ class GenerationRuntime:
         if current is None:
             raise TaskScopeNotFound()
         if (
+            current.status is TaskStatus.CANCELLING
+            and outcome in {"cancelled", "canceled"}
+            and provider_job_id == current.provider_job_id
+            and attempt == current.attempt
+        ):
+            cost = self._callback_cost(
+                payload,
+                task_id=task_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                provider_evidence_id=event_id,
+                at=received_at,
+            )
+            return await self._confirm_cancellation(
+                current, actor=f"provider:{current.resolved_provider_id or 'external'}", receipt=event_id, cost=cost
+            )
+        if (
             event_id in current.processed_callback_event_ids
             or current.status
             in {
@@ -1119,8 +1166,8 @@ class GenerationRuntime:
                 TaskStatus.FAILED,
                 TaskStatus.TIMEOUT,
                 TaskStatus.CANCELLED,
-                TaskStatus.CANCELLING,
             }
+            or (current.status is TaskStatus.CANCELLING and outcome not in {"succeeded", "failed"})
             or attempt != current.attempt
             or provider_job_id != current.provider_job_id
         ):

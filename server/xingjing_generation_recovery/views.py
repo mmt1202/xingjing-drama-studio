@@ -5,6 +5,7 @@ from sqlalchemy import and_, exists, func, or_, select
 
 from server.xingjing_generation import GenerationTask
 from server.xingjing_generation_persistence.repository import GenerationBillingHoldRow, TaskRow
+from server.xingjing_generation_runtime.creator_queue import waiting_stopped
 from server.xingjing_generation_runtime.native_image.models import NativeImageExecutionRow
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_model_control.runtime import ModelRouteReservationRow
@@ -68,6 +69,7 @@ async def list_tasks(
         and_(
             TaskRow.status.not_in(["succeeded", "failed", "timeout", "cancelled"]),
             or_(
+                waiting_stopped(),
                 count_receipts > 0,
                 NativeImageExecutionRow.status.in_(["unknown", "result_ready"]),
                 and_(

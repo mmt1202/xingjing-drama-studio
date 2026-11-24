@@ -19,6 +19,7 @@ from server.xingjing_budget import BudgetError
 from server.xingjing_generation import GenerationRequest
 from server.xingjing_generation_persistence import GenerationBillingError, TaskScopeNotFound, VersionConflict
 from server.xingjing_generation_persistence.repository import GeneratedAsset
+from server.xingjing_generation_runtime.creator_queue import GROUPS as CREATOR_TASK_GROUPS
 from server.xingjing_generation_runtime.runtime import GenerationRuntime, GenerationRuntimeUnavailable
 
 
@@ -308,6 +309,21 @@ async def _list_generation_tasks(runtime: GenerationRuntime, request: Request, p
     )
     media_type = _optional_choice(request.query_params.get("mediaType"), {"image", "video"}, "INVALID_MEDIA_TYPE")
     capability = _optional_identifier(request.query_params.get("capability"), "INVALID_CAPABILITY")
+    if request.query_params.get("creatorView") == "1":
+        group = _optional_choice(
+            request.query_params.get("group"), set(CREATOR_TASK_GROUPS), "INVALID_GENERATION_TASK_STATUS"
+        )
+        items, total = await runtime.creator_queue().read(
+            context,
+            project_id,
+            group=group,
+            status=task_status,
+            media=media_type,
+            capability=capability,
+            offset=offset,
+            limit=limit,
+        )
+        return _success(context.request_id, {"tasks": items}, total=total)
     tasks, total = await runtime.list_tasks(
         context,
         project_id,
@@ -334,10 +350,15 @@ async def _get_generation_task(
         progress["nativeExecution"] = {"status": native.get("status")}
     if isinstance(latest := progress.get("latest"), dict):
         progress["latest"] = {key: latest.get(key) for key in ("percent", "eta_seconds", "occurred_at")}
+    payload = task.creator_payload()
+    if request.query_params.get("creatorView") == "1":
+        items, _ = await runtime.creator_queue().read(context, project_id, task_id=task_id)
+        if items:
+            payload = items[0]
     return _success(
         context.request_id,
         {
-            "task": task.creator_payload(),
+            "task": payload,
             "generatedAssets": [_creator_asset(asset) for asset in assets],
             "selectedCandidate": asdict(selected_candidate) if selected_candidate else None,
             "costEvidence": [
@@ -389,7 +410,11 @@ async def _generation_task_actions(
 ) -> JSONResponse:
     context = await runtime.context_for(request, project_id, "generation.manage")
     body = await _json_object(request)
-    if body.get("action") != "cancel":
+    action = body.get("action")
+    if action == "stop_waiting":
+        task = await runtime.creator_queue().stop_waiting(context, project_id, task_id, _if_match(request))
+        return _success(context.request_id, {"task": task.creator_payload()})
+    if action != "cancel":
         raise GenerationHttpError("UNSUPPORTED_GENERATION_ACTION")
     task = await runtime.cancel_task(
         context,

@@ -18,7 +18,7 @@ export class GenerationCenterApiError extends Error {
 
 interface Envelope<T> { readonly data: T; readonly meta?: { readonly requestId?: string; readonly total?: number } }
 interface ErrorEnvelope { readonly error?: { readonly code?: string; readonly message?: string; readonly details?: unknown }; readonly meta?: { readonly requestId?: string } }
-export interface GenerationCenterApi { list(scope: string, offset?: number, limit?: number, signal?: AbortSignal, filters?: GenerationTaskFilters): Promise<GenerationTaskPage>; services(scope: string, mediaType: "image" | "video", capabilities: readonly string[], signal?: AbortSignal): Promise<readonly GenerationService[]>; candidates(scope: string, options?: { readonly mediaType?: "image" | "video"; readonly capability?: string; readonly offset?: number; readonly limit?: number; readonly signal?: AbortSignal }): Promise<GenerationCandidatePage>; detail(scope: string, taskId: string, signal?: AbortSignal): Promise<GenerationTaskDetail>; submit(scope: string, payload: GenerationSubmission, idempotencyKey: string): Promise<GenerationTask>; cancel(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; retry(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; selectCandidate(scope: string, taskId: string, assetId: string, expectedVersion: number, idempotencyKey: string): Promise<GeneratedCandidateSelection> }
+export interface GenerationCenterApi { list(scope: string, offset?: number, limit?: number, signal?: AbortSignal, filters?: GenerationTaskFilters): Promise<GenerationTaskPage>; services(scope: string, mediaType: "image" | "video", capabilities: readonly string[], signal?: AbortSignal): Promise<readonly GenerationService[]>; candidates(scope: string, options?: { readonly mediaType?: "image" | "video"; readonly capability?: string; readonly offset?: number; readonly limit?: number; readonly signal?: AbortSignal }): Promise<GenerationCandidatePage>; detail(scope: string, taskId: string, signal?: AbortSignal): Promise<GenerationTaskDetail>; submit(scope: string, payload: GenerationSubmission, idempotencyKey: string): Promise<GenerationTask>; cancel(scope: string, task: GenerationTask, idempotencyKey: string, action?: "cancel" | "stop_waiting"): Promise<GenerationTask>; retry(scope: string, task: GenerationTask, idempotencyKey: string): Promise<GenerationTask>; selectCandidate(scope: string, taskId: string, assetId: string, expectedVersion: number, idempotencyKey: string): Promise<GeneratedCandidateSelection> }
 
 export interface GenerationCenterApiOptions {
   readonly fetcher?: typeof fetch;
@@ -50,7 +50,8 @@ export function createGenerationCenterApi({ fetcher: providedFetcher, getAccessT
   const query = (projectId: string) => `projectId=${encodeURIComponent(projectId)}`;
   return {
     async list(projectId, offset = 0, limit = 50, signal, filters = {}) {
-      const params = new URLSearchParams({ projectId, offset: String(offset), limit: String(limit) });
+      const params = new URLSearchParams({ projectId, offset: String(offset), limit: String(limit), creatorView: "1" });
+      if (filters.group) params.set("group", filters.group);
       if (filters.status) params.set("status", filters.status);
       if (filters.mediaType) params.set("mediaType", filters.mediaType);
       if (filters.capability) params.set("capability", filters.capability);
@@ -69,15 +70,15 @@ export function createGenerationCenterApi({ fetcher: providedFetcher, getAccessT
       return { candidates: response.value.candidates, total: response.total ?? response.value.candidates.length, requestId: response.requestId };
     },
     async detail(projectId, taskId, signal) {
-      const response = await request<{ task: GenerationTask; generatedAssets: GenerationTaskDetail["generatedAssets"]; selectedCandidate: GeneratedCandidateSelection | null; costEvidence: readonly GenerationCostEvidence[]; billing: GenerationTaskDetail["billing"]; progress: GenerationTaskDetail["progress"] }>(`/generation-tasks/${encodeURIComponent(taskId)}?${query(projectId)}`, { signal });
+      const response = await request<{ task: GenerationTask; generatedAssets: GenerationTaskDetail["generatedAssets"]; selectedCandidate: GeneratedCandidateSelection | null; costEvidence: readonly GenerationCostEvidence[]; billing: GenerationTaskDetail["billing"]; progress: GenerationTaskDetail["progress"] }>(`/generation-tasks/${encodeURIComponent(taskId)}?${query(projectId)}&creatorView=1`, { signal });
       return { ...response.value, requestId: response.requestId };
     },
     async submit(projectId, payload, idempotencyKey) {
       const response = await request<{ task: GenerationTask }>(`/generation-tasks?${query(projectId)}`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(payload) });
       return response.value.task;
     },
-    async cancel(projectId, task, idempotencyKey) {
-      const response = await request<{ task: GenerationTask }>(`/generation-tasks/${encodeURIComponent(task.task_id)}/actions?${query(projectId)}`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, "If-Match": String(task.version) }, body: JSON.stringify({ action: "cancel" }) });
+    async cancel(projectId, task, idempotencyKey, action = "cancel") {
+      const response = await request<{ task: GenerationTask }>(`/generation-tasks/${encodeURIComponent(task.task_id)}/actions?${query(projectId)}`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey, "If-Match": String(task.version) }, body: JSON.stringify({ action }) });
       return response.value.task;
     },
     async retry(projectId, task, idempotencyKey) {

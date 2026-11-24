@@ -1,6 +1,7 @@
 import i18n from "@/i18n";
-import { Pagination } from "@/components/ui/Pagination";
-import { Clapperboard, Film, ImagePlus, LoaderCircle, RefreshCw, RotateCcw, Sparkles, XCircle } from "lucide-react";
+import { ProductionQueue, PRODUCTION_PAGE_SIZE, queueLocation } from "./ProductionQueue";
+import { useQueueText } from "./queue-i18n";
+import { Clapperboard, Film, ImagePlus, LoaderCircle, ClipboardList, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthenticatedVideo } from "@/components/shared/AuthenticatedVideo";
 import { useAuthStore } from "@/stores/auth-store";
@@ -8,9 +9,8 @@ import { getTokenForSession } from "@/utils/auth";
 
 import { GenerationSubmissionForm } from "./GenerationSubmissionForm";
 import { useSubmissionTranslation } from "./submission-i18n";
-import { useRecoveryTranslation } from "@/xingjing_generation_recovery/i18n";
 import { GenerationCenterApiError, createGenerationCenterApi, type GenerationCenterApi } from "./api";
-import { canCancelTask, canRetryTask, isProcessingTask, taskStatusText, type GenerationCandidateSet, type GenerationTask, type GenerationTaskDetail, type GenerationTaskFilters, type GenerationWorkbenchView, type GenerationWorkspaceScope } from "./contracts";
+import { isProcessingTask, type ProductionAction, type GenerationCandidateSet, type GenerationTask, type GenerationTaskDetail, type GenerationTaskFilters, type GenerationWorkbenchView, type GenerationWorkspaceScope } from "./contracts";
 
 const copy: Record<Exclude<GenerationWorkbenchView, `model-${string}`>, { title: string; eyebrow: string; description: string; icon: typeof Sparkles; capability: string; media: "image" | "video"; acceptsInput?: boolean; submit?: boolean }> = {
   center: { title: "生成中心", eyebrow: "GENERATION CONTROL ROOM", description: "", icon: Sparkles, capability: "generation", media: "image", submit: true },
@@ -31,44 +31,11 @@ const copy: Record<Exclude<GenerationWorkbenchView, `model-${string}`>, { title:
   "video-upscale": { title: "视频高清修复", eyebrow: "VIDEO RESTORATION", description: "对已有视频资产提交超分、补帧和修复任务。", icon: Film, capability: "video_upscale", media: "video", acceptsInput: true, submit: true },
 };
 
-function errorText(error: unknown): string {
-  if (!(error instanceof GenerationCenterApiError)) return "网络暂不可用，请稍后重新读取服务端状态。";
-  if (/^(MODEL_|GENERATION_(NATIVE_|MODEL_|PROVIDER_))/.test(error.code)) return i18n.t("generationSubmission:serviceError");
-  if (/^(BUDGET_|PROJECT_BUDGET_|EPISODE_BUDGET_)/.test(error.code)) return error.message;
-  if (error.status === 403) return "服务端拒绝了当前工作区或项目的数据访问；不会显示任何任务详情。";
-  if (error.status === 409) return "任务版本已变化。已保留当前界面，并请重新读取服务端最终状态。";
-  if (error.status === 503) return "生成服务当前不可用，未提交或伪造任何任务结果。";
-  return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
-}
-
-function statusClass(status: GenerationTask["status"]): string {
-  if (status === "succeeded") return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200";
-  if (["failed", "timeout", "cancelled"].includes(status)) return "border-rose-400/30 bg-rose-400/10 text-rose-200";
-  return "border-amber-300/30 bg-amber-300/10 text-amber-100";
-}
-
-function formatTime(value: string | null): string { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "—"; }
-
-function TaskRow({ task, selected, onSelect, onCancel, onRetry, busy }: { readonly task: GenerationTask; readonly selected: boolean; readonly onSelect: () => void; readonly onCancel: () => void; readonly onRetry: () => void; readonly busy: boolean }) {
-  return <article className={`group grid gap-3 border-b border-white/10 px-5 py-4 transition hover:bg-white/[0.045] md:grid-cols-[minmax(180px,1.25fr)_120px_130px_120px_76px] ${selected ? "bg-cyan-300/[0.08]" : ""}`}>
-    <button type="button" onClick={onSelect} className="min-w-0 text-left"><strong className="block truncate font-mono text-xs text-stone-100">{task.task_id}</strong><span className="mt-1 block truncate text-xs text-stone-400">{task.request.prompt}</span></button>
-    <button type="button" onClick={onSelect} className="text-left text-xs text-stone-300">{task.request.capability}</button>
-    <button type="button" onClick={onSelect} className="text-left"><span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-medium ${statusClass(task.status)}`}>{taskStatusText[task.status]}</span><span className="mt-1 block text-[11px] text-stone-500">v{task.version} · 第 {task.attempt + 1} 次</span></button>
-    <button type="button" onClick={onSelect} className="text-left text-xs text-stone-400">{formatTime(task.updated_at)}</button>
-    <span className="flex items-center gap-1">{canRetryTask(task.status) ? <button type="button" onClick={onRetry} aria-label={`重试任务 ${task.task_id}`} disabled={busy} className="grid place-items-center rounded p-2 text-stone-400 hover:bg-cyan-400/15 hover:text-cyan-100 disabled:opacity-50"><RotateCcw size={16} /></button> : null}{canCancelTask(task.status) ? <button type="button" onClick={onCancel} aria-label={`取消任务 ${task.task_id}`} disabled={busy} className="grid place-items-center rounded p-2 text-stone-400 hover:bg-rose-400/15 hover:text-rose-200 disabled:opacity-50"><XCircle size={17} /></button> : null}</span>
-  </article>;
-}
-
-
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "大小未知";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-}
-
-function formatMoney(minor: number, currency: string): string {
-  return new Intl.NumberFormat("zh-CN", { style: "currency", currency, minimumFractionDigits: 2 }).format(minor / 100);
 }
 
 function artifactUrl(scope: GenerationWorkspaceScope, assetId: string): string {
@@ -80,30 +47,18 @@ function CandidateComparison({ scope, candidates, total, selecting, onSelectCand
   return <section className="border border-cyan-200/20 bg-cyan-200/[0.035] p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="font-mono text-[11px] tracking-[.16em] text-cyan-200">SERVER-CONFIRMED CANDIDATES</p><h2 className="mt-1 text-lg font-semibold text-cyan-50">视频候选对比</h2><p className="mt-1 text-sm text-stone-400">{t("compareHelp")}</p></div><span className="text-sm text-stone-500">共 {total} 组候选</span></div>{candidates.length ? <div className="mt-4 grid gap-4 2xl:grid-cols-2">{candidates.map((candidate) => <article key={candidate.task.task_id} className="border border-white/10 bg-black/25 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-xs text-stone-200">{candidate.task.task_id}</p><p className="mt-1 text-xs text-stone-500">{candidate.task.request.prompt}</p></div><span className="text-xs text-stone-500">第 {candidate.task.attempt + 1} 次</span></div><div className="mt-3 grid gap-3 sm:grid-cols-2">{candidate.assets.map((asset) => <div key={asset.asset_id} className="border border-white/10 bg-stone-950/60 p-2"><AuthenticatedVideo workspaceId={scope.workspaceId} projectId={scope.projectId} source={artifactUrl(scope, asset.asset_id)} className="aspect-video w-full bg-black object-contain" /><p className="mt-2 break-all font-mono text-[10px] text-stone-300">{asset.asset_id}</p><p className="mt-1 text-[10px] text-stone-500">{formatBytes(asset.size_bytes)} · {asset.content_sha256.slice(0, 16)}…</p><button type="button" disabled={selecting || candidate.selectedCandidate?.selected_asset_id === asset.asset_id} onClick={() => onSelectCandidate(candidate.task.task_id, asset.asset_id, candidate.selectedCandidate?.version ?? 0)} className="mt-2 border border-cyan-200/30 px-2 py-1 text-[11px] text-cyan-100 disabled:opacity-50">{candidate.selectedCandidate?.selected_asset_id === asset.asset_id ? "已保留此版本" : "保留此版本"}</button></div>)}</div>{candidate.assets.length < 2 ? <p className="mt-3 text-xs text-stone-500">{t("oneCandidate")}</p> : null}</article>)}</div> : <p className="mt-4 text-sm text-stone-500">还没有可比较的已完成视频产物。</p>}</section>;
 }
 
-function DetailPanel({ detail, onClose, onSelectCandidate, selecting }: { readonly detail: GenerationTaskDetail | null; readonly onClose: () => void; readonly onSelectCandidate: (assetId: string) => void; readonly selecting: boolean }) {
-  const { t: submissionText } = useSubmissionTranslation();
-  const { t: recoveryText } = useRecoveryTranslation();
-  if (!detail) return <aside className="border border-white/10 bg-stone-950/50 p-5 text-sm text-stone-500">选择任务以读取服务端详情、产物 ID、校验摘要与更新时间。</aside>;
-  const task = detail.task;
-  return <aside className="border border-white/10 bg-stone-950/80 p-5">
-    {detail.progress.modelReservation?.submissionUnconfirmed ? <div role="status" className="mb-4 rounded-lg border border-amber-400/20 p-3 text-sm text-amber-200"><strong>{submissionText("gatewayUnconfirmedLabel")}</strong><p className="mt-2">{submissionText("gatewayUnconfirmed")}</p>{detail.progress.modelReservation.submittedAt ? <p className="mt-2 text-xs">{submissionText("gatewaySubmittedAt", { time: formatTime(detail.progress.modelReservation.submittedAt) })}</p> : null}</div> : null}
-    {detail.progress.nativeExecution?.status === "unknown" ? <p role="status" className="mb-4 rounded-lg border border-amber-400/20 p-3 text-sm text-amber-200">{submissionText("nativeUnknown")}</p> : null}
-    {detail.progress.nativeExecution?.status === "result_ready" ? <p role="status" className="mb-4 rounded-lg border border-white/10 p-3 text-sm text-slate-300">{submissionText("nativePublishing")}</p> : null}
-    <div className="flex items-start justify-between gap-4"><div><p className="font-mono text-[11px] text-cyan-200">TASK DETAIL</p><h2 className="mt-1 font-mono text-sm text-stone-100">{task.task_id}</h2></div><button type="button" onClick={onClose} className="text-sm text-stone-400 hover:text-stone-100">关闭</button></div>
-    <dl className="mt-5 grid gap-4 text-sm">
-      <div><dt className="text-xs text-stone-500">输入摘要</dt><dd className="mt-1 leading-6 text-stone-300">{task.request.prompt}</dd></div>
-      <div><dt className="text-xs text-stone-500">状态与时限</dt><dd className="mt-1 text-stone-300">{taskStatusText[task.status]} · 截止 {formatTime(task.timeout_at)}{detail.progress.queue_position ? ` · 队列第 ${detail.progress.queue_position} 位` : ""}</dd>{detail.progress.latest ? <div className="mt-2"><div className="h-1.5 overflow-hidden bg-white/10"><span className="block h-full bg-cyan-300" style={{ width: `${detail.progress.latest.percent}%` }} /></div><p className="mt-1 text-xs text-cyan-100">{detail.progress.latest.percent}%{detail.progress.latest.eta_seconds !== null ? ` · 预计 ${detail.progress.latest.eta_seconds} 秒` : ""}</p></div> : null}</div>
-      <div><dt className="text-xs text-stone-500">算力冻结与结算</dt><dd className="mt-1 text-stone-300">{detail.billing ? `${detail.billing.status} · 冻结 ${formatMoney(detail.billing.estimated_minor, detail.billing.currency)} · 实耗 ${formatMoney(detail.billing.actual_minor, detail.billing.currency)} · 退回 ${formatMoney(detail.billing.released_minor, detail.billing.currency)}` : "未找到该任务的账务冻结记录。"}</dd></div>
-      {task.failure ? <div className="border border-rose-400/20 bg-rose-400/5 p-3"><dt className="text-xs text-rose-200">{submissionText("failed")}</dt><dd className="mt-1 text-sm text-rose-100">{task.failure.code === "RECOVERY_CONFIRMED_FAILURE" ? recoveryText("confirmedFailure") : submissionText("taskFailed")}</dd></div> : null}
-      <div><dt className="text-xs text-stone-500">已确认产物</dt><dd className="mt-2 space-y-2">{detail.generatedAssets.length ? detail.generatedAssets.map((asset) => <div key={asset.asset_id} className="border border-white/10 bg-white/[0.03] p-2"><p className="font-mono text-[11px] text-stone-200">{asset.asset_id} · {asset.media_type} · {formatBytes(asset.size_bytes)}</p><p className="mt-1 break-all font-mono text-[10px] text-stone-500">SHA-256 {asset.content_sha256}</p><button type="button" disabled={selecting || detail.selectedCandidate?.selected_asset_id === asset.asset_id} onClick={() => onSelectCandidate(asset.asset_id)} className="mt-2 border border-cyan-200/30 px-2 py-1 text-[11px] text-cyan-100 disabled:opacity-50">{detail.selectedCandidate?.selected_asset_id === asset.asset_id ? "已选为候选" : "选为候选"}</button></div>) : <span className="text-stone-500">尚无服务端确认的产物</span>}</dd></div>
-    </dl>
-  </aside>;
+export interface GenerationWorkbenchProps {
+  readonly scope: GenerationWorkspaceScope;
+  readonly view?: GenerationWorkbenchView;
+  readonly api?: GenerationCenterApi;
+  readonly initialTaskId?: string;
+  readonly query?: URLSearchParams;
+  readonly replaceQuery?: (query: URLSearchParams) => void;
 }
 
-export interface GenerationWorkbenchProps { readonly scope: GenerationWorkspaceScope; readonly view?: GenerationWorkbenchView; readonly api?: GenerationCenterApi; readonly initialTaskId?: string }
-
-export function GenerationWorkbench({ scope, view: incomingView = "center", api: providedApi, initialTaskId }: GenerationWorkbenchProps) {
+export function GenerationWorkbench({ scope, view: incomingView = "center", api: providedApi, initialTaskId, query, replaceQuery }: GenerationWorkbenchProps) {
   const { t: submissionText } = useSubmissionTranslation();
+  const { t } = useQueueText();
   const sessionEpoch = useAuthStore((auth) => auth.sessionEpoch);
   const api = useMemo(() => providedApi ?? createGenerationCenterApi({ getAccessToken: () => getTokenForSession(sessionEpoch) }), [providedApi, sessionEpoch]);
   const detailController = useRef<AbortController | null>(null);
@@ -111,7 +66,39 @@ export function GenerationWorkbench({ scope, view: incomingView = "center", api:
   const [refreshing, setRefreshing] = useState(false);
   const loadedScope = useRef<string | undefined>(undefined);
   const view = incomingView === "model-center" || incomingView === "model-detail" || incomingView === "model-market" || incomingView === "model-report" ? "center" : incomingView;
-  const config = copy[view]; const Icon = config.icon; const [tasks, setTasks] = useState<readonly GenerationTask[]>([]); const [total, setTotal] = useState(0); const [offset, setOffset] = useState(0); const [filters, setFilters] = useState<GenerationTaskFilters>({}); const [candidates, setCandidates] = useState<readonly GenerationCandidateSet[]>([]); const [candidateTotal, setCandidateTotal] = useState(0); const [selected, setSelected] = useState<GenerationTaskDetail | null>(null); const [state, setState] = useState<"loading" | "ready" | "forbidden" | "error">("loading"); const [message, setMessage] = useState(""); const [busyId, setBusyId] = useState<string>(); const controller = useRef<AbortController | null>(null);
+  const config = copy[view];
+  const Icon = config.icon;
+  const [tasks, setTasks] = useState<readonly GenerationTask[]>([]);
+  const [total, setTotal] = useState(0);
+  const [localOffset, setOffset] = useState(0);
+  const [localFilters, setFilters] = useState<GenerationTaskFilters>({});
+  const routeGroup = query?.get("progress");
+  const routeMedia = query?.get("media");
+  const routeType = query?.get("type");
+  const routeFilters = useMemo(() => queueLocation(new URLSearchParams({
+    progress: routeGroup ?? "", media: routeMedia ?? "", type: routeType ?? "",
+  })).filters, [routeGroup, routeMedia, routeType]);
+  const filters = query ? routeFilters : localFilters;
+  const offset = query ? queueLocation(query).offset : localOffset;
+  const [candidates, setCandidates] = useState<readonly GenerationCandidateSet[]>([]);
+  const [candidateTotal, setCandidateTotal] = useState(0);
+  const [selected, setSelected] = useState<GenerationTaskDetail | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "forbidden" | "error">("loading");
+  const [message, setMessage] = useState("");
+  const [busyId, setBusyId] = useState<string>();
+  const controller = useRef<AbortController | null>(null);
+  const saveLocation = useCallback((next: GenerationTaskFilters, nextOffset: number, taskId?: string) => {
+    if (!query || !replaceQuery) { setFilters(next); setOffset(nextOffset); return; }
+    const params = new URLSearchParams(query);
+    const changes = { progress: next.group, media: next.mediaType, type: next.capability,
+      page: nextOffset ? String(1 + Math.floor(nextOffset / PRODUCTION_PAGE_SIZE)) : undefined, taskId };
+    for (const [name, value] of Object.entries(changes)) {
+      if (value) params.set(name, value); else params.delete(name);
+    }
+    if (params.toString() !== query.toString()) replaceQuery(params);
+  }, [query, replaceQuery]);
+  const actionPending = useRef(false);
+  const selectedId = useRef<string | null>(null);
   const load = useCallback(async () => {
     controller.current?.abort();
     const signalController = new AbortController(); controller.current = signalController;
@@ -121,58 +108,131 @@ export function GenerationWorkbench({ scope, view: incomingView = "center", api:
     setRefreshing(true);
     try {
       const [page, candidatePage] = await Promise.all([
-        api.list(scope.projectId, offset, 50, signalController.signal, filters),
+        api.list(scope.projectId, offset, PRODUCTION_PAGE_SIZE, signalController.signal, filters),
         view === "video-candidates" ? api.candidates(scope.projectId, { mediaType: "video", offset: 0, limit: 20, signal: signalController.signal }) : Promise.resolve(null),
       ]);
       if (signalController.signal.aborted) return false;
+      if (offset && offset >= page.total) {
+        saveLocation(filters, Math.max(0, Math.floor((page.total - 1) / PRODUCTION_PAGE_SIZE) * PRODUCTION_PAGE_SIZE), selectedId.current ?? undefined);
+        return false;
+      }
       setTasks(page.tasks); setTotal(page.total); setCandidates(candidatePage?.candidates ?? []); setCandidateTotal(candidatePage?.total ?? 0);
-      setSelected((current) => current ? { ...current, task: page.tasks.find((task) => task.task_id === current.task.task_id) ?? current.task } : null);
-      loadedScope.current = scopeKey; setState("ready"); setMessage("");
+      loadedScope.current = scopeKey; setState("ready");
       return true;
     } catch (error) {
       if (signalController.signal.aborted) return false;
       if (error instanceof GenerationCenterApiError && error.status === 403) {
         loadedScope.current = undefined; setTasks([]); setSelected(null); setState("forbidden");
       } else setState(hasLoadedScope ? "ready" : "error");
-      setMessage(errorText(error));
+      setMessage(i18n.t(error instanceof GenerationCenterApiError && error.status === 403 ? "productionQueue:accessError" : "productionQueue:loadHelp"));
       return false;
     } finally { if (!signalController.signal.aborted) setRefreshing(false); }
-  }, [api, filters, offset, sessionEpoch, scope.workspaceId, scope.projectId, view]);
+  }, [api, filters, offset, sessionEpoch, scope.workspaceId, scope.projectId, view, saveLocation]);
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => { window.clearTimeout(timer); controller.current?.abort(); };
   }, [load]);
-  const processing = useMemo(() => tasks.filter((task) => isProcessingTask(task.status)).length, [tasks]);
+
   const readDetailId = useCallback(async (taskId: string) => {
     const active = detailScope.current;
     if (!active || active.api !== api || active.projectId !== scope.projectId || active.workspaceId !== scope.workspaceId || active.sessionEpoch !== sessionEpoch) return false;
+    if (selectedId.current !== taskId) setSelected(null);
+    selectedId.current = taskId;
     detailController.current?.abort();
     const abort = new AbortController(); detailController.current = abort;
     try {
       const detail = await api.detail(scope.projectId, taskId, abort.signal);
       if (abort.signal.aborted) return false;
       setSelected(detail); return true;
-    } catch (error) { if (!abort.signal.aborted) setMessage(errorText(error)); return false; }
+    } catch (error) {
+      if (!abort.signal.aborted) {
+        const denied = error instanceof GenerationCenterApiError && [403, 404].includes(error.status ?? 0);
+        if (denied) { selectedId.current = null; setSelected(null); }
+        setMessage(i18n.t(denied ? "productionQueue:accessError" : "productionQueue:loadHelp"));
+      }
+      return false;
+    }
   }, [api, sessionEpoch, scope.workspaceId, scope.projectId]);
   useEffect(() => {
     detailScope.current = { api, workspaceId: scope.workspaceId, projectId: scope.projectId, sessionEpoch };
-    return () => { detailScope.current = null; detailController.current?.abort(); };
+    return () => { detailScope.current = null; selectedId.current = null; detailController.current?.abort(); };
   }, [api, sessionEpoch, scope.workspaceId, scope.projectId]);
+  const controlled = Boolean(query);
   useEffect(() => {
-    const timer = window.setTimeout(() => { if (initialTaskId) void readDetailId(initialTaskId); }, 0);
+    const timer = window.setTimeout(() => {
+      if (initialTaskId) { void readDetailId(initialTaskId); }
+      else if (controlled) { selectedId.current = null; setSelected(null); }
+    }, 0);
     return () => { window.clearTimeout(timer); detailController.current?.abort(); };
-  }, [readDetailId, initialTaskId]);
-  const readDetail = (task: GenerationTask) => readDetailId(task.task_id);
-  const closeDetail = () => { detailController.current?.abort(); setSelected(null); };
-  const cancel = async (task: GenerationTask) => { setBusyId(task.task_id); setMessage(""); try { await api.cancel(scope.projectId, task, `xj:${scope.projectId}:cancel:${task.task_id}:${task.version}`); await load(); await readDetail(task); } catch (error) { setMessage(errorText(error)); if (error instanceof GenerationCenterApiError && error.status === 409) await load(); } finally { setBusyId(undefined); } };
-  const retry = async (task: GenerationTask) => { setBusyId(task.task_id); setMessage(""); try { const retried = await api.retry(scope.projectId, task, `xj:${scope.projectId}:retry:${task.task_id}:${task.version}`); await load(); await readDetail(retried); setMessage(`已从 ${task.task_id} 创建新的恢复任务 ${retried.task_id}。`); } catch (error) { setMessage(errorText(error)); } finally { setBusyId(undefined); } };
-  const selectCandidateForTask = async (taskId: string, assetId: string, expectedVersion: number) => { setBusyId(taskId); try { await api.selectCandidate(scope.projectId, taskId, assetId, expectedVersion, `xj:${scope.projectId}:candidate:${taskId}:${assetId}`); if (selected?.task.task_id === taskId) await readDetail(selected.task); await load(); setMessage("候选版本已由服务端记录。"); } catch (error) { setMessage(errorText(error)); if (error instanceof GenerationCenterApiError && error.status === 409 && selected?.task.task_id === taskId) await readDetail(selected.task); } finally { setBusyId(undefined); } };
-  const selectCandidate = async (assetId: string) => { if (selected) await selectCandidateForTask(selected.task.task_id, assetId, selected.selectedCandidate?.version ?? 0); };
-  const submitted = async (task: GenerationTask) => { setMessage(submissionText("submitted", { id: task.task_id })); const listLoaded = await load(); const detailLoaded = await readDetail(task); if (!listLoaded || !detailLoaded) throw new Error(submissionText("refreshFailed")); };
-  if (state === "loading") return <main className="grid min-h-full place-items-center bg-[#0b0d12] p-8 text-stone-300" aria-busy="true"><LoaderCircle className="animate-spin text-cyan-200" /><p className="mt-3">正在读取生成任务…</p></main>;
-  if (state === "forbidden") return <main className="grid min-h-full place-items-center bg-[#0b0d12] p-8"><section role="alert" className="max-w-lg border border-rose-400/30 bg-rose-950/20 p-6 text-rose-100"><h1 className="text-xl font-semibold">无权访问生成任务</h1><p className="mt-2 text-sm leading-6">{message}</p></section></main>;
-  if (state === "error") return <main className="grid min-h-full place-items-center bg-[#0b0d12] p-8"><section role="alert" className="max-w-lg border border-rose-400/30 bg-rose-950/20 p-6 text-rose-100"><h1 className="text-xl font-semibold">任务读取失败</h1><p className="mt-2 text-sm leading-6">{message}</p><button type="button" onClick={() => void load()} className="mt-4 border border-rose-200/30 px-3 py-2 text-sm">重新读取</button></section></main>;
-  return <main className="min-h-full bg-[#0b0d12] px-4 py-6 text-stone-100 md:px-7"><div className="mx-auto max-w-[1500px]"><header className="border-b border-white/10 pb-6"><div className="flex flex-wrap items-start justify-between gap-5"><div className="flex gap-4"><span className="grid size-12 place-items-center border border-cyan-200/30 bg-cyan-200/10 text-cyan-100"><Icon size={23} /></span><div><p className="font-mono text-[11px] tracking-[.18em] text-cyan-200">{config.eyebrow}</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">{config.title}</h1><p className="mt-2 text-sm text-stone-400">{scope.projectName ?? scope.projectId} · {view === "center" ? submissionText("centerHelp") : config.description}</p></div></div><div className="flex gap-7 text-right"><div><strong className="block text-2xl font-semibold text-amber-100">{processing}</strong><span className="text-xs text-stone-500">处理中</span></div><div><strong className="block text-2xl font-semibold">{total}</strong><span className="text-xs text-stone-500">服务端任务</span></div></div></div></header>
-    <div className="mt-5">{message ? <p role="status" className="mb-4 border border-amber-200/20 bg-amber-100/5 p-3 text-sm text-amber-100">{message}</p> : null}{view === "video-candidates" ? <div className="mt-5"><CandidateComparison scope={scope} candidates={candidates} total={candidateTotal} selecting={Boolean(busyId)} onSelectCandidate={(taskId, assetId, version) => void selectCandidateForTask(taskId, assetId, version)} /></div> : null}<div className="mt-5">{config.submit ? <GenerationSubmissionForm key={`${sessionEpoch}:${scope.workspaceId}:${scope.projectId}:${view}`} config={config} scope={scope} api={api} onSubmitted={submitted} /> : null}</div></div>
-    <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]"><section className="border border-white/10 bg-[#12141b]/70"><div className="border-b border-white/10 px-5 py-3"><div className="flex items-center justify-between gap-3"><h2 className="font-semibold">服务端任务流</h2><button type="button" disabled={refreshing} aria-busy={refreshing} onClick={() => void load()} className="inline-flex items-center gap-2 text-sm text-stone-400 hover:text-stone-100 disabled:opacity-40"><RefreshCw size={14} className={refreshing ? "animate-spin" : undefined} />{submissionText(refreshing ? "loading" : "refreshTasks")}</button></div><div className="mt-3 grid gap-2 md:grid-cols-3"><select aria-label="按任务状态筛选" value={filters.status ?? ""} onChange={(event) => { setOffset(0); setFilters((current) => ({ ...current, status: (event.target.value || undefined) as GenerationTaskFilters["status"] })); }} className="border border-white/10 bg-black/30 px-2 py-2 text-xs text-stone-200"><option value="">全部状态</option>{Object.entries(taskStatusText).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select aria-label="按媒体类型筛选" value={filters.mediaType ?? ""} onChange={(event) => { setOffset(0); setFilters((current) => ({ ...current, mediaType: (event.target.value || undefined) as GenerationTaskFilters["mediaType"] })); }} className="border border-white/10 bg-black/30 px-2 py-2 text-xs text-stone-200"><option value="">全部媒体</option><option value="image">图片</option><option value="video">视频</option></select><input aria-label="按能力筛选" value={filters.capability ?? ""} onChange={(event) => { setOffset(0); setFilters((current) => ({ ...current, capability: event.target.value.trim() || undefined })); }} placeholder="能力，例如 video_extend" className="border border-white/10 bg-black/30 px-2 py-2 text-xs text-stone-200" /></div></div>{tasks.length ? <><div>{tasks.map((task) => <TaskRow key={task.task_id} task={task} selected={selected?.task.task_id === task.task_id} busy={busyId === task.task_id} onSelect={() => void readDetail(task)} onCancel={() => void cancel(task)} onRetry={() => void retry(task)} />)}</div><div className="px-5"><Pagination offset={offset} pageSize={50} total={total} disabled={refreshing} onOffsetChange={setOffset} /></div></> : <div className="p-10 text-center"><p className="text-lg text-stone-200">当前筛选条件下没有生成任务</p><p className="mt-2 text-sm text-stone-500">{submissionText("emptyTasks")}</p></div>}</section><DetailPanel detail={selected} onClose={closeDetail} onSelectCandidate={(assetId) => void selectCandidate(assetId)} selecting={Boolean(busyId)} /></div></div></main>;
+  }, [readDetailId, initialTaskId, controlled]);
+  const refresh = useCallback(async () => {
+    const id = selectedId.current;
+    await Promise.all([load(), id ? readDetailId(id) : undefined]);
+  }, [load, readDetailId]);
+  const hasPending = tasks.some((task) => isProcessingTask(task.status)) || (selected && isProcessingTask(selected.task.status));
+  useEffect(() => {
+    if (!hasPending || state !== "ready") return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !actionPending.current) void refresh();
+    }, 12000);
+    return () => window.clearInterval(timer);
+  }, [hasPending, refresh, state]);
+  const readDetail = (task: GenerationTask) => { setMessage(""); return readDetailId(task.task_id); };
+  const closeDetail = () => { detailController.current?.abort(); selectedId.current = null; setSelected(null); };
+  const selectFromList = (task: GenerationTask) => {
+    setMessage("");
+    if (query && initialTaskId !== task.task_id) saveLocation(filters, offset, task.task_id);
+    else void readDetailId(task.task_id);
+  };
+  const actionError = (error: unknown) => t(error instanceof GenerationCenterApiError && error.status === 403 ? "forbidden"
+    : error instanceof GenerationCenterApiError && error.status === 409 ? "conflict" : "actionError");
+  const performAction = async (task: GenerationTask, action: ProductionAction) => {
+    if (actionPending.current) return;
+    actionPending.current = true;
+    const active = detailScope.current;
+    setBusyId(task.task_id); setMessage("");
+    const key = `xj:${scope.projectId}:${action}:${task.task_id}:${task.version}`;
+    try {
+      const updated = action === "retry" ? await api.retry(scope.projectId, task, key) : await api.cancel(scope.projectId, task, key, action);
+      if (detailScope.current !== active) return;
+      if (query && updated.task_id !== task.task_id && selectedId.current === task.task_id) saveLocation(filters, offset, updated.task_id);
+      await Promise.all([load(), selectedId.current === task.task_id ? readDetailId(updated.task_id) : undefined]);
+      if (action === "retry" && detailScope.current === active) setMessage(t("retried"));
+    } catch (error) {
+      if (detailScope.current !== active) return;
+      await refresh();
+      if (detailScope.current === active) setMessage(actionError(error));
+    } finally { actionPending.current = false; setBusyId(undefined); }
+  };
+  const selectCandidateForTask = async (taskId: string, assetId: string, expectedVersion: number) => {
+    if (actionPending.current) return;
+    actionPending.current = true; setBusyId(taskId); setMessage("");
+    const active = detailScope.current;
+    try {
+      await api.selectCandidate(scope.projectId, taskId, assetId, expectedVersion, `xj:${scope.projectId}:candidate:${taskId}:${assetId}`);
+      if (detailScope.current === active) { await refresh(); if (detailScope.current === active) setMessage(t("savedChoice")); }
+    } catch (error) {
+      if (detailScope.current === active) { await refresh(); if (detailScope.current === active) setMessage(actionError(error)); }
+    } finally { actionPending.current = false; setBusyId(undefined); }
+  };
+  const submitted = async (task: GenerationTask) => {
+    const [listLoaded, detailLoaded] = await Promise.all([load(), readDetail(task)]);
+    if (!listLoaded || !detailLoaded) throw new Error(submissionText("refreshFailed"));
+    setMessage(t("submitted"));
+  };
+  if (state === "loading") return <main className="grid place-items-center gap-2 p-8" aria-busy="true"><LoaderCircle className="animate-spin" /><p>{t("loading")}</p></main>;
+  if (state === "forbidden" || state === "error") return <main className="p-6"><section role="alert"><h1>{t("loadError")}</h1><p>{message}</p>{state === "error" && <button className="xj-production-link" type="button" onClick={() => void load()}>{t("refresh")}</button>}</section></main>;
+  const HeadingIcon = view === "tasks" ? ClipboardList : Icon;
+  return <main className="xj-production-page"><header className="xj-production-title"><HeadingIcon size={23} aria-hidden="true" /><div>
+    <h1>{view === "tasks" ? t("title") : config.title}</h1>
+    <p>{[scope.projectName, view === "tasks" ? null : view === "center" ? submissionText("centerHelp") : config.description].filter(Boolean).join(" · ")}</p>
+  </div></header>
+    {message && <p role="status" className="mb-3 rounded-lg border border-white/10 px-4 py-2 text-sm">{message}</p>}
+    {view === "video-candidates" && <CandidateComparison scope={scope} candidates={candidates} total={candidateTotal} selecting={Boolean(busyId)} onSelectCandidate={(taskId, assetId, version) => void selectCandidateForTask(taskId, assetId, version)} />}
+    {config.submit && <div className="mb-5"><GenerationSubmissionForm key={`${sessionEpoch}:${scope.workspaceId}:${scope.projectId}:${view}`} config={config} scope={scope} api={api} onSubmitted={submitted} /></div>}
+    <ProductionQueue scope={scope} tasks={tasks} total={total} offset={offset} filters={filters} selected={selected} refreshing={refreshing} busy={Boolean(busyId)}
+      onFilters={(next) => { closeDetail(); setMessage(""); saveLocation(next, 0); }} onPage={(next) => { closeDetail(); saveLocation(filters, next); }}
+      onRefresh={() => { setMessage(""); void refresh(); }} onSelect={selectFromList} onClose={() => { closeDetail(); saveLocation(filters, offset); }} onAction={(task, action) => void performAction(task, action)}
+      onChoose={(assetId) => { if (selected) void selectCandidateForTask(selected.task.task_id, assetId, selected.selectedCandidate?.version ?? 0); }} />
+  </main>;
 }

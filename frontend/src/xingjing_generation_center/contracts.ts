@@ -1,5 +1,20 @@
 export type GenerationTaskStatus = "queued" | "running" | "retrying" | "cancelling" | "succeeded" | "failed" | "timeout" | "cancelled";
 export type GenerationMediaType = "image" | "video";
+export type ProductionGroup = "working" | "attention" | "completed" | "ended";
+export type ProductionAction = "cancel" | "stop_waiting" | "retry";
+export type ProductionState = GenerationTaskStatus | "checking" | "waiting_stopped" | "publishing";
+export interface CreatorTaskInfo {
+  readonly kind: "reference" | "shot" | "character_turnaround" | "character_expressions" | "generation";
+  readonly subject: string | null;
+  readonly assetKind: string | null;
+  readonly sourceAssetId?: string | null;
+  readonly episode: number | null;
+  readonly shot: string | null;
+  readonly state: ProductionState;
+  readonly action: Exclude<ProductionAction, "retry"> | null;
+  readonly canRetry: boolean;
+  readonly canChooseResult?: boolean;
+}
 
 export interface GenerationInputReference {
   readonly asset_id: string;
@@ -28,6 +43,7 @@ export interface GenerationFailure {
 }
 
 export interface GenerationTask {
+  readonly creator?: CreatorTaskInfo;
   readonly task_id: string;
   readonly request: GenerationRequest;
   readonly status: GenerationTaskStatus;
@@ -111,6 +127,7 @@ export interface GenerationTaskDetail {
 }
 
 export interface GenerationTaskFilters {
+  readonly group?: ProductionGroup;
   readonly status?: GenerationTaskStatus;
   readonly mediaType?: GenerationMediaType;
   readonly capability?: string;

@@ -166,7 +166,9 @@ def fail_task(task: GenerationTask, *, failure: Failure, at: datetime) -> Genera
     The M06 task must then become truthfully failed, rather than remain queued
     forever or invent a provider job merely to reuse another transition.
     """
-    _require(task, {TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.RETRYING, TaskStatus.CANCELLING}, TaskStatus.FAILED)
+    _require(
+        task, {TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.RETRYING, TaskStatus.CANCELLING}, TaskStatus.FAILED
+    )
     return _update(task, at, status=TaskStatus.FAILED, failure=failure, completed_at=at, next_attempt_at=None)
 
 
@@ -194,7 +196,7 @@ def apply_provider_callback(
     _at_or_after(task, at)
     if callback.event_id in task.processed_callback_event_ids:
         return CallbackResult(task=task, disposition=CallbackDisposition.DUPLICATE)
-    if task.status in _TERMINAL or task.status is TaskStatus.CANCELLING:
+    if task.status in _TERMINAL:
         return CallbackResult(task=task, disposition=CallbackDisposition.IGNORED_LATE)
     if at >= task.timeout_at:
         return CallbackResult(task=expire_task(task, at=at), disposition=CallbackDisposition.IGNORED_LATE)
@@ -202,7 +204,11 @@ def apply_provider_callback(
         return CallbackResult(task=task, disposition=CallbackDisposition.IGNORED_STALE_ATTEMPT)
     if callback.provider_job_id != task.provider_job_id:
         return CallbackResult(task=task, disposition=CallbackDisposition.REJECTED_JOB_MISMATCH)
-    _require(task, {TaskStatus.RUNNING}, TaskStatus.SUCCEEDED if callback.succeeded else TaskStatus.FAILED)
+    _require(
+        task,
+        {TaskStatus.RUNNING, TaskStatus.CANCELLING},
+        TaskStatus.SUCCEEDED if callback.succeeded else TaskStatus.FAILED,
+    )
     changes: dict[str, object] = {
         "status": TaskStatus.SUCCEEDED if callback.succeeded else TaskStatus.FAILED,
         "completed_at": at,

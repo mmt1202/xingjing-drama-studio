@@ -163,7 +163,7 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
         </div> : null}
       </section>
       {task && <section className="xj-turn-task" aria-live="polite"><Images aria-hidden="true" size={18} /><div>
-        <strong>{taskKind}</strong><p>{task.executionUnconfirmed && working ? t("unknown") : working ? t(task.status === "queued" ? "queued" : task.status === "cancelling" ? "stopping" : "waiting", { kind: taskKind }) :
+        <strong>{taskKind}</strong><p>{task.waitingStopped && working ? t("waitStopped") : task.executionUnconfirmed && working ? t("unknown") : working ? t(task.status === "queued" ? "queued" : task.status === "cancelling" ? "stopping" : "waiting", { kind: taskKind }) :
           task.status !== "succeeded" ? t("failed") : !outputs.length ? t("emptyResult") : fresh ? t("review") : t("adopted")}</p>
         {fresh && taskStage && stage !== taskStage && <button type="button" className="xj-turn-link" onClick={() => { setChosenStage(taskStage); setInspection(undefined); }}>{t("showCandidate")}</button>}
       </div>{taskLink && <a href={taskLink}>{t("task")} <ArrowRight size={13} /></a>}</section>}
@@ -187,7 +187,7 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
           {!available && <p role="status">{gen(models.notice ?? (drawingReference ? "modelMissing" : "noDerivative"))} {models.notice !== "checking" && <button type="button" className="xj-turn-link" onClick={models.recheck}>{t("retry")}</button>}</p>}
           <AssetImageBilling key={capability} generation={generation} capability={capability} />
           <button type="button" className="xj-turn-primary xj-turn-generate" disabled={blocked || working || !available || (!drawingReference && !requestedViews.length)} onClick={generate}>
-            {drawingReference ? <ScanFace size={17} /> : <Sparkles size={17} />}{t(working ? task?.executionUnconfirmed ? "awaitResult" : "making" : generation.activeAction === action ? "busy" : drawingReference ? hasReference ? "redoRef" : "generateRef" : sheet ? "redoSheet" : "generateSheet", { kind: taskKind })}
+            {drawingReference ? <ScanFace size={17} /> : <Sparkles size={17} />}{t(working ? task?.waitingStopped ? "awaitReview" : task?.executionUnconfirmed ? "awaitResult" : "making" : generation.activeAction === action ? "busy" : drawingReference ? hasReference ? "redoRef" : "generateRef" : sheet ? "redoSheet" : "generateSheet", { kind: taskKind })}
           </button>
           {stage === "reference" && hasReference && <button type="button" className="xj-turn-link" onClick={() => setChosenStage("sheet")}>{t("nextSheet")} <ArrowRight size={15} /></button>}
         </div>

@@ -269,6 +269,7 @@ export interface TaskReceipt {
   readonly capability?: string;
   readonly sourceVersionId?: string;
   readonly executionUnconfirmed?: boolean;
+  readonly waitingStopped?: boolean;
   readonly projectId?: string;
   readonly status: WorkStatus;
   readonly progress?: number;

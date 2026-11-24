@@ -76,6 +76,7 @@ interface GenerationTaskDetailPayload {
     readonly status: TaskReceipt["status"];
     readonly output_asset_ids: readonly string[];
     readonly request?: { readonly capability?: string };
+    readonly creator?: { readonly state?: string };
     readonly failure?: { readonly message?: string } | null;
   };
   readonly generatedAssets: readonly { readonly asset_id: string }[];
@@ -670,7 +671,7 @@ export function createAssetsStoryboardApi(
         throw new Error("projectId is required to read a generation task");
       const detail = await request<GenerationTaskDetailPayload>(
         scope,
-        `/generation-tasks/${encodeURIComponent(task.taskId)}?projectId=${projectId}`,
+        `/generation-tasks/${encodeURIComponent(task.taskId)}?projectId=${projectId}&creatorView=1`,
         {},
         signal,
       );
@@ -682,6 +683,7 @@ export function createAssetsStoryboardApi(
         capability: detail.data.task.request?.capability ?? task.capability,
         sourceVersionId: task.sourceVersionId,
         executionUnconfirmed: detail.data.progress?.nativeExecution?.status === "unknown",
+        waitingStopped: detail.data.task.creator?.state === "waiting_stopped",
         projectId: decodeURIComponent(projectId),
         status: detail.data.task.status,
         progress: detail.data.progress?.percent,

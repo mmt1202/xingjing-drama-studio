@@ -127,7 +127,7 @@ class HttpGenerationProviderGateway:
             accepted = datetime.now(UTC)
         return ProviderSubmission(provider_job_id=job_id, accepted_at=accepted)
 
-    async def cancel(self, provider_job_id: str) -> None:
+    async def cancel(self, provider_job_id: str) -> bool:
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=10.0)) as client:
                 response = await client.post(
@@ -135,5 +135,16 @@ class HttpGenerationProviderGateway:
                     headers={"Authorization": f"Bearer {self._bearer_token}", "Accept": "application/json"},
                 )
                 response.raise_for_status()
-        except httpx.HTTPError as error:
+                if response.status_code == 202:
+                    return False
+                if response.content:
+                    payload = response.json()
+                    # A cancellation with a charge is settled by its signed billing callback.
+                    return (
+                        isinstance(payload, dict)
+                        and payload.get("status") in ("cancelled", "canceled")
+                        and not payload.get("billing")
+                    )
+                return response.status_code in {200, 204}
+        except (ValueError, httpx.HTTPError) as error:
             raise GenerationProviderGatewayError("GENERATION_PROVIDER_CANCELLATION_FAILED") from error

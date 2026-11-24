@@ -2,6 +2,7 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  waitStopped: "已停止等待这次出图。平台正在核对结果和费用，你可以继续修改角色设定。", awaitReview: "上一次出图待核对",
   custom: "自定义视角", customHint: "每行写一个想画的视角，例如半身正面或靴子细节。", awaitResult: "等待上一次出图确认", making: "正在制作{{kind}}…",
   title: "{{name}} · 角色三视图", genericTitle: "角色三视图", intro: "先确定角色长什么样，再用同一造型制作不同视角。", back: "返回角色资产",
   unavailable: "请在角色资产中选择要制作的角色。", library: "打开资产库", canvas: "造型画板", reference: "角色参考图", sheet: "三视图",
@@ -21,6 +22,7 @@ const zh = {
   nextSheet: "制作三视图", sheetVersion: "已采用的三视图", refVersion: "已采用的参考图", previousRef: "调整角色参考图",
 };
 const en: Record<keyof typeof zh, string> = {
+  waitStopped: "You stopped waiting for this image. The outcome and cost are under review. You can keep editing the character.", awaitReview: "Previous image under review",
   custom: "Custom views", customHint: "Enter one view per line, such as a waist-up front view or a boot detail.", awaitResult: "Awaiting the previous result", making: "Creating {{kind}}…",
   title: "{{name}} · Character turnaround", genericTitle: "Character turnaround", intro: "Establish the character’s look, then draw it consistently from different angles.", back: "Back to character",
   unavailable: "Select a character from the asset library to get started.", library: "Open asset library", canvas: "Design board", reference: "Character reference", sheet: "Turnaround",
@@ -40,6 +42,7 @@ const en: Record<keyof typeof zh, string> = {
   nextSheet: "Make a turnaround", sheetVersion: "Current turnaround", refVersion: "Current reference", previousRef: "Adjust character reference",
 };
 const vi: Record<keyof typeof zh, string> = {
+  waitStopped: "Bạn đã dừng chờ ảnh này. Nền tảng đang đối soát kết quả và chi phí. Bạn vẫn có thể chỉnh nhân vật.", awaitReview: "Ảnh trước đang chờ đối soát",
   custom: "Góc tùy chỉnh", customHint: "Mỗi dòng nhập một góc, ví dụ nửa thân chính diện hoặc chi tiết ủng.", awaitResult: "Chờ xác nhận ảnh trước", making: "Đang tạo {{kind}}…",
   title: "{{name}} · Tạo hình đa góc", genericTitle: "Tạo hình đa góc", intro: "Chốt diện mạo nhân vật rồi thể hiện cùng một tạo hình ở nhiều góc nhìn.", back: "Về hồ sơ nhân vật",
   unavailable: "Chọn một nhân vật trong thư viện để bắt đầu.", library: "Mở thư viện", canvas: "Bảng tạo hình", reference: "Ảnh tham chiếu", sheet: "Bản đa góc",
