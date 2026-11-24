@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -213,7 +214,7 @@ class AssetRuntime:
             source_asset_id not in task.request.input_asset_ids and not initial_reference
         ) or generated_asset_id not in task.output_asset_ids:
             raise LookupError("GENERATED_ASSET_NOT_FOUND")
-        return asset
+        return replace(asset, metadata={**asset.metadata, "capability": task.request.capability})
 
     def store_rights_evidence(
         self, context: TrustedWorkspaceContext, project_id: str, content: bytes

@@ -75,10 +75,11 @@ interface GenerationTaskDetailPayload {
     readonly task_id: string;
     readonly status: TaskReceipt["status"];
     readonly output_asset_ids: readonly string[];
+    readonly request?: { readonly capability?: string };
     readonly failure?: { readonly message?: string } | null;
   };
   readonly generatedAssets: readonly { readonly asset_id: string }[];
-  readonly progress?: { readonly percent?: number } | null;
+  readonly progress?: { readonly percent?: number; readonly nativeExecution?: { readonly status?: string } } | null;
   readonly billing?: {
     readonly currency?: string;
     readonly estimated_minor?: number;
@@ -657,6 +658,10 @@ export function createAssetsStoryboardApi(
         cache: "no-store", headers: { "Idempotency-Key": idempotencyKey },
       }, signal)).data.task;
     },
+    async getLatestCharacterImage(scope, assetId, signal) {
+      const path = `/projects/${requireProject(scope)}/assets/${encodeURIComponent(assetId)}/latest-character-image`;
+      return (await request<{ task: TaskReceipt | null }>(scope, path, { cache: "no-store" }, signal)).data.task;
+    },
     async getGenerationTask(scope, task, signal) {
       const projectId = encodeURIComponent(
         scope.projectId?.trim() || task.projectId?.trim() || "",
@@ -674,6 +679,9 @@ export function createAssetsStoryboardApi(
       );
       return {
         taskId: detail.data.task.task_id,
+        capability: detail.data.task.request?.capability ?? task.capability,
+        sourceVersionId: task.sourceVersionId,
+        executionUnconfirmed: detail.data.progress?.nativeExecution?.status === "unknown",
         projectId: decodeURIComponent(projectId),
         status: detail.data.task.status,
         progress: detail.data.progress?.percent,

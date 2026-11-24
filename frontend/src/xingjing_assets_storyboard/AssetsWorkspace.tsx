@@ -6,6 +6,8 @@ import { AssetLibrary, LIBRARY_PAGE_SIZE, recallLibrary, rememberLibrary, Rights
 import { AssetPermissionDialog, type PermissionDraft } from "./AssetPermissionDialog";
 import { AssetProfileSuggestions, profileInput } from "./AssetProfileSuggestions";
 import { AssetProfileLinks } from "./AssetProfileLinks";
+import { CharacterTurnaroundStudio } from "./CharacterTurnaroundStudio";
+import { useTurnaroundTranslation } from "./turnaround-i18n";
 import { profileDetails, profileLabel, useAssetProfileTranslation } from "./asset-profile-i18n";
 import { useAssetLibraryTranslation } from "./asset-library-i18n";
 import { AssetsStoryboardApiError, createAssetsStoryboardApi } from "./api";
@@ -51,8 +53,7 @@ export interface AssetsWorkspaceProps {
 
 const assetTypeLabels: Record<AssetType, string> = { character: "角色", scene: "场景", prop: "道具", costume: "服装", voice: "声音" };
 const rightsLabels: Record<RightsStatus, string> = { missing: "缺少授权", pending: "待核验", verified: "已授权", expired: "已过期", blocked: "已阻断" };
-const viewTitles: Record<Exclude<AssetView, "extract" | "library" | "editor">, [string, string]> = {
-  turnaround: ["角色三视图", "基于已选角色主版本生成正面、侧面、背面、半身、全身与服装变化。"],
+const viewTitles: Record<Exclude<AssetView, "extract" | "library" | "editor" | "turnaround">, [string, string]> = {
   expressions: ["角色表情集", "从角色主版本派生表情资产，并保留来源与版本关系。"],
   market: ["素材市场", "浏览可商用素材，核对许可范围后加入当前工作区资产库。"],
   "market-detail": ["素材详情", "查看素材预览、授权范围、价格、使用记录与项目引用。"],
@@ -338,20 +339,20 @@ function AssetEditor({ asset, api, scope, canManage, busy, generation, task, own
   </div>;
 }
 
-function CharacterDerivative({ asset, mode, canManage, busy, generation, ownerProject, onRun, onGenerateReference, onAdopt, task }: { readonly generation: AssetImageControls; readonly asset?: AssetItem; readonly mode: "turnaround" | "expressions"; readonly ownerProject: boolean; readonly canManage: boolean; readonly busy: boolean; readonly onRun: (payload: Record<string, unknown>) => void; readonly onGenerateReference: () => void; readonly onAdopt: (generatedAssetId: string) => void; readonly task?: TaskReceipt }) {
-  const [values, setValues] = useState(mode === "turnaround" ? "正面,侧面,背面,半身,全身" : "喜悦,愤怒,悲伤,惊讶");
+function CharacterExpressions({ asset, canManage, busy, generation, ownerProject, onRun, onGenerateReference, onAdopt, task }: { readonly generation: AssetImageControls; readonly asset?: AssetItem; readonly ownerProject: boolean; readonly canManage: boolean; readonly busy: boolean; readonly onRun: (payload: Record<string, unknown>) => void; readonly onGenerateReference: () => void; readonly onAdopt: (generatedAssetId: string) => void; readonly task?: TaskReceipt }) {
+  const [values, setValues] = useState("喜悦,愤怒,悲伤,惊讶");
   const { t } = useAssetGenerationTranslation();
   if (!asset) return <StatePanel title="未找到角色资产" detail="请从资产库选择一个角色后再进入此页面。" />;
   const hasReference = assetHasReferenceImage(asset);
   const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
-  const action = mode === "turnaround" ? "generateTurnaround" : "generateExpressions";
+  const action = "generateExpressions";
   const available = generation.models.supports(assetImageCapabilities[action]);
   return <section className={`${panel} max-w-4xl p-6`}><p className="text-xs text-[#8B5CF6]">角色稳定 ID</p><code className="text-xs text-[#7E8494]">{asset.id}</code><h2 className="mt-4 text-xl font-semibold">{asset.name}</h2>
     {!hasReference ? <p role="status" className="mt-4 text-sm text-amber-200">{t("firstImage")}</p> : null}
-    <label className="mt-5 block text-sm">{mode === "turnaround" ? "需要生成的视图（逗号分隔）" : "需要生成的表情（逗号分隔）"}<textarea rows={3} value={values} onChange={(event) => setValues(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label>
+    <label className="mt-5 block text-sm">需要生成的表情（逗号分隔）<textarea rows={3} value={values} onChange={(event) => setValues(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label>
     {hasReference && !available ? <p role="status" className="mt-3 text-sm text-amber-200">{t(generation.models.notice ?? "noDerivative")}</p> : null}
     {hasReference ? <AssetImageBilling key={action + asset.id} generation={generation} capability={assetImageCapabilities[action]} /> : null}
-    <button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || generation.pending || !available || working || !hasReference || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{generation.activeAction === action ? t("submitting") : mode === "turnaround" ? "生成三视图版本" : "生成表情集版本"}</button>
+    <button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || generation.pending || !available || working || !hasReference || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{generation.activeAction === action ? t("submitting") : "生成表情集版本"}</button>
     <AssetReferenceGeneration asset={asset} generation={generation} ownerProject={ownerProject} canManage={canManage} busy={busy} task={task} onGenerate={onGenerateReference} onAdopt={onAdopt} />
   </section>;
 }
@@ -375,6 +376,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const loadAbort = useRef<AbortController | undefined>(undefined);
   const { t: handoff } = useProductionHandoffTranslation();
   const { t: generationText } = useAssetGenerationTranslation();
+  const { t: turnText } = useTurnaroundTranslation();
   const { t: extractionText } = useAssetExtractionTranslation();
   const [sourceError, setSourceError] = useState<{ message: string; requestId?: string; assetId?: string; creditCapability?: AssetImageCapability }>();
   const [pendingRecovery, setPendingRecovery] = useState<{ key: string; operation?: PendingAssetSubmission }>();
@@ -485,6 +487,10 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const editingLocked = Boolean(pendingSubmission && !missingReceipt);
   const protection = useDraftProtection(draftBlocked || busy || editingLocked);
   const projectId = scope.projectId ?? currentAsset?.projectId;
+  const [historyReload, setHistoryReload] = useState(0);
+  const [characterHistory, setCharacterHistory] = useState<{ key: string; state: "ready" | "failed" }>();
+  const fetchCharacterHistory = activeView === "turnaround" && typeof api.getLatestCharacterImage === "function";
+  const historyKey = JSON.stringify([taskStorageKey, historyReload]);
   const models = useAssetImageModels(api, scope.workspaceId, detailView && currentAsset && currentAsset.type !== "voice" ? projectId : undefined);
   const assetError = sourceError?.assetId && sourceError.assetId === currentAssetId ? sourceError : undefined;
   const generation: AssetImageControls = {
@@ -510,7 +516,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         } else setReceiptCheck({ id: original.idempotencyKey, missing: true });
         return;
       }
-      const detail = await api.getGenerationTask(lookupScope, receipt, controller.signal);
+      const detail = await api.getGenerationTask(lookupScope, { ...receipt, sourceVersionId: version }, controller.signal);
       if (controller.signal.aborted) return;
       setTask(detail); setTaskOwnerId(original.targetId);
       if (rememberAssetTask(taskStorageKey, { ...detail, projectId })) {
@@ -521,20 +527,32 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     return () => controller.abort();
   }, [api, assetRevision, busy, pendingSubmission, projectId, receiptRevision, scope.workspaceId, taskStorageKey]);
   useEffect(() => {
-    if (!taskStorageKey || !currentAsset) return;
+    if (!taskStorageKey || !currentAssetId || !projectId) return;
     const retained = readAssetTask(taskStorageKey);
-    if (!retained) return;
+    if (!retained && !fetchCharacterHistory) return;
     const controller = new AbortController();
     void Promise.resolve().then(async () => {
       if (controller.signal.aborted) return;
-      setTask(retained); setTaskOwnerId(currentAsset.id);
+      const lookupScope = { workspaceId: scope.workspaceId, projectId };
       try {
-        const latest = await api.getGenerationTask(scope, retained, controller.signal);
-        if (!controller.signal.aborted) setTask((previous) => previous?.taskId === retained.taskId ? latest : previous);
-      } catch (cause) { if (!controller.signal.aborted) setError(cause); }
+        const receipt = fetchCharacterHistory && api.getLatestCharacterImage
+          ? await api.getLatestCharacterImage(lookupScope, currentAssetId, controller.signal) : retained;
+        if (controller.signal.aborted) return;
+        setTaskOwnerId(currentAssetId);
+        setTask(receipt ?? undefined);
+        if (receipt) {
+          const latest = await api.getGenerationTask(lookupScope, receipt, controller.signal);
+          if (!controller.signal.aborted) setTask((previous) => previous?.taskId === receipt.taskId ? latest : previous);
+        }
+        if (fetchCharacterHistory && !controller.signal.aborted) setCharacterHistory({ key: historyKey, state: "ready" });
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        if (fetchCharacterHistory) setCharacterHistory({ key: historyKey, state: "failed" });
+        else setError(cause);
+      }
     });
     return () => controller.abort();
-  }, [api, taskStorageKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [api, taskStorageKey, currentAssetId, projectId, scope.workspaceId, fetchCharacterHistory, historyKey]);
   useEffect(() => {
     if (!taskStorageKey || !task || !currentAsset || currentAsset.id !== taskOwnerId) return;
     let active = true;
@@ -573,7 +591,11 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
         if (receiptSaved) { const cleared = clearPendingAssetSubmission(storageKey); setPendingRecovery({ key: storageKey }); setTaskStorageUnavailable(!cleared); }
         else { setTaskStorageUnavailable(true); setMessage(generationText("receiptStorageUnavailable")); }
       }
-      if (result.asset && ["createAsset", "updateAsset", "createVersion", "saveRights", "restoreVersion", "setPrimaryVersion", "adoptGenerationOutput"].includes(action)) { if (context) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? result.asset.projectId ?? null }, "asset", result.asset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); }
+      if (result.asset && ["createAsset", "updateAsset", "createVersion", "saveRights", "restoreVersion", "setPrimaryVersion", "adoptGenerationOutput"].includes(action)) {
+        if (context) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? result.asset.projectId ?? null }, "asset",
+          activeView === "turnaround" ? `turnaround:${result.asset.id}` : result.asset.id));
+        setDraftReset((value) => value + 1); setDraftBlocked(false);
+      }
       if (result.asset) {
         const saved = result.asset;
         if (exactDetail && saved.id === targetAssetId) setDetail({ key: detailKey, loading: false, asset: saved });
@@ -604,7 +626,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       return undefined;
     } finally { operationLatch.current = false; setActiveAction(undefined); }
   };
-  const title = activeView === "library" ? [libraryText("title"), libraryText("intro")] : activeView === "editor" ? [libraryText("editorTitle"), libraryText("editorIntro")] : activeView === "extract" ? [extractionText("title"), extractionText("intro")] : viewTitles[activeView];
+  const title = activeView === "turnaround" ? [currentAsset ? turnText("title", { name: currentAsset.name }) : turnText("genericTitle"), turnText("intro")] : activeView === "library" ? [libraryText("title"), libraryText("intro")] : activeView === "editor" ? [libraryText("editorTitle"), libraryText("editorIntro")] : activeView === "extract" ? [extractionText("title"), extractionText("intro")] : viewTitles[activeView];
   const currentError = error ?? (exactDetail && detail?.key === detailKey ? detail.error : undefined);
   if ((!context || !assets) && !forbidden && !error && !(exactDetail && detail?.key === detailKey && detail.error)) return <LoadingState />;
   if (forbidden) return <main className="min-h-full bg-[#07080C] p-6"><StatePanel title="没有资产查看权限" detail={libraryText("viewDenied")} requestId={forbidden.requestId} tone="danger" /></main>;
@@ -615,6 +637,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
   const pendingCapability = pendingSubmission && pendingSubmission.action !== "adoptGenerationOutput" ? assetImageCapabilities[pendingSubmission.action] : undefined;
   const actions = activeView === "library" && hasProjectContext && canManage
     ? <button type="button" className="xj-lib-primary" onClick={() => navigate("extract")}>{libraryText("extract")}</button>
+    : activeView === "turnaround" && currentAsset ? <button type="button" className={button} onClick={() => navigate("editor", currentAsset.id)}>{turnText("back")}</button>
     : activeView === "editor" ? <button type="button" className={button} onClick={() => navigate("library")}>{libraryText("returnLibrary")}</button> : null;
   const episodeTitle = episodeBindings?.find((entry) => String(entry.episode) === scope.episodeId)?.title;
   const scopeTitle = scope.episodeId && hasProjectContext
@@ -624,8 +647,8 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
     rememberLibrary(browseKey, { query: activeQuery, offset: libraryOffset, focusAsset: asset.id });
     navigate("editor", asset.id);
   };
-  return <WorkspaceShell context={context} title={title[0]} description={title[1]} eyebrow="M04 · ASSET CONTINUITY" libraryHeader={activeView === "library" || activeView === "editor"} projectName={projectName ?? context.project?.name} actions={actions}>
-    {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}{draftBlocked ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { if (currentAsset) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }, "asset", currentAsset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); setConflict(undefined); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}{message ? <StatePanel title={message} tone="success" /> : null}{currentError ? <StatePanel title={activeView === "library" ? libraryText("loadFail") : "操作失败"} detail={activeView === "library" ? undefined : errorMessage(currentError)} requestId={errorRequestId(currentError)} actionLabel="重试加载" onAction={() => void load()} tone="danger" /> : null}
+  return <WorkspaceShell context={context} title={title[0]} description={title[1]} eyebrow="M04 · ASSET CONTINUITY" libraryHeader={activeView === "library" || activeView === "editor" || activeView === "turnaround"} projectName={projectName ?? context.project?.name} actions={actions}>
+    {protection.navigationBlocked ? <p role="status" className="mb-4 text-sm text-amber-200">{handoff("unsaved")}</p> : null}{draftBlocked && activeView !== "turnaround" ? <div className="mb-4">{discardConfirm ? <><p className="text-xs leading-6 text-amber-200">{handoff("discardConfirm")}</p><button type="button" className={button + " mt-3"} disabled={busy} onClick={() => { if (currentAsset) clearProductionDraft(productionDraftSlot({ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }, "asset", currentAsset.id)); setDraftReset((value) => value + 1); setDraftBlocked(false); setDiscardConfirm(false); setConflict(undefined); }}>{handoff("discard")}</button><button type="button" className={button + " ml-2 mt-3"} disabled={busy} onClick={() => setDiscardConfirm(false)}>{handoff("keep")}</button></> : <button type="button" className={button} disabled={busy} onClick={() => setDiscardConfirm(true)}>{handoff("discard")}</button>}</div> : null}{message ? <StatePanel title={message} tone="success" /> : null}{currentError ? <StatePanel title={activeView === "library" ? libraryText("loadFail") : "操作失败"} detail={activeView === "library" ? undefined : errorMessage(currentError)} requestId={errorRequestId(currentError)} actionLabel="重试加载" onAction={() => void load()} tone="danger" /> : null}
     {pendingSubmission && !busy ? <section role="status" className="mb-4 rounded-xl border border-amber-400/30 p-4">
       <p className="text-sm leading-6 text-amber-200">{generationText(!pendingCapability ? "uncertain" : missingReceipt ? "receiptMissing" : receiptCheck?.id === pendingSubmission.idempotencyKey ? "receiptFailed" : "checkingReceipt")}</p>
       {pendingCapability ? <button type="button" className={button + " mt-3"} onClick={() => { setReceiptCheck(undefined); recheckReceipt((value) => value + 1); }}>{generationText("checkReceipt")}</button> : null}
@@ -665,7 +688,14 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       {nextToken ? <button type="button" className={button + " mt-4"} onClick={() => void load(activeQuery, true)}>加载更多</button> : null}
     </> : null}
     {activeView === "editor" || activeView === "market-detail" ? currentAsset ? <AssetEditor api={api} scope={scope} generation={generation} key={`${currentAsset.id}:${draftReset}`} draftScope={{ actorId: context.user.id, workspaceId: context.workspace.id, projectId: scope.projectId ?? currentAsset.projectId ?? null }} onDirty={setDraftBlocked} asset={currentAsset} ownerProject={!scope.projectId || currentAsset.projectId === scope.projectId} task={taskOwnerId === currentAsset.id ? task : undefined} canManage={canManage && !editingLocked} busy={busy || Boolean(exactDetail && detail?.loading)} conflict={conflict} marketDetail={activeView === "market-detail"} onReload={() => void load()} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)} onAction={(action, payload, version) => void run(action, payload, currentAsset, version)} onRights={(seed) => setPermission({ asset: currentAsset, seed })} onDerivative={(next) => scope.projectId ? navigate(next, currentAsset.id) : setLocalNavigation({ source: view, target: next, assetId: currentAsset.id })} /> : <StatePanel title="未找到资产" detail="对象可能已删除、筛选不可见或当前工作区无权访问。" actionLabel="返回资产库" onAction={() => navigate("library")} /> : null}
-    {activeView === "turnaround" || activeView === "expressions" ? <CharacterDerivative generation={generation} asset={currentAsset} ownerProject={!scope.projectId || currentAsset?.projectId === scope.projectId} mode={activeView} canManage={canManage && !editingLocked} busy={busy || Boolean(exactDetail && detail?.loading)} task={taskOwnerId === currentAsset?.id ? task : undefined} onGenerateReference={() => void run("generateReferenceImage", { sourceVersionId: currentAsset?.currentVersionId })} onRun={(payload) => void run(activeView === "turnaround" ? "generateTurnaround" : "generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}
+    {activeView === "turnaround" ? currentAsset?.type === "character" ? <div className="xj-turn-wrap"><CharacterTurnaroundStudio key={currentAsset.id} asset={currentAsset}
+      scope={{ actorId: context.user.id, workspaceId: scope.workspaceId, projectId: projectId ?? null }} generation={generation} task={taskOwnerId === currentAsset.id ? task : undefined}
+      historyState={!fetchCharacterHistory ? "ready" : characterHistory?.key === historyKey ? characterHistory.state : "checking"} reloadHistory={() => setHistoryReload((value) => value + 1)}
+      canEdit={canManage && (!scope.projectId || currentAsset.projectId === scope.projectId)} busy={busy} dirty={draftBlocked} reset={draftReset} conflict={Boolean(conflict)}
+      onDirty={setDraftBlocked} onReload={() => { setConflict(undefined); void load(); }} onSave={(payload, version) => void run("updateAsset", payload, currentAsset, version)}
+      onGenerate={(action, payload) => void run(action, payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /></div>
+      : <StatePanel title={turnText("unavailable")} actionLabel={turnText("library")} onAction={() => navigate("library")} /> : null}
+    {activeView === "expressions" ? <CharacterExpressions generation={generation} asset={currentAsset} ownerProject={!scope.projectId || currentAsset?.projectId === scope.projectId} canManage={canManage && !editingLocked} busy={busy || Boolean(exactDetail && detail?.loading)} task={taskOwnerId === currentAsset?.id ? task : undefined} onGenerateReference={() => void run("generateReferenceImage", { sourceVersionId: currentAsset?.currentVersionId })} onRun={(payload) => void run("generateExpressions", payload)} onAdopt={(generatedAssetId) => void run("adoptGenerationOutput", { generatedAssetId })} /> : null}
   </WorkspaceShell>;
 }
 

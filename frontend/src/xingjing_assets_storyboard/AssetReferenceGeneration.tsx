@@ -10,13 +10,13 @@ export function assetHasReferenceImage(asset: AssetItem) {
   return Boolean(version?.generatedAssetId && version.generatedMediaType === "image");
 }
 
-function ReferencePreview({ source, alt, workspaceId, projectId }: { source: string; alt: string; workspaceId: string; projectId: string }) {
+export function ReferencePreview({ source, alt, workspaceId, projectId, className }: { source: string; alt: string; workspaceId: string; projectId: string; className?: string }) {
   const { t } = useAssetGenerationTranslation();
   const media = useAuthenticatedMedia({ source, workspaceId, projectId });
   if (media.error) return <div className="mt-3 text-sm text-amber-200" role="status">
     {t("previewFailed")} <button type="button" className={button} onClick={media.retry}>{t("retryImage")}</button>
   </div>;
-  return media.url ? <img src={media.url} alt={alt} onError={media.decodeFailed} className="mt-3 max-h-64 w-full rounded-xl object-contain" /> :
+  return media.url ? <img src={media.url} alt={alt} onError={media.decodeFailed} className={className ?? "mt-3 max-h-64 w-full rounded-xl object-contain"} /> :
     <p role="status" className="mt-2 text-xs text-slate-400">{t("loadingImage")}</p>;
 }
 

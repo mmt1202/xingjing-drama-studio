@@ -48,7 +48,7 @@ from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_storyboard.ports import StoryboardScope
 
-from .profile_draft import PROFILE_TYPES, generate_profile, reference_image_prompt, script_excerpt
+from .profile_draft import PROFILE_TYPES, generate_profile, reference_image_prompt, script_excerpt, turnaround_prompt
 
 if TYPE_CHECKING:
     from server.xingjing_assets_runtime.runtime import AssetRuntime
@@ -387,7 +387,7 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
             return _success(context, {"asset": _asset_item(runtime, context, project_id, asset)})
         if action in {"updateAsset", "createVersion"}:
             asset_id = _required_target(target_id)
-            current = service.get(context.workspace_id, asset_id)
+            current = _owned_asset(repository, scope, project_id, asset_id)
             expected = _if_match(request)
             content = _content(payload, base=current.current_version.content)
             changed = service.revise(
@@ -556,11 +556,12 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
             )
             return _success(context, {"task": _generation_task_receipt(task, context)})
         if action in {"generateTurnaround", "generateExpressions"}:
+            current = _owned_asset(repository, scope, project_id, _required_target(target_id))
             task = await _submit_character_derivative(
                 runtime,
                 context,
                 project_id,
-                service.get(context.workspace_id, _required_target(target_id)),
+                current,
                 action=action,
                 payload=payload,
                 idempotency_key=key,
@@ -791,6 +792,9 @@ def _asset_item(
                 "source": asset.source.source_type,
                 "createdAt": version.created_at,
                 "assetContentSha256": version.content_sha256,
+                "imageCapability": (version.content.get("generationMetadata") or {}).get("capability")
+                if isinstance(version.content.get("generationMetadata"), dict)
+                else None,
                 **(
                     {"generatedAssetId": version.content["generatedAssetId"]}
                     if isinstance(version.content.get("generatedAssetId"), str)
@@ -842,16 +846,23 @@ async def _submit_character_derivative(
         raise AssetHttpError("ASSET_VERSION_CONFLICT", 409)
     items = _text_list(payload.get("items"), "DERIVATIVE_ITEMS_REQUIRED")
     capability = "character_turnaround" if action == "generateTurnaround" else "character_expressions"
+    prompt = f"为角色 {asset.name} 生成表情集：{', '.join(items)}"
+    if action == "generateTurnaround":
+        direction = payload.get("direction", "")
+        if not isinstance(direction, str) or len(direction) > 1000:
+            raise AssetHttpError("INVALID_ASSET_CONTENT")
+        prompt = turnaround_prompt(asset, items, direction.strip())
     request = GenerationRequest(
         workspace_id=context.workspace_id,
         project_id=project_id,
         media_type=MediaType.IMAGE,
         capability=capability,
-        prompt=f"为角色 {asset.name} 生成{('三视图' if action == 'generateTurnaround' else '表情集')}：{', '.join(items)}",
+        prompt=prompt,
         parameters={
             "asset_id": asset.asset_id,
             "source_version_id": source_version_id,
             "items": list(items),
+            **({"aspect_ratio": "3:2"} if action == "generateTurnaround" else {}),
         },
         input_asset_ids=(asset.asset_id,),
         input_asset_references=(
@@ -875,6 +886,8 @@ def _generation_task_receipt(task: GenerationTask, context: TrustedWorkspaceCont
         "taskId": task.task_id,
         "projectId": task.request.project_id,
         "status": task.status.value,
+        "capability": task.request.capability,
+        "sourceVersionId": task.request.parameters.get("source_version_id"),
         "statusUrl": f"/api/v1/generation-tasks/{task.task_id}?projectId={task.request.project_id}",
         "requestId": context.request_id,
     }

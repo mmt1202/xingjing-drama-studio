@@ -127,6 +127,25 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
             },
         )
 
+    @router.get("/projects/{project_id}/assets/{asset_id}/latest-character-image")
+    async def latest_character_image(request: Request, project_id: str, asset_id: str):
+        context = await runtime.context_for(request, project_id, "generation.view")
+        if "asset.view" not in context.permissions:
+            raise GenerationHttpError("PERMISSION_DENIED", 403)
+        task = await runtime.latest_character_image(context, project_id, asset_id)
+        receipt = None
+        if task:
+            receipt = {
+                "taskId": task.task_id,
+                "projectId": project_id,
+                "status": task.status.value,
+                "capability": task.request.capability,
+                "sourceVersionId": task.request.parameters.get("source_version_id"),
+            }
+        response = _success(context.request_id, {"task": receipt})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
     @router.get("/projects/{project_id}/assets/{asset_id}/generation-receipt")
     async def asset_generation_receipt(request: Request, project_id: str, asset_id: str):
         context = await runtime.context_for(request, project_id, "generation.view")

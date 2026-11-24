@@ -80,6 +80,25 @@ def reference_image_prompt(asset: Asset) -> str:
     )
 
 
+def turnaround_prompt(asset: Asset, views: tuple[str, ...], direction: str) -> str:
+    brief = json.dumps(creative_details(asset), ensure_ascii=False)
+    return "\n".join(
+        part
+        for part in (
+            f"Create one landscape character model sheet for {asset.name}.",
+            f"Saved character design: {brief}",
+            "Use the supplied character image for identity and apply the appearance changes in the saved design. "
+            "Keep the face, proportions, clothing and colors "
+            "consistent across views. Show the requested views in order, with space between figures, "
+            "matching scale and ground line, neutral lighting and a plain background. "
+            "Keep full-body views uncropped. Do not add text or watermarks.",
+            f"Views from left to right: {', '.join(views)}.",
+            f"Art direction for this sheet: {direction}" if direction else "",
+        )
+        if part
+    )
+
+
 def script_excerpt(source: str, asset: Asset) -> str:
     """Prefer the extraction's original paragraphs and scenes over the opening of a long script."""
     if len(source) <= 6000:

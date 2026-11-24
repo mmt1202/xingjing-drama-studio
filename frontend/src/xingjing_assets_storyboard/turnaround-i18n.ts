@@ -1,0 +1,62 @@
+import i18n from "@/i18n";
+import { useTranslation } from "react-i18next";
+
+const zh = {
+  custom: "自定义视角", customHint: "每行写一个想画的视角，例如半身正面或靴子细节。", awaitResult: "等待上一次出图确认", making: "正在制作{{kind}}…",
+  title: "{{name}} · 角色三视图", genericTitle: "角色三视图", intro: "先确定角色长什么样，再用同一造型制作不同视角。", back: "返回角色资产",
+  unavailable: "请在角色资产中选择要制作的角色。", library: "打开资产库", canvas: "造型画板", reference: "角色参考图", sheet: "三视图",
+  template: "构图示意", templateAlt: "用同一个人形展示正面、侧面和背面的排布", templateHint: "这里展示视角排布。{{name}}的图片生成后会出现在画板上。",
+  adopted: "已采用", candidate: "待采用", imageAlt: "{{name}}的{{kind}}", candidateNumber: "候选 {{number}}", guideCaption: "标准三视图",
+  front: "正面", side: "侧面", backView: "背面", threeQuarter: "四分之三侧面", closeUp: "面部特写", costume: "服装细节",
+  profile: "角色设定", version: "第 {{number}} 版", brief: "角色描述", appearance: "外观与服装", briefHint: "写下身份、年龄、气质和你对这个角色的想法。", appearanceHint: "例如短发、旧皮夹克、左眉有疤。",
+  save: "保存角色设定", saving: "正在保存…", undo: "撤销修改", changed: "有尚未保存的修改", saved: "设定已保存", readOnly: "你可以查看角色设定。编辑和出图需要所属项目的资产管理权限。",
+  staleDraft: "角色设定已有新版。先核对已保存的内容，再决定是否保留你的修改。", load: "读取最新设定", compare: "查看项目中已保存的设定", rebase: "保留我的修改并继续编辑",
+  layout: "视角与出图要求", angles: "画面包含的视角", selectOne: "至少选择一个视角。", direction: "本次三视图要求（选填）", directionHint: "例如三个视角都保留背包，右肩带的磨损要一致。",
+  generateRef: "生成角色参考图", redoRef: "重新生成参考图", generateSheet: "生成三视图", redoSheet: "重新生成三视图", adoptRef: "采用这张参考图", adoptSheet: "采用这张三视图",
+  refFirst: "先生成并采用一张角色参考图，用它固定各个视角的人物形象。", refNext: "参考图已就绪。选好视角，就可以生成三视图。", approvedNext: "这张三视图已保存到角色资产，可继续调整设定或制作新版。",
+  refInstructions: "按已保存的角色设定出一张图，预览满意后再采用。", saveFirst: "请先保存上面的角色设定，下一次出图会使用你修改后的内容。",
+  pending: "正在核对上一次出图…", lookupFailed: "暂时读不到上一次出图记录。重新检查后可继续制作。", retry: "重新检查", waiting: "正在生成{{kind}}。等待期间可以继续编辑角色设定。", queued: "{{kind}}已排队。", stopping: "正在取消上一次出图。", unknown: "上一次出图的结果仍待确认。可以继续改设定，在制作记录里查看进展。", task: "查看制作记录",
+  failed: "上一次出图未完成。可以调整设定后重新生成。", emptyResult: "正在核对生成的图片。", review: "预览满意后再采用，图片会保存到角色资产。", prior: "这张候选图来自较早的设定。采用会保留当前文字，并使用这张图片。", usePrior: "仍采用这张旧版图", savingImage: "正在采用…",
+  image: "角色图片", expressions: "表情图", busy: "正在提交…", ready: "待制作", current: "已采用的图片", original: "查看已采用的图片", showCandidate: "查看候选图",
+  nextSheet: "制作三视图", sheetVersion: "已采用的三视图", refVersion: "已采用的参考图", previousRef: "调整角色参考图",
+};
+const en: Record<keyof typeof zh, string> = {
+  custom: "Custom views", customHint: "Enter one view per line, such as a waist-up front view or a boot detail.", awaitResult: "Awaiting the previous result", making: "Creating {{kind}}…",
+  title: "{{name}} · Character turnaround", genericTitle: "Character turnaround", intro: "Establish the character’s look, then draw it consistently from different angles.", back: "Back to character",
+  unavailable: "Select a character from the asset library to get started.", library: "Open asset library", canvas: "Design board", reference: "Character reference", sheet: "Turnaround",
+  template: "Layout guide", templateAlt: "A neutral figure shown from the front, side and back", templateHint: "This is a layout guide. Images of {{name}} will appear here when ready.",
+  adopted: "In use", candidate: "For review", imageAlt: "{{kind}} for {{name}}", candidateNumber: "Option {{number}}", guideCaption: "Standard turnaround",
+  front: "Front", side: "Profile", backView: "Back", threeQuarter: "Three-quarter", closeUp: "Face detail", costume: "Costume detail",
+  profile: "Character design", version: "Version {{number}}", brief: "Character description", appearance: "Appearance and clothing", briefHint: "Describe the character’s identity, age and personality.", appearanceHint: "For example, short hair, a worn leather jacket and a scar on the left brow.",
+  save: "Save character design", saving: "Saving…", undo: "Discard edits", changed: "Unsaved changes", saved: "Design saved", readOnly: "You can view this design. Editing and generation require asset management access in its project.",
+  staleDraft: "A newer design is available. Review the saved text before deciding which edits to keep.", load: "Load latest design", compare: "Review saved design", rebase: "Keep my edits and continue",
+  layout: "Views and art direction", angles: "Views to include", selectOne: "Select at least one view.", direction: "Directions for this sheet (optional)", directionHint: "For example, keep the backpack and the wear on its right strap consistent.",
+  generateRef: "Generate reference", redoRef: "Generate another reference", generateSheet: "Generate turnaround", redoSheet: "Generate another turnaround", adoptRef: "Use this reference", adoptSheet: "Use this turnaround",
+  refFirst: "Generate and use a character reference to keep the same appearance in each view.", refNext: "Your reference is ready. Choose the views, then generate the sheet.", approvedNext: "This sheet is saved to the character. You can edit the design or make another version.",
+  refInstructions: "Generate an image from the saved design, then review it before using it.", saveFirst: "Save your edits above to use the latest character design for generation.",
+  pending: "Checking the last image request…", lookupFailed: "The last image request could not be loaded. Check again to continue.", retry: "Check again", waiting: "Generating {{kind}}. You can edit the character design while you wait.", queued: "{{kind}} is in the queue.", stopping: "Cancelling the last request.", unknown: "The last image request is awaiting confirmation. You can edit the design and follow its progress in production history.", task: "Production history",
+  failed: "The last image was not completed. You can edit the design and try again.", emptyResult: "Checking the generated images.", review: "Review the image, then use it to save it to this character.", prior: "This option was made from an earlier design. Using it keeps your current text and applies this image.", usePrior: "Use the earlier image", savingImage: "Applying…",
+  image: "Character image", expressions: "Expression sheet", busy: "Submitting…", ready: "To create", current: "Current image", original: "View current image", showCandidate: "View new option",
+  nextSheet: "Make a turnaround", sheetVersion: "Current turnaround", refVersion: "Current reference", previousRef: "Adjust character reference",
+};
+const vi: Record<keyof typeof zh, string> = {
+  custom: "Góc tùy chỉnh", customHint: "Mỗi dòng nhập một góc, ví dụ nửa thân chính diện hoặc chi tiết ủng.", awaitResult: "Chờ xác nhận ảnh trước", making: "Đang tạo {{kind}}…",
+  title: "{{name}} · Tạo hình đa góc", genericTitle: "Tạo hình đa góc", intro: "Chốt diện mạo nhân vật rồi thể hiện cùng một tạo hình ở nhiều góc nhìn.", back: "Về hồ sơ nhân vật",
+  unavailable: "Chọn một nhân vật trong thư viện để bắt đầu.", library: "Mở thư viện", canvas: "Bảng tạo hình", reference: "Ảnh tham chiếu", sheet: "Bản đa góc",
+  template: "Bố cục mẫu", templateAlt: "Một hình nhân mẫu nhìn từ phía trước, bên cạnh và phía sau", templateHint: "Đây là bố cục mẫu. Ảnh của {{name}} sẽ xuất hiện tại đây sau khi tạo.",
+  adopted: "Đang dùng", candidate: "Chờ chọn", imageAlt: "{{kind}} của {{name}}", candidateNumber: "Phương án {{number}}", guideCaption: "Ba góc tiêu chuẩn",
+  front: "Chính diện", side: "Nhìn ngang", backView: "Phía sau", threeQuarter: "Góc ba phần tư", closeUp: "Cận mặt", costume: "Chi tiết trang phục",
+  profile: "Thiết kế nhân vật", version: "Phiên bản {{number}}", brief: "Mô tả nhân vật", appearance: "Ngoại hình và trang phục", briefHint: "Mô tả thân phận, tuổi, khí chất và ý tưởng về nhân vật.", appearanceHint: "Ví dụ tóc ngắn, áo khoác da cũ và sẹo trên mày trái.",
+  save: "Lưu thiết kế nhân vật", saving: "Đang lưu…", undo: "Bỏ chỉnh sửa", changed: "Có thay đổi chưa lưu", saved: "Đã lưu thiết kế", readOnly: "Bạn có thể xem thiết kế. Chỉnh sửa và tạo ảnh cần quyền quản lý tài sản ở dự án sở hữu.",
+  staleDraft: "Đã có thiết kế mới. Hãy xem nội dung đã lưu trước khi quyết định giữ các chỉnh sửa.", load: "Tải thiết kế mới nhất", compare: "Xem thiết kế đang lưu", rebase: "Giữ chỉnh sửa và tiếp tục",
+  layout: "Góc nhìn và yêu cầu tạo ảnh", angles: "Góc nhìn trong ảnh", selectOne: "Chọn ít nhất một góc nhìn.", direction: "Yêu cầu riêng cho bản này (tùy chọn)", directionHint: "Ví dụ giữ ba lô ở các góc và cùng một vết sờn ở quai phải.",
+  generateRef: "Tạo ảnh tham chiếu", redoRef: "Tạo lại ảnh tham chiếu", generateSheet: "Tạo bản đa góc", redoSheet: "Tạo lại bản đa góc", adoptRef: "Dùng ảnh tham chiếu này", adoptSheet: "Dùng bản đa góc này",
+  refFirst: "Tạo rồi chọn một ảnh tham chiếu để nhân vật nhất quán giữa các góc nhìn.", refNext: "Đã có ảnh tham chiếu. Hãy chọn góc rồi tạo ảnh.", approvedNext: "Bản đa góc đã được lưu vào hồ sơ. Bạn có thể chỉnh thiết kế hoặc tạo bản mới.",
+  refInstructions: "Tạo ảnh từ thiết kế đã lưu rồi xem trước khi chọn.", saveFirst: "Hãy lưu các chỉnh sửa bên trên để dùng thiết kế mới cho lần tạo ảnh tới.",
+  pending: "Đang kiểm tra lần tạo ảnh trước…", lookupFailed: "Chưa tải được lần tạo ảnh trước. Hãy kiểm tra lại để tiếp tục.", retry: "Kiểm tra lại", waiting: "Đang tạo {{kind}}. Bạn có thể chỉnh thiết kế trong lúc chờ.", queued: "{{kind}} đang trong hàng đợi.", stopping: "Đang hủy lần tạo ảnh trước.", unknown: "Kết quả lần tạo ảnh trước đang chờ xác nhận. Bạn có thể chỉnh thiết kế và xem tiến độ trong lịch sử.", task: "Xem lịch sử tạo ảnh",
+  failed: "Lần tạo ảnh trước chưa hoàn tất. Bạn có thể sửa thiết kế rồi tạo lại.", emptyResult: "Đang kiểm tra ảnh kết quả.", review: "Xem trước rồi chọn ảnh để lưu vào hồ sơ nhân vật.", prior: "Ảnh này dùng thiết kế cũ. Khi chọn, nội dung chữ hiện tại được giữ và ảnh này được áp dụng.", usePrior: "Vẫn dùng ảnh từ bản cũ", savingImage: "Đang áp dụng…",
+  image: "Ảnh nhân vật", expressions: "Bảng biểu cảm", busy: "Đang gửi…", ready: "Chờ tạo", current: "Ảnh đang dùng", original: "Xem ảnh đang dùng", showCandidate: "Xem ảnh đề xuất",
+  nextSheet: "Làm bản đa góc", sheetVersion: "Bản đa góc đang dùng", refVersion: "Ảnh tham chiếu đang dùng", previousRef: "Chỉnh ảnh tham chiếu",
+};
+for (const [language, resource] of Object.entries({ zh, en, vi })) i18n.addResourceBundle(language, "characterTurnaround", resource, true, false);
+export function useTurnaroundTranslation() { return useTranslation("characterTurnaround"); }

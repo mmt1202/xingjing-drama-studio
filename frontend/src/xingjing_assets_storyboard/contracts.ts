@@ -112,6 +112,7 @@ export interface AssetVersion {
   readonly createdBy?: string;
   readonly generatedAssetId?: string;
   readonly generatedMediaType?: "image" | "video";
+  readonly imageCapability?: string | null;
   readonly assetContentSha256?: string;
 }
 
@@ -265,6 +266,9 @@ export interface ExtractionHistory {
 
 export interface TaskReceipt {
   readonly taskId: string;
+  readonly capability?: string;
+  readonly sourceVersionId?: string;
+  readonly executionUnconfirmed?: boolean;
   readonly projectId?: string;
   readonly status: WorkStatus;
   readonly progress?: number;
@@ -481,6 +485,7 @@ export interface AssetsStoryboardPort {
   ): Promise<AssetActionResult>;
   getGenerationServices?(scope: WorkspaceProjectScope, capabilities: readonly string[], signal?: AbortSignal, mediaType?: "image" | "video"): Promise<readonly GenerationService[]>;
   readonly getGenerationCreditBalance?: (workspaceId: string, signal: AbortSignal) => Promise<GenerationCreditBalance | null>;
+  getLatestCharacterImage?(scope: WorkspaceProjectScope, assetId: string, signal?: AbortSignal): Promise<TaskReceipt | null>;
   getAssetGenerationReceipt?(scope: WorkspaceProjectScope, assetId: string, sourceVersionId: string, idempotencyKey: string, signal?: AbortSignal): Promise<TaskReceipt | null>;
   getGenerationTask(
     scope: WorkspaceProjectScope,

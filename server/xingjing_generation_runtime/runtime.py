@@ -444,6 +444,11 @@ class GenerationRuntime:
             raise TaskScopeNotFound()
         return task
 
+    async def latest_character_image(
+        self, context: TrustedWorkspaceContext, project_id: str, asset_id: str
+    ) -> GenerationTask | None:
+        return await self._repository_or_raise().latest_character_image(context.workspace_id, project_id, asset_id)
+
     async def find_asset_submission(
         self, context: TrustedWorkspaceContext, project_id: str, asset_id: str, source_version_id: str, key: str
     ) -> GenerationTask | None:

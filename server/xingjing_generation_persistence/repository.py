@@ -838,6 +838,29 @@ class SqlAlchemyGenerationTaskRepository:
             ).scalar_one_or_none()
             return None if row is None else GenerationTask.model_validate(row.snapshot)
 
+    async def latest_character_image(self, workspace_id: str, project_id: str, asset_id: str) -> GenerationTask | None:
+        request = TaskRow.snapshot["request"]
+        capability = request["capability"].as_string()
+        parameters = request["parameters"]
+        statement = (
+            select(TaskRow.snapshot)
+            .where(
+                TaskRow.workspace_id == workspace_id,
+                TaskRow.project_id == project_id,
+                parameters["asset_id"].as_string() == asset_id,
+                capability.in_(("character_turnaround", "character_expressions"))
+                | (
+                    (capability == "image_generation")
+                    & (parameters["asset_operation"].as_string() == "reference_image")
+                ),
+            )
+            .order_by(TaskRow.created_at.desc(), TaskRow.task_id.desc())
+            .limit(1)
+        )
+        async with self._session_factory() as session:
+            snapshot = await session.scalar(statement)
+        return GenerationTask.model_validate(snapshot) if snapshot else None
+
     async def list(
         self,
         workspace_id: str,
