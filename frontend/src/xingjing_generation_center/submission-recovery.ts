@@ -15,6 +15,20 @@ export interface SubmissionRecovery {
 export function submissionRecoveryKey(workspaceId: string, projectId: string, capability: string, media: string) {
   return `generation-draft:${JSON.stringify([getSessionEpoch(), workspaceId, projectId, capability, media])}`;
 }
+
+/** A repeated confirmation after a lost response must recover the same new task. */
+export function repeatRequest(projectId: string, taskId: string) {
+  const storageKey = `generation-repeat:${JSON.stringify([getSessionEpoch(), projectId, taskId])}`;
+  try {
+    const key = sessionStorage.getItem(storageKey) || `repeat:${crypto.randomUUID()}`;
+    sessionStorage.setItem(storageKey, key);
+    return { key, received: () => {
+      try { if (sessionStorage.getItem(storageKey) === key) sessionStorage.removeItem(storageKey); } catch { /* Storage can become unavailable. */ }
+    } };
+  } catch {
+    return { key: `repeat:${projectId}:${taskId}`, received: () => {} };
+  }
+}
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 512;
 function input(value: unknown): value is SelectedGenerationInput {

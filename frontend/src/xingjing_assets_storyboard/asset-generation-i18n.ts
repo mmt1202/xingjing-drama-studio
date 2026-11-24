@@ -2,6 +2,8 @@ import i18n from "@/i18n";
 import { useTranslation } from "react-i18next";
 
 const zh = {
+  restartTitle: "用已保存的设定重新出图？", restartConfirm: "确认生成新图",
+  restartDetail: "将使用「{{name}}」最新保存的设定开始一次新制作。上一张仍可能出图，两次的结果和费用可在制作记录里分别查看。",
   askOwner: "可以请管理账单的成员核对预留或补充算力。",
   balanceLink: "查看算力账单",
   showBalance: "查看可用余额", hideBalance: "收起余额",
@@ -35,6 +37,8 @@ const zh = {
 };
 type Copy = Record<keyof typeof zh, string>;
 const en: Copy = {
+  restartTitle: "Generate again from the saved design?", restartConfirm: "Generate new image",
+  restartDetail: "Start a new image using the latest saved design for {{name}}. The previous image may still arrive. Each attempt has its own result and charge in production history.",
   askOwner: "A billing manager can check reservations or add funds.",
   balanceLink: "View workspace billing",
   showBalance: "Check available balance", hideBalance: "Hide balance",
@@ -67,6 +71,8 @@ const en: Copy = {
   firstImage: "Generate and adopt a reference first", sourceMissing: "No primary version is available. Save the asset first.", failure: "The image could not be generated. Check the task record and try again later.",
 };
 const vi: Copy = {
+  restartTitle: "Tạo ảnh mới từ thiết kế đã lưu?", restartConfirm: "Xác nhận tạo ảnh mới",
+  restartDetail: "Tạo ảnh mới theo thiết kế đã lưu gần nhất của {{name}}. Ảnh trước vẫn có thể hoàn tất. Hãy xem kết quả và chi phí từng lần trong lịch sử tạo ảnh.",
   askOwner: "Bạn có thể nhờ người quản lý thanh toán kiểm tra khoản tạm giữ hoặc nạp thêm.",
   balanceLink: "Xem chi tiết thanh toán",
   showBalance: "Xem số dư khả dụng", hideBalance: "Ẩn số dư",

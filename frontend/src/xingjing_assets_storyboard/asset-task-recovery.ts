@@ -1,6 +1,10 @@
 import type { TaskReceipt } from "./contracts";
 import { getSessionEpoch } from "@/utils/auth";
 
+export function assetTaskBlocksGeneration(task?: TaskReceipt): boolean {
+  return !!task && !task.waitingStopped && ["queued", "running", "retrying", "cancelling"].includes(task.status);
+}
+
 export function assetTaskRecoveryKey(actorId: string, workspaceId: string, projectId: string, assetId: string, epoch = getSessionEpoch()) {
   return `asset-generation:${JSON.stringify([epoch, actorId, workspaceId, projectId, assetId])}`;
 }

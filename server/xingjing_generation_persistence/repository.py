@@ -1131,18 +1131,24 @@ class SqlAlchemyGenerationTaskRepository:
     async def append_audit(self, item: ImmutableAuditRecord) -> None:
         async with self._session_factory.begin() as s:
             await self._require_task_scope(s, item.workspace_id, item.project_id, item.task_id)
-            if await s.get(AuditRow, item.audit_id) is None:
-                s.add(
-                    AuditRow(
-                        audit_id=item.audit_id,
-                        workspace_id=item.workspace_id,
-                        project_id=item.project_id,
-                        task_id=item.task_id,
-                        request_id=item.request_id,
-                        payload={k: v for k, v in item.__dict__.items() if k != "occurred_at"},
-                        occurred_at=item.occurred_at,
-                    )
-                )
+            if await s.get(AuditRow, item.audit_id) is not None:
+                return
+            row = AuditRow(
+                audit_id=item.audit_id,
+                workspace_id=item.workspace_id,
+                project_id=item.project_id,
+                task_id=item.task_id,
+                request_id=item.request_id,
+                payload={k: v for k, v in item.__dict__.items() if k != "occurred_at"},
+                occurred_at=item.occurred_at,
+            )
+            try:
+                async with s.begin_nested():
+                    s.add(row)
+                    await s.flush()
+            except IntegrityError:
+                if await s.get(AuditRow, item.audit_id) is None:
+                    raise
 
     @staticmethod
     async def _require_task_scope(session: AsyncSession, workspace_id: str, project_id: str, task_id: str) -> TaskRow:

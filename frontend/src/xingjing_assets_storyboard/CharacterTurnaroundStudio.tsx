@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Box, Check, ClipboardPenLine, Images, Layers3, Save, ScanFace, Sparkles } from "lucide-react";
-import { AssetImageBilling, ReferencePreview, assetHasReferenceImage } from "./AssetReferenceGeneration";
+import { AssetImageBilling, AssetImageSubmitButton, ReferencePreview, assetHasReferenceImage } from "./AssetReferenceGeneration";
+import { assetTaskBlocksGeneration } from "./asset-task-recovery";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
 import type { AssetImageControls } from "./asset-image-models";
@@ -18,7 +19,6 @@ const views = {
 type View = keyof typeof views;
 const basicViews: View[] = ["front", "side", "backView"];
 const allViews = Object.keys(views) as View[];
-const activeStatuses = new Set(["queued", "running", "retrying", "cancelling"]);
 
 interface Brief { description: string; appearance: string }
 function briefOf(asset: AssetItem): Brief {
@@ -85,9 +85,10 @@ function CharacterBrief({ asset, scope, editable, busy, saving, saveLocked, conf
   </section>;
 }
 
-export function CharacterTurnaroundStudio({ asset, scope, generation, task, historyState, reloadHistory, canEdit, busy, dirty, reset, conflict,
+export function CharacterTurnaroundStudio({ asset, scope, generation, task, historyState, reloadHistory, canEdit, busy, dirty, reset, conflict, initialStage,
   onSave, onDirty, onReload, onGenerate, onAdopt }: {
   asset: AssetItem; scope: ProductionDraftScope; generation: AssetImageControls; task?: TaskReceipt;
+  initialStage?: Stage;
   historyState: "checking" | "ready" | "failed"; reloadHistory: () => void; canEdit: boolean; busy: boolean; dirty: boolean; reset: number; conflict: boolean;
   onSave: (change: Record<string, unknown>, version: number) => void; onDirty: (dirty: boolean) => void; onReload: () => void;
   onGenerate: (action: "generateReferenceImage" | "generateTurnaround", payload: Record<string, unknown>) => void; onAdopt: (id: string) => void;
@@ -97,7 +98,7 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
   const [selected, setSelected] = useState<View[]>(basicViews);
   const [direction, setDirection] = useState("");
   const [customView, setCustomView] = useState("");
-  const [chosenStage, setChosenStage] = useState<Stage>();
+  const [chosenStage, setChosenStage] = useState<Stage | undefined>(initialStage);
   const [inspection, setInspection] = useState<{ task: string; id: string | null }>();
   const { models } = generation;
   const projectId = asset.projectId ?? models.projectId;
@@ -115,13 +116,14 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
   const taskKind = t(taskStage ?? (task?.capability === "character_expressions" ? "expressions" : "image"));
   const outputs = task?.status === "succeeded" ? task.outputAssetIds ?? [] : [];
   const fresh = outputs.find((id) => !adopted.has(id));
-  const stage = chosenStage ?? (fresh && taskStage ? taskStage : "sheet");
+  const stage = chosenStage ?? ((fresh || task?.waitingStopped) && taskStage ? taskStage : "sheet");
   const drawingReference = stage === "reference" || !hasReference;
   const capability = drawingReference ? "image_generation" : "character_turnaround";
   const action = drawingReference ? "generateReferenceImage" : "generateTurnaround";
   const requestedViews = [...new Set([...allViews.filter((key) => selected.includes(key)).map((key) => views[key]), ...customView.split("\n").map((item) => item.trim()).filter(Boolean)])];
   const available = models.supports(capability);
-  const working = !!task && activeStatuses.has(task.status);
+  const working = assetTaskBlocksGeneration(task);
+  const repeating = task?.waitingStopped && capability === task.capability;
   const taskLink = projectId && task ? `/app/workspaces/${encodeURIComponent(models.workspaceId)}/projects/${encodeURIComponent(projectId)}/tasks?taskId=${encodeURIComponent(task.taskId)}` : undefined;
   const recoveryBusy = historyState === "checking" || generation.pending;
   const blocked = !canEdit || busy || dirty || recoveryBusy || historyState === "failed" || !asset.currentVersionId;
@@ -163,7 +165,7 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
         </div> : null}
       </section>
       {task && <section className="xj-turn-task" aria-live="polite"><Images aria-hidden="true" size={18} /><div>
-        <strong>{taskKind}</strong><p>{task.waitingStopped && working ? t("waitStopped") : task.executionUnconfirmed && working ? t("unknown") : working ? t(task.status === "queued" ? "queued" : task.status === "cancelling" ? "stopping" : "waiting", { kind: taskKind }) :
+        <strong>{taskKind}</strong><p>{task.waitingStopped ? t("waitStopped") : task.executionUnconfirmed && working ? t("unknown") : working ? t(task.status === "queued" ? "queued" : task.status === "cancelling" ? "stopping" : "waiting", { kind: taskKind }) :
           task.status !== "succeeded" ? t("failed") : !outputs.length ? t("emptyResult") : fresh ? t("review") : t("adopted")}</p>
         {fresh && taskStage && stage !== taskStage && <button type="button" className="xj-turn-link" onClick={() => { setChosenStage(taskStage); setInspection(undefined); }}>{t("showCandidate")}</button>}
       </div>{taskLink && <a href={taskLink}>{t("task")} <ArrowRight size={13} /></a>}</section>}
@@ -186,9 +188,9 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
           {generation.rejection && <p role="status" className="xj-turn-notice">{generation.rejection}</p>}
           {!available && <p role="status">{gen(models.notice ?? (drawingReference ? "modelMissing" : "noDerivative"))} {models.notice !== "checking" && <button type="button" className="xj-turn-link" onClick={models.recheck}>{t("retry")}</button>}</p>}
           <AssetImageBilling key={capability} generation={generation} capability={capability} />
-          <button type="button" className="xj-turn-primary xj-turn-generate" disabled={blocked || working || !available || (!drawingReference && !requestedViews.length)} onClick={generate}>
-            {drawingReference ? <ScanFace size={17} /> : <Sparkles size={17} />}{t(working ? task?.waitingStopped ? "awaitReview" : task?.executionUnconfirmed ? "awaitResult" : "making" : generation.activeAction === action ? "busy" : drawingReference ? hasReference ? "redoRef" : "generateRef" : sheet ? "redoSheet" : "generateSheet", { kind: taskKind })}
-          </button>
+          <AssetImageSubmitButton asset={asset} task={task} capability={capability} className="xj-turn-primary xj-turn-generate" disabled={blocked || !available || (!drawingReference && !requestedViews.length)} onGenerate={generate}>
+            {drawingReference ? <ScanFace size={17} /> : <Sparkles size={17} />}{t(working ? task?.executionUnconfirmed ? "awaitResult" : "making" : generation.activeAction === action ? "busy" : drawingReference ? hasReference || repeating ? "redoRef" : "generateRef" : sheet || repeating ? "redoSheet" : "generateSheet", { kind: taskKind })}
+          </AssetImageSubmitButton>
           {stage === "reference" && hasReference && <button type="button" className="xj-turn-link" onClick={() => setChosenStage("sheet")}>{t("nextSheet")} <ArrowRight size={15} /></button>}
         </div>
       </section>

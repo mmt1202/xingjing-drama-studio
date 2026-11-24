@@ -8,6 +8,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { getTokenForSession } from "@/utils/auth";
 
 import { GenerationSubmissionForm } from "./GenerationSubmissionForm";
+import { repeatRequest } from "./submission-recovery";
 import { useSubmissionTranslation } from "./submission-i18n";
 import { GenerationCenterApiError, createGenerationCenterApi, type GenerationCenterApi } from "./api";
 import { isProcessingTask, type ProductionAction, type GenerationCandidateSet, type GenerationTask, type GenerationTaskDetail, type GenerationTaskFilters, type GenerationWorkbenchView, type GenerationWorkspaceScope } from "./contracts";
@@ -184,19 +185,28 @@ export function GenerationWorkbench({ scope, view: incomingView = "center", api:
     if (query && initialTaskId !== task.task_id) saveLocation(filters, offset, task.task_id);
     else void readDetailId(task.task_id);
   };
-  const actionError = (error: unknown) => t(error instanceof GenerationCenterApiError && error.status === 403 ? "forbidden"
-    : error instanceof GenerationCenterApiError && error.status === 409 ? "conflict" : "actionError");
+  const actionError = (error: unknown) => {
+    if (!(error instanceof GenerationCenterApiError)) return t("actionError");
+    if (error.code === "GENERATION_INSUFFICIENT_CREDITS") return submissionText("askOwner");
+    if (error.code === "GENERATION_WORKSPACE_CONCURRENCY_LIMIT") return t("atCapacity");
+    return t(error.status === 403 ? "forbidden" : error.status === 409 ? "conflict" : "actionError");
+  };
   const performAction = async (task: GenerationTask, action: ProductionAction) => {
     if (actionPending.current) return;
     actionPending.current = true;
     const active = detailScope.current;
     setBusyId(task.task_id); setMessage("");
-    const key = `xj:${scope.projectId}:${action}:${task.task_id}:${task.version}`;
+    const repeat = action === "retry" ? repeatRequest(scope.projectId, task.task_id) : undefined;
+    const key = repeat?.key ?? `xj:${scope.projectId}:${action}:${task.task_id}:${task.version}`;
     try {
       const updated = action === "retry" ? await api.retry(scope.projectId, task, key) : await api.cancel(scope.projectId, task, key, action);
+      repeat?.received();
       if (detailScope.current !== active) return;
-      if (query && updated.task_id !== task.task_id && selectedId.current === task.task_id) saveLocation(filters, offset, updated.task_id);
-      await Promise.all([load(), selectedId.current === task.task_id ? readDetailId(updated.task_id) : undefined]);
+      const showingOriginal = selectedId.current === task.task_id;
+      const showNewTask = showingOriginal && updated.task_id !== task.task_id;
+      const changeList = showNewTask && (offset > 0 || !!filters.group);
+      if (showNewTask) saveLocation({ ...filters, group: undefined }, 0, updated.task_id);
+      await Promise.all([changeList ? undefined : load(), showingOriginal ? readDetailId(updated.task_id) : undefined]);
       if (action === "retry" && detailScope.current === active) setMessage(t("retried"));
     } catch (error) {
       if (detailScope.current !== active) return;

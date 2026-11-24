@@ -31,7 +31,7 @@ import { useDraftProtection } from "./useDraftProtection";
 import { clearProductionDraft, productionDraftSlot, type ProductionDraftScope } from "./draft-state";
 import { useRecoverableDraft } from "./useRecoverableDraft";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
-import { AssetImageBilling, AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferenceGeneration";
+import { AssetImageBilling, AssetImageSubmitButton, AssetReferenceGeneration, assetHasReferenceImage } from "./AssetReferenceGeneration";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
 import { assetImageCapabilities, useAssetImageModels, type AssetImageCapability, type AssetImageControls } from "./asset-image-models";
 import { useAssetExtractionTranslation } from "./asset-extraction-i18n";
@@ -45,6 +45,7 @@ export interface AssetsWorkspaceProps {
   readonly scope: WorkspaceProjectScope;
   readonly view?: AssetView;
   readonly assetId?: string;
+  readonly initialDrawing?: "reference" | "sheet";
   readonly projectName?: string;
   readonly api?: AssetsStoryboardPort;
   readonly onNavigate?: (view: AssetView, assetId?: string) => void;
@@ -404,7 +405,6 @@ function CharacterExpressions({ asset, canManage, busy, generation, ownerProject
   const { t } = useAssetGenerationTranslation();
   if (!asset) return <StatePanel title="未找到角色资产" detail="请从资产库选择一个角色后再进入此页面。" />;
   const hasReference = assetHasReferenceImage(asset);
-  const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
   const action = "generateExpressions";
   const available = generation.models.supports(assetImageCapabilities[action]);
   return <section className={`${panel} max-w-4xl p-6`}><p className="text-xs text-[#8B5CF6]">角色稳定 ID</p><code className="text-xs text-[#7E8494]">{asset.id}</code><h2 className="mt-4 text-xl font-semibold">{asset.name}</h2>
@@ -412,7 +412,7 @@ function CharacterExpressions({ asset, canManage, busy, generation, ownerProject
     <label className="mt-5 block text-sm">需要生成的表情（逗号分隔）<textarea rows={3} value={values} onChange={(event) => setValues(event.target.value)} className="mt-2 w-full rounded-[10px] border border-[#3A3F4E] bg-[#171922] p-3" /></label>
     {hasReference && !available ? <p role="status" className="mt-3 text-sm text-amber-200">{t(generation.models.notice ?? "noDerivative")}</p> : null}
     {hasReference ? <AssetImageBilling key={action + asset.id} generation={generation} capability={assetImageCapabilities[action]} /> : null}
-    <button type="button" className={`${primaryButton} mt-5`} disabled={!canManage || busy || generation.pending || !available || working || !hasReference || !values.trim()} onClick={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{generation.activeAction === action ? t("submitting") : "生成表情集版本"}</button>
+    <AssetImageSubmitButton asset={asset} task={task} capability={assetImageCapabilities[action]} className={`${primaryButton} mt-5`} disabled={!canManage || busy || generation.pending || !available || !hasReference || !values.trim()} onGenerate={() => onRun({ items: values.split(",").map((item) => item.trim()).filter(Boolean), sourceVersionId: asset.currentVersionId })}>{generation.activeAction === action ? t("submitting") : "生成表情集版本"}</AssetImageSubmitButton>
     <AssetReferenceGeneration asset={asset} generation={generation} ownerProject={ownerProject} canManage={canManage} busy={busy} task={task} onGenerate={onGenerateReference} onAdopt={onAdopt} />
   </section>;
 }
@@ -424,7 +424,7 @@ export function AssetsWorkspace(props: AssetsWorkspaceProps) {
   return <AssetWorkspaceSession key={scopeKey} {...props} api={api} sessionEpoch={sessionEpoch} />;
 }
 
-function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, api, onNavigate, initialScriptVersionId, initialScriptId, episodeBindings, onReviewScripts, sessionEpoch }: AssetsWorkspaceProps & { api: AssetsStoryboardPort; sessionEpoch: string }) {
+function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, api, onNavigate, initialScriptVersionId, initialScriptId, initialDrawing, episodeBindings, onReviewScripts, sessionEpoch }: AssetsWorkspaceProps & { api: AssetsStoryboardPort; sessionEpoch: string }) {
   const [localNavigation, setLocalNavigation] = useState<{ readonly source: AssetView; readonly target: AssetView; readonly assetId?: string }>();
   const activeView = localNavigation?.source === view ? localNavigation.target : view;
   const targetAssetId = localNavigation?.source === view ? localNavigation.assetId ?? assetId : assetId;
@@ -799,7 +799,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       onAction={(action, payload, version) => void run(action, payload, currentAsset, version)}
       onRights={(seed) => setPermission({ asset: currentAsset, seed })} onDerivative={(next) => navigate(next, currentAsset.id)} />
       : <StatePanel title={generationText("detailFailed")} actionLabel={libraryText("returnLibrary")} onAction={() => navigate("library")} /> : null}
-    {activeView === "turnaround" ? currentAsset?.type === "character" ? <div className="xj-turn-wrap"><CharacterTurnaroundStudio key={currentAsset.id} asset={currentAsset}
+    {activeView === "turnaround" ? currentAsset?.type === "character" ? <div className="xj-turn-wrap"><CharacterTurnaroundStudio key={currentAsset.id} asset={currentAsset} initialStage={initialDrawing}
       scope={{ actorId: context.user.id, workspaceId: scope.workspaceId, projectId: projectId ?? null }} generation={generation} task={taskOwnerId === currentAsset.id ? task : undefined}
       historyState={!fetchCharacterHistory ? "ready" : characterHistory?.key === historyKey ? characterHistory.state : "checking"} reloadHistory={() => setHistoryReload((value) => value + 1)}
       canEdit={canManage && (!scope.projectId || currentAsset.projectId === scope.projectId)} busy={busy} dirty={draftBlocked} reset={draftReset} conflict={Boolean(conflict)}

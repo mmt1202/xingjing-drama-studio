@@ -9,6 +9,7 @@ export interface AssetsStoryboardRouteProps {
   readonly projectId?: string;
   readonly episodeId?: string;
   readonly assetId?: string;
+  readonly drawing?: string;
   readonly shotId?: string;
   readonly boardId?: string;
   readonly projectName?: string;
@@ -36,7 +37,8 @@ export const AssetExtractionPage = (props: AssetsStoryboardRouteProps) => <Asset
 export const GlobalAssetLibraryPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="library" />;
 export const AssetLibraryPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="library" />;
 export const AssetEditorPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="editor" />;
-export const CharacterTurnaroundPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="turnaround" />;
+export const CharacterTurnaroundPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="turnaround"
+  initialDrawing={props.drawing === "reference" || props.drawing === "sheet" ? props.drawing : undefined} />;
 export const ExpressionSetPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="expressions" />;
 export const AssetMarketPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="market" />;
 export const AssetMarketDetailPage = (props: AssetsStoryboardRouteProps) => <AssetsWorkspace {...assetProps(props)} view="market-detail" />;

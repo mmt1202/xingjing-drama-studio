@@ -18,6 +18,7 @@ from .native_image.models import NativeImageExecutionRow
 
 STOP_WAITING = "generation.waiting_stopped"
 TERMINAL = ("succeeded", "cancelled", "failed", "timeout")
+RESTARTABLE = ("waiting_stopped", "failed", "timeout", "cancelled")
 GROUPS = {
     "working": ("queued", "running", "retrying", "cancelling", "publishing"),
     "attention": ("checking", "waiting_stopped"),
@@ -90,6 +91,11 @@ class CreatorQueue:
         self.sessions = sessions
         self.gateway_available = gateway_available
 
+    async def can_restart(self, context: TrustedWorkspaceContext, project: str, task_id: str) -> bool:
+        query, state = _records(context, project)
+        async with self.sessions() as session:
+            return await session.scalar(query.with_only_columns(state).where(TaskRow.task_id == task_id)) in RESTARTABLE
+
     async def read(
         self,
         context: TrustedWorkspaceContext,
@@ -142,7 +148,7 @@ class CreatorQueue:
                 "kind": kind,
                 "state": stage,
                 "action": _action(task, stage, native_state, self.gateway_available) if can_manage else None,
-                "canRetry": can_manage and stage in ("failed", "timeout", "cancelled"),
+                "canRetry": can_manage and stage in RESTARTABLE,
                 "canChooseResult": can_manage and stage == "succeeded",
                 "subject": asset[0] if asset else None,
                 "assetKind": asset[1] if asset else None,

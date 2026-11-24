@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import Request
 from sqlalchemy import select
@@ -723,18 +723,29 @@ class GenerationRuntime:
         idempotency_key: str,
     ) -> GenerationTask:
         previous = await self.get_task(context, project_id, task_id)
-        if previous.status not in {TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED}:
-            raise ValueError("GENERATION_TASK_NOT_RETRYABLE")
         request = GenerationRequest.model_validate(
             {
                 **previous.request.model_dump(mode="json"),
+                "requested_provider_id": None,
+                "requested_model_id": None,
                 "parameters": {**previous.request.parameters, "retry_of_task_id": previous.task_id},
             }
         )
+        existing = await self._repository_or_raise().get_by_idempotency_scope(
+            f"{context.workspace_id}:{idempotency_key}", project_id=project_id
+        )
+        # A lost response can be replayed even after the original job finishes.
+        if existing is None and previous.status not in {TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED}:
+            if self._session_factory is None or not await self.creator_queue().can_restart(
+                context, project_id, task_id
+            ):
+                raise ValueError("GENERATION_TASK_NOT_RETRYABLE")
         retried = await self.submit(context, project_id, request, idempotency_key=idempotency_key)
         await self._repository_or_raise().append_audit(
             ImmutableAuditRecord(
-                audit_id=str(uuid4()),
+                audit_id=str(
+                    uuid5(NAMESPACE_URL, f"generation/retry/{context.workspace_id}/{project_id}/{retried.task_id}")
+                ),
                 workspace_id=context.workspace_id,
                 project_id=project_id,
                 task_id=retried.task_id,
@@ -744,7 +755,7 @@ class GenerationRuntime:
                 result="submitted",
                 before=previous.model_dump(mode="json"),
                 after=retried.model_dump(mode="json"),
-                occurred_at=datetime.now(UTC),
+                occurred_at=retried.created_at,
             )
         )
         return retried

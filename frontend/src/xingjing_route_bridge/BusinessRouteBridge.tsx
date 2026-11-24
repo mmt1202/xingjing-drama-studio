@@ -467,6 +467,7 @@ function ProjectBusinessContent({
           projectId={projectId}
           assetId={assetId}
           shotId={shotId}
+          drawing={complianceQuery.get("drawing") ?? undefined}
           boardId={complianceQuery.get("boardId") ?? undefined}
           episodeId={complianceQuery.get("episodeId") ?? undefined}
           scriptVersionId={smartPage ? complianceQuery.get("scriptVersionId") ?? undefined : episodeSource ? selectedEpisode?.scriptVersionId || undefined : complianceQuery.get("scriptVersionId") ?? selectedEpisode?.scriptVersionId ?? undefined}

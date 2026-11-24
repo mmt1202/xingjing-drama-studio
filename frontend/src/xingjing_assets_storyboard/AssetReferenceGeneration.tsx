@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AssetItem, GenerationCreditBalance, TaskReceipt } from "./contracts";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
-import { button, panel, primaryButton } from "./ui";
+import { button, ConfirmDialog, panel, primaryButton } from "./ui";
+import { assetTaskBlocksGeneration } from "./asset-task-recovery";
 import { useQueueText } from "@/xingjing_generation_center/queue-i18n";
 import { useAuthenticatedMedia } from "@/hooks/useAuthenticatedMedia";
 import type { AssetImageCapability, AssetImageControls } from "./asset-image-models";
@@ -9,6 +10,22 @@ import type { AssetImageCapability, AssetImageControls } from "./asset-image-mod
 export function assetHasReferenceImage(asset: AssetItem) {
   const version = asset.versions.find((item) => item.id === asset.currentVersionId);
   return Boolean(version?.generatedAssetId && version.generatedMediaType === "image");
+}
+
+export function AssetImageSubmitButton({ asset, task, disabled, onGenerate, className, children, capability }: {
+  asset: AssetItem; task?: TaskReceipt; disabled: boolean; onGenerate: () => void;
+  className: string; children: ReactNode; capability: AssetImageCapability;
+}) {
+  const { t } = useAssetGenerationTranslation();
+  const [confirmation, setConfirmation] = useState<string>();
+  const stopped = task?.waitingStopped ? JSON.stringify([task.taskId, asset.currentVersionId, capability]) : undefined;
+  const locked = disabled || assetTaskBlocksGeneration(task);
+  return <>
+    <button type="button" className={className} disabled={locked} onClick={() => stopped ? setConfirmation(stopped) : onGenerate()}>{children}</button>
+    <ConfirmDialog open={!!stopped && confirmation === stopped && !locked} title={t("restartTitle")}
+      detail={t("restartDetail", { name: asset.name })} confirmLabel={t("restartConfirm")} onCancel={() => setConfirmation(undefined)}
+      onConfirm={() => { setConfirmation(undefined); if (!locked && stopped === confirmation) onGenerate(); }} />
+  </>;
 }
 
 export function ReferencePreview({ source, alt, workspaceId, projectId, className }: { source: string; alt: string; workspaceId: string; projectId: string; className?: string }) {
@@ -74,7 +91,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
   const { t: queue } = useQueueText();
   const version = asset.versions.find((item) => item.id === asset.currentVersionId);
   const hasReference = assetHasReferenceImage(asset);
-  const working = Boolean(task && ["queued", "running", "retrying", "cancelling"].includes(task.status));
+  const working = assetTaskBlocksGeneration(task);
   const adoptedIds = new Set(asset.versions.map((item) => item.generatedAssetId).filter(Boolean));
   const blocked = busy || generation.pending || draftBlocked || !canManage || !ownerProject;
   const { models } = generation;
@@ -99,7 +116,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
         </div>}
       </div> : null}
       <AssetImageBilling key={asset.id} generation={generation} capability="image_generation" />
-      <button type="button" className={`${primaryButton} mt-4 disabled:cursor-not-allowed disabled:opacity-50`} disabled={blocked || working || !version || !ready} onClick={onGenerate}>{t(generation.activeAction === "generateReferenceImage" ? "submitting" : hasReference ? "regenerate" : "generate")}</button>
+      <AssetImageSubmitButton asset={asset} task={task} capability="image_generation" className={`${primaryButton} mt-4 disabled:cursor-not-allowed disabled:opacity-50`} disabled={blocked || !version || !ready} onGenerate={onGenerate}>{t(generation.activeAction === "generateReferenceImage" ? "submitting" : hasReference || task?.waitingStopped ? "regenerate" : "generate")}</AssetImageSubmitButton>
     </>}
     {task ? <>
       <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
@@ -107,7 +124,7 @@ export function AssetReferenceGeneration({ asset, canManage, busy, generation, d
         <span>{queue(task.waitingStopped ? "waiting_stopped" : working && task.executionUnconfirmed ? "checking" : task.status)}</span>
         {projectId && <a className="text-violet-200 underline" href={`/app/workspaces/${encodeURIComponent(models.workspaceId)}/projects/${encodeURIComponent(projectId)}/tasks?taskId=${encodeURIComponent(task.taskId)}`}>{queue("detail")}</a>}
       </div>
-      {working ? <p role="status" className="mt-3 text-xs text-violet-200">{task.waitingStopped ? queue("stoppedHelp") : task.executionUnconfirmed ? queue("checkHelp") : t("waiting")}</p> : null}
+      {working || task.waitingStopped ? <p role="status" className="mt-3 text-xs text-violet-200">{task.waitingStopped ? queue("stoppedHelp") : task.executionUnconfirmed ? queue("checkHelp") : t("waiting")}</p> : null}
       {["failed", "cancelled", "timeout"].includes(task.status) ? <p className="mt-3 text-xs text-amber-200">{t("failure")}</p> : null}
       {task.status === "succeeded" && task.outputAssetIds?.length ? <div className="mt-4">
         <h3 className="text-sm font-semibold">{t("candidateTitle")}</h3><p className="mt-2 text-xs leading-6 text-slate-400">{t("candidateHint")}</p>

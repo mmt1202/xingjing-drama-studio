@@ -77,17 +77,18 @@ function Actions({ task, state, busy, onAction }: { task: GenerationTask; state:
     cancelled: "cancelledHelp", retrying: "queuedHelp", failed: "failedHelp", timeout: "timeoutHelp",
   };
   if (!action && !help[state]) return null;
+  const repeatOriginal = state === "waiting_stopped" && action === "retry";
   const confirmLabel = action === "stop_waiting" ? "confirmStop" : action === "cancel" ? "confirmCancel" : "confirmRetry";
   return <section className="xj-production-action" data-review={["checking", "waiting_stopped", "cancelling"].includes(state)}>
     {confirming && action ? <div role="group" aria-label={t(confirmLabel)}>
-      <strong>{t(confirmLabel)}</strong><p>{t(action === "stop_waiting" ? "stopHelp" : action === "retry" ? "retryHelp" : "cancelHelp")}</p>
+      <strong>{t(confirmLabel)}</strong><p>{t(repeatOriginal ? "repeatHelp" : action === "stop_waiting" ? "stopHelp" : action === "retry" ? "retryHelp" : "cancelHelp")}</p>
       <div className="xj-production-controls">
         <button type="button" disabled={busy} className="xj-production-action-button" onClick={() => { setConfirming(false); onAction(action); }}>{t(confirmLabel)}</button>
         <button type="button" className="xj-production-link" onClick={() => setConfirming(false)}>{t("back")}</button>
       </div>
     </div> : <>
       {help[state] && <p>{t(help[state])}</p>}
-      {action && <button type="button" className="xj-production-action-button" disabled={busy} onClick={() => setConfirming(true)}>{t(action)}</button>}
+      {action && <button type="button" className="xj-production-action-button" disabled={busy} onClick={() => setConfirming(true)}>{t(repeatOriginal ? "repeatOriginal" : action)}</button>}
     </>}
   </section>;
 }
@@ -103,10 +104,13 @@ function Detail({ detail, scope, busy, onClose, onAction, onChoose }: {
   const state = info?.state ?? task.status;
   const scopePath = `/app/workspaces/${encodeURIComponent(scope.workspaceId)}/projects/${encodeURIComponent(scope.projectId)}`;
   const board = info?.assetKind === "character";
+  const sourcePage = !board ? "asset-editor" : info?.kind === "character_expressions" ? "asset-expressions" : "asset-turnaround";
+  const drawing = sourcePage === "asset-turnaround" && state === "waiting_stopped"
+    ? `?drawing=${info?.kind === "reference" ? "reference" : "sheet"}` : "";
   return <aside className="xj-production-panel xj-production-detail" aria-label={t("detail")}>
     <div className="xj-production-detail-top"><span>{t("detail")}</span><button type="button" className="xj-production-icon" onClick={onClose} aria-label={t("close")}><X size={17} /></button></div>
     <h2 tabIndex={-1}>{title}</h2><StateBadge state={state} />
-    {info?.sourceAssetId && <a className="xj-production-source" href={`${scopePath}/${board ? "asset-turnaround" : "asset-editor"}/${encodeURIComponent(info.sourceAssetId)}`}>{t(board ? "openBoard" : "openAsset")} <ArrowUpRight size={14} /></a>}
+    {info?.sourceAssetId && <a className="xj-production-source" href={`${scopePath}/${sourcePage}/${encodeURIComponent(info.sourceAssetId)}${drawing}`}>{t(drawing && info.canRetry ? "editOnBoard" : board ? "openBoard" : "openAsset")} <ArrowUpRight size={14} /></a>}
     <Actions key={`${task.task_id}:${state}:${info?.action}`} task={task} state={state} busy={busy} onAction={onAction} />
     {state === "queued" && progress.queue_position != null && <p className="xj-production-muted">{t("queuePlace", { number: progress.queue_position })}</p>}
     {progress.latest && state === "running" && <div className="xj-production-progress"><label htmlFor="xj-production-progress">{t("progress")} · {progress.latest.percent}%</label><progress id="xj-production-progress" max={100} value={progress.latest.percent} /></div>}

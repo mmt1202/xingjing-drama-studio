@@ -53,7 +53,7 @@ const copy = {
   board: ["打开角色画板", "Open drawing board", "Mở bảng vẽ nhân vật"],
   saveBoard: ["保存资料并打开画板", "Save profile and open board", "Lưu hồ sơ và mở bảng vẽ"],
   expressions: ["打开表情集", "Open expressions", "Mở bộ biểu cảm"],
-  stopped: ["已停止等待上次制图，平台正在核对结果和费用。你仍可以修改人物资料。", "You stopped waiting for the last drawing. Its result and cost are being checked. You can still edit this profile.", "Bạn đã dừng chờ lần vẽ trước. Kết quả và chi phí đang được đối soát. Bạn vẫn có thể chỉnh sửa hồ sơ."],
+  stopped: ["上一次出图仍在核对。你可以修改并保存角色资料，再到画板生成新图。", "The previous image is under review. You can edit and save the character profile, then generate a new image on the board.", "Ảnh trước đang được đối soát. Bạn có thể chỉnh sửa và lưu hồ sơ rồi tạo ảnh mới trên bảng tạo hình."],
   working: ["制图任务还在处理。可以先编辑资料，稍后到画板查看进度。", "Artwork is in progress. You can edit this profile and check the board later.", "Ảnh đang được xử lý. Bạn có thể chỉnh sửa hồ sơ và xem tiến độ trên bảng vẽ sau."],
   review: ["候选图已生成，可以到画板预览并选择。", "Candidate artwork is ready to review on the board.", "Ảnh đề xuất đã sẵn sàng để xem và chọn trên bảng vẽ."],
   history: ["历史版本", "Version history", "Lịch sử phiên bản"],
