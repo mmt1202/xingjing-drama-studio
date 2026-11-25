@@ -122,6 +122,8 @@ class NativeImageExecutor:
         parameters = set(request.parameters)
         if request.capability in {"character_turnaround", "character_expressions"}:
             parameters.discard("items")  # The requested views are already included in the asset prompt.
+        if request.capability == "character_turnaround":
+            parameters.discard("direction")  # Drawing notes are recorded with the sheet and included in its prompt.
         if parameters - _PARAMETERS:
             raise NativeImageConfigurationError("GENERATION_NATIVE_PARAMETERS_UNSUPPORTED")
         validate_input_media(request)

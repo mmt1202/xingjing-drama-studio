@@ -64,6 +64,28 @@
   .xj-turn-studio { grid-template-columns: 1fr; }
 }
 .xj-turn-wrap { container-type: inline-size; }
+.xj-turn-assist { padding: 12px; border: 1px solid #4b405c; border-radius: 10px; background: #1c1927; }
+.xj-turn-assist > div:first-child, .xj-turn-proposal > div { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
+.xj-turn-assist .xj-turn-secondary { color: #e7d5ff; border-color: #685180; background: #30263e; }
+.xj-turn-proposal { display: grid; gap: 10px; margin-top: 12px; border-top: 1px solid #40364e; padding-top: 12px; font-size: 13px; }
+.xj-turn-proposal > label { display: flex; gap: 9px; align-items: start; font-weight: 400; cursor: pointer; }
+.xj-turn-proposal input { margin-top: 4px; accent-color: var(--turn-accent); }
+.xj-turn-proposal label span { white-space: pre-line; line-height: 1.65; }
+.xj-turn-proposal b { display: block; color: var(--turn-accent); }
+.xj-turn-library > p { margin: 13px 18px; color: var(--turn-muted); font-size: 13px; line-height: 1.65; }
+.xj-turn-library h2 small { color: var(--turn-muted); font-size: 12px; font-weight: 450; }
+.xj-turn-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 154px), 1fr)); padding: 0 16px 16px; gap: 10px; list-style: none; }
+.xj-turn-tiles li { align-self: start; overflow: hidden; border: 1px solid var(--turn-line); border-radius: 10px; background: #191b26; }
+.xj-turn-tile-image { min-width: 0; aspect-ratio: 4/3; display: grid; place-items: center; background: #0f1119; }
+.xj-turn-tile-image .xj-art-open, .xj-turn-thumb { width: 100%; height: 100%; min-height: 0; }
+.xj-turn-thumb { position: absolute; inset: 0; object-fit: contain; }
+.xj-turn-tile-info { display: grid; gap: 3px; padding: 9px 11px; overflow-wrap: anywhere; }
+.xj-turn-tile-info strong { font-size: 14px; }
+.xj-turn-tile-info time, .xj-turn-tile-info details { color: var(--turn-muted); font-size: 12px; }
+.xj-turn-tile-info .xj-turn-link, .xj-turn-used { margin-top: 4px; font-size: 12px; }
+.xj-turn-used { display: inline-flex; align-items: center; gap: 4px; color: #b7d9bf; }
+.xj-turn-tile-info summary { cursor: pointer; }
+.xj-turn-tile-info details p { margin-top: 4px; white-space: pre-line; }
 @media (max-width: 980px) {
   .xj-turn-studio { grid-template-columns: 1fr; }
 }

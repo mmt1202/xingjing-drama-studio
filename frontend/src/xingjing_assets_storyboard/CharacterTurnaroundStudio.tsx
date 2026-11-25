@@ -3,10 +3,12 @@ import { ArrowRight, Box, Check, ClipboardPenLine, Images, Layers3, Save, ScanFa
 import { AssetImageBilling, AssetImageSubmitButton, ReferencePreview, assetHasReferenceImage } from "./AssetReferenceGeneration";
 import { assetTaskBlocksGeneration } from "./asset-task-recovery";
 import { DraftRecoveryNotice } from "./DraftRecoveryNotice";
+import { CharacterArtworkLibrary } from "./CharacterArtworkLibrary";
+import { TurnaroundPlanSuggestions } from "./TurnaroundPlanSuggestions";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
 import type { AssetImageControls } from "./asset-image-models";
-import type { AssetItem, AssetVersion, TaskReceipt } from "./contracts";
-import type { ProductionDraftScope } from "./draft-state";
+import type { AssetItem, AssetsStoryboardPort, AssetVersion, TaskReceipt } from "./contracts";
+import { productionDraftSlot, readProductionDraft, writeProductionDraft, type ProductionDraftScope } from "./draft-state";
 import { useTurnaroundTranslation } from "./turnaround-i18n";
 import { useRecoverableDraft } from "./useRecoverableDraft";
 import "./turnaround.css";
@@ -19,6 +21,13 @@ const views = {
 type View = keyof typeof views;
 const basicViews: View[] = ["front", "side", "backView"];
 const allViews = Object.keys(views) as View[];
+
+interface LayoutDraft { selected: View[]; customViews: string; direction: string }
+function isLayoutDraft(value: unknown): value is LayoutDraft {
+  if (!value || typeof value !== "object" || !("selected" in value) || !Array.isArray(value.selected)) return false;
+  return value.selected.every((view: unknown) => typeof view === "string" && Object.hasOwn(views, view)) && "customViews" in value && typeof value.customViews === "string" &&
+    value.customViews.length <= 500 && "direction" in value && typeof value.direction === "string" && value.direction.length <= 1000;
+}
 
 interface Brief { description: string; appearance: string }
 function briefOf(asset: AssetItem): Brief {
@@ -85,9 +94,9 @@ function CharacterBrief({ asset, scope, editable, busy, saving, saveLocked, conf
   </section>;
 }
 
-export function CharacterTurnaroundStudio({ asset, scope, generation, task, historyState, reloadHistory, canEdit, busy, dirty, reset, conflict, initialStage,
+export function CharacterTurnaroundStudio({ asset, api, scope, generation, task, historyState, reloadHistory, canEdit, busy, dirty, reset, conflict, initialStage,
   onSave, onDirty, onReload, onGenerate, onAdopt }: {
-  asset: AssetItem; scope: ProductionDraftScope; generation: AssetImageControls; task?: TaskReceipt;
+  asset: AssetItem; api: AssetsStoryboardPort; scope: ProductionDraftScope; generation: AssetImageControls; task?: TaskReceipt;
   initialStage?: Stage;
   historyState: "checking" | "ready" | "failed"; reloadHistory: () => void; canEdit: boolean; busy: boolean; dirty: boolean; reset: number; conflict: boolean;
   onSave: (change: Record<string, unknown>, version: number) => void; onDirty: (dirty: boolean) => void; onReload: () => void;
@@ -95,9 +104,13 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
 }) {
   const { t } = useTurnaroundTranslation();
   const { t: gen } = useAssetGenerationTranslation();
-  const [selected, setSelected] = useState<View[]>(basicViews);
-  const [direction, setDirection] = useState("");
-  const [customView, setCustomView] = useState("");
+  const [layoutSlot] = useState(() => productionDraftSlot({ ...scope, projectId: asset.projectId ?? scope.projectId }, "asset", `view-notes:${asset.id}`));
+  const [layout, setLayout] = useState<LayoutDraft>(() => readProductionDraft(layoutSlot, isLayoutDraft)?.value ??
+    { selected: basicViews, customViews: "", direction: "" });
+  const { selected, customViews: customView, direction } = layout;
+  useEffect(() => {
+    if (canEdit) writeProductionDraft(layoutSlot, String(asset.version), layout);
+  }, [asset.version, canEdit, layout, layoutSlot]);
   const [chosenStage, setChosenStage] = useState<Stage | undefined>(initialStage);
   const [inspection, setInspection] = useState<{ task: string; id: string | null }>();
   const { models } = generation;
@@ -169,6 +182,9 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
           task.status !== "succeeded" ? t("failed") : !outputs.length ? t("emptyResult") : fresh ? t("review") : t("adopted")}</p>
         {fresh && taskStage && stage !== taskStage && <button type="button" className="xj-turn-link" onClick={() => { setChosenStage(taskStage); setInspection(undefined); }}>{t("showCandidate")}</button>}
       </div>{taskLink && <a href={taskLink}>{t("task")} <ArrowRight size={13} /></a>}</section>}
+      {projectId && <CharacterArtworkLibrary api={api} workspaceId={models.workspaceId} projectId={projectId} assetId={asset.id}
+        name={asset.name} currentId={current?.generatedAssetId} refreshKey={outputs.join("|")} canEdit={canEdit} disabled={blocked} onAdopt={onAdopt}
+        viewLabel={(value) => { const match = allViews.find((key) => views[key] === value); return match ? t(match) : value; }} />}
     </div>
     <div className="xj-turn-controls">
       <CharacterBrief key={reset} asset={asset} scope={scope} editable={canEdit} busy={busy} saving={generation.activeAction === "updateAsset"} saveLocked={generation.pending} conflict={conflict}
@@ -176,11 +192,15 @@ export function CharacterTurnaroundStudio({ asset, scope, generation, task, hist
       <section className="xj-turn-panel"><header><h2><Layers3 aria-hidden="true" />{t("layout")}</h2></header>
         <div className="xj-turn-body">
           {stage === "sheet" && <><fieldset><legend>{t("angles")}</legend><div className="xj-turn-choices">
-            {allViews.map((v) => <button type="button" key={v} aria-pressed={selected.includes(v)} onClick={() => setSelected((list) => list.includes(v) ? list.filter((item) => item !== v) : [...list, v])}>
+            {allViews.map((v) => <button type="button" key={v} disabled={!canEdit} aria-pressed={selected.includes(v)} onClick={() => setLayout((draft) => ({ ...draft,
+              selected: draft.selected.includes(v) ? draft.selected.filter((item) => item !== v) : [...draft.selected, v] }))}>
               {selected.includes(v) && <Check size={13} aria-hidden="true" />}{t(v)}</button>)}
-          </div></fieldset><details className="xj-turn-custom"><summary>{t("custom")}</summary><label>{t("customHint")}
-            <textarea rows={2} maxLength={500} value={customView} onChange={(event) => setCustomView(event.target.value)} /></label></details>
-            <label>{t("direction")}<textarea rows={2} value={direction} maxLength={1000} placeholder={t("directionHint")} onChange={(event) => setDirection(event.target.value)} /></label></>}
+          </div></fieldset>
+            {canEdit && projectId && <TurnaroundPlanSuggestions key={JSON.stringify([asset.version, selected])} api={api} asset={asset} scope={{ workspaceId: models.workspaceId, projectId }}
+              views={selected.map((key) => t(key))} notes={{ customViews: customView, direction }} disabled={busy || dirty}
+              onReload={onReload} onApply={(notes) => setLayout((draft) => ({ ...draft, ...notes }))} />}
+            <label>{t("customLabel")}<textarea rows={2} readOnly={!canEdit} maxLength={500} value={customView} placeholder={t("customHint")} onChange={(event) => setLayout({ ...layout, customViews: event.target.value })} /></label>
+            <label>{t("direction")}<textarea rows={2} readOnly={!canEdit} value={direction} maxLength={1000} placeholder={t("directionHint")} onChange={(event) => setLayout({ ...layout, direction: event.target.value })} /></label></>}
           <p>{t(stage === "reference" ? "refInstructions" : !hasReference ? "refFirst" : sheet ? "approvedNext" : "refNext")}</p>
           {dirty && <p className="xj-turn-notice" role="status">{t("saveFirst")}</p>}
           {historyState !== "ready" && <p role="status">{t(historyState === "checking" ? "pending" : "lookupFailed")} {historyState === "failed" && <button type="button" className="xj-turn-link" onClick={reloadHistory}>{t("retry")}</button>}</p>}

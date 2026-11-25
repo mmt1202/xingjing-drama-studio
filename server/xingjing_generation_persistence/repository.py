@@ -33,6 +33,15 @@ class Base(DeclarativeBase):
     """独立 metadata；生产表由主线 Alembic 迁移创建。"""
 
 
+@dataclass(frozen=True)
+class CharacterArtwork:
+    id: str
+    capability: str
+    created_at: datetime
+    views: tuple[str, ...]
+    direction: str
+
+
 class TaskRow(Base):
     __tablename__ = "xingjing_generation_tasks"
     __table_args__ = (UniqueConstraint("workspace_id", "idempotency_scope", name="uq_xj_generation_idempotency"),)
@@ -838,28 +847,68 @@ class SqlAlchemyGenerationTaskRepository:
             ).scalar_one_or_none()
             return None if row is None else GenerationTask.model_validate(row.snapshot)
 
-    async def latest_character_image(self, workspace_id: str, project_id: str, asset_id: str) -> GenerationTask | None:
+    @staticmethod
+    def _character_image_scope(workspace_id: str, project_id: str, asset_id: str):
         request = TaskRow.snapshot["request"]
         capability = request["capability"].as_string()
         parameters = request["parameters"]
-        statement = (
-            select(TaskRow.snapshot)
-            .where(
-                TaskRow.workspace_id == workspace_id,
-                TaskRow.project_id == project_id,
-                parameters["asset_id"].as_string() == asset_id,
+        return (
+            (TaskRow.workspace_id == workspace_id)
+            & (TaskRow.project_id == project_id)
+            & (parameters["asset_id"].as_string() == asset_id)
+            & (
                 capability.in_(("character_turnaround", "character_expressions"))
                 | (
                     (capability == "image_generation")
                     & (parameters["asset_operation"].as_string() == "reference_image")
-                ),
+                )
             )
+        )
+
+    async def latest_character_image(self, workspace_id: str, project_id: str, asset_id: str) -> GenerationTask | None:
+        statement = (
+            select(TaskRow.snapshot)
+            .where(self._character_image_scope(workspace_id, project_id, asset_id))
             .order_by(TaskRow.created_at.desc(), TaskRow.task_id.desc())
             .limit(1)
         )
         async with self._session_factory() as session:
             snapshot = await session.scalar(statement)
         return GenerationTask.model_validate(snapshot) if snapshot else None
+
+    async def character_artworks(
+        self, workspace_id: str, project_id: str, asset_id: str, offset: int, limit: int
+    ) -> tuple[list[CharacterArtwork], int]:
+        request = TaskRow.snapshot["request"]
+        artwork = GeneratedAssetRow
+        statement = (
+            select(artwork.asset_id, artwork.created_at, request["capability"].as_string(), request["parameters"])
+            .select_from(artwork)
+            .join(TaskRow)
+            .where(
+                self._character_image_scope(workspace_id, project_id, asset_id),
+                TaskRow.status == TaskStatus.SUCCEEDED.value,
+                artwork.media_type == "image",
+            )
+        )
+        async with self._session_factory() as session:
+            total = await session.scalar(select(func.count()).select_from(statement.subquery()))
+            rows = (
+                await session.execute(
+                    statement.order_by(artwork.created_at.desc(), artwork.asset_id.desc()).offset(offset).limit(limit)
+                )
+            ).all()
+        images: list[CharacterArtwork] = []
+        for image_id, created, capability, parameters in rows:
+            items = parameters.get("items")
+            views = tuple(item for item in items if isinstance(item, str)) if isinstance(items, list) else ()
+            direction = parameters.get("direction")
+            images.append(
+                CharacterArtwork(
+                    image_id, capability, _utc(created), views, direction if isinstance(direction, str) else ""
+                )
+            )
+        return images, total or 0
 
     async def list(
         self,

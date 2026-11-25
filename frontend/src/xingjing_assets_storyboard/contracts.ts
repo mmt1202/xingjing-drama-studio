@@ -313,6 +313,7 @@ export interface PromptTemplateInput {
 
 export interface AssetActionResult {
   readonly profileDraft?: AssetProfileDraft;
+  readonly turnaroundPlan?: AssetProfileDraft;
   readonly asset?: AssetItem;
   readonly task?: TaskReceipt;
   readonly batch?: BatchReceipt;
@@ -324,6 +325,19 @@ export interface AssetProfileDraft {
   readonly fields: Readonly<Record<string, string>>;
   readonly usedScript: boolean;
   readonly assetVersion: number;
+}
+
+export interface CharacterArtwork {
+  readonly id: string;
+  readonly capability: "image_generation" | "character_turnaround" | "character_expressions";
+  readonly created_at: string;
+  readonly views: readonly string[];
+  readonly direction: string;
+}
+
+export interface CharacterArtworkPage {
+  readonly items: readonly CharacterArtwork[];
+  readonly total: number;
 }
 
 export interface ShotActionResult {
@@ -340,6 +354,7 @@ export interface ShotActionResult {
 
 export type AssetAction =
   | "draftAssetProfile"
+  | "draftTurnaroundPlan"
   | "extractAssets"
   | "createAsset"
   | "updateAsset"
@@ -432,6 +447,7 @@ export interface SmartStoryboardInputs {
 }
 
 export interface AssetsStoryboardPort {
+  getCharacterArtworks?(scope: WorkspaceProjectScope, assetId: string, offset: number, limit: number, signal?: AbortSignal): Promise<CharacterArtworkPage>;
   getSmartInputs?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<SmartStoryboardInputs>;
   getFrozenScriptSources?(scope: WorkspaceProjectScope, signal?: AbortSignal): Promise<FrozenScriptSources>;
   getExtractionHistory?(scope: WorkspaceProjectScope, version: string, operationId?: string, signal?: AbortSignal): Promise<ExtractionHistory>;

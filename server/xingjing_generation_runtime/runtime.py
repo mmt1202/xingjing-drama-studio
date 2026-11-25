@@ -49,6 +49,7 @@ from server.xingjing_generation_persistence import (
     TaskScopeNotFound,
     VersionConflict,
 )
+from server.xingjing_generation_persistence.repository import CharacterArtwork
 from server.xingjing_identity_context import (
     PlatformSessionGateway,
     TrustedWorkspaceContext,
@@ -454,6 +455,13 @@ class GenerationRuntime:
         self, context: TrustedWorkspaceContext, project_id: str, asset_id: str
     ) -> GenerationTask | None:
         return await self._repository_or_raise().latest_character_image(context.workspace_id, project_id, asset_id)
+
+    async def character_artworks(
+        self, context: TrustedWorkspaceContext, project_id: str, asset_id: str, offset: int, limit: int
+    ) -> tuple[list[CharacterArtwork], int]:
+        return await self._repository_or_raise().character_artworks(
+            context.workspace_id, project_id, asset_id, offset, limit
+        )
 
     async def find_asset_submission(
         self, context: TrustedWorkspaceContext, project_id: str, asset_id: str, source_version_id: str, key: str
@@ -1745,6 +1753,8 @@ def _route_parameters(request: GenerationRequest) -> dict[str, object]:
         orchestration.add("duration_ms")
     if request.capability in {"character_turnaround", "character_expressions"}:
         orchestration.add("items")
+    if request.capability == "character_turnaround":
+        orchestration.add("direction")
     return {key: value for key, value in request.parameters.items() if key not in orchestration}
 
 

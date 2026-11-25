@@ -147,6 +147,20 @@ def create_generation_router(runtime: GenerationRuntime) -> APIRouter:
         response.headers["Cache-Control"] = "private, no-store"
         return response
 
+    @router.get("/projects/{project_id}/assets/{asset_id}/character-artworks")
+    async def character_artworks(request: Request, project_id: str, asset_id: str):
+        context = await runtime.context_for(request, project_id, "generation.view")
+        if "asset.view" not in context.permissions:
+            raise GenerationHttpError("PERMISSION_DENIED", 403)
+        offset = _integer(
+            request.query_params.get("offset"), default=0, minimum=0, maximum=2**31 - 1, code="INVALID_OFFSET"
+        )
+        limit = _integer(request.query_params.get("limit"), default=8, minimum=1, maximum=48, code="INVALID_LIMIT")
+        images, total = await runtime.character_artworks(context, project_id, asset_id, offset, limit)
+        response = _success(context.request_id, {"items": [asdict(image) for image in images], "total": total})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
     @router.get("/projects/{project_id}/assets/{asset_id}/generation-receipt")
     async def asset_generation_receipt(request: Request, project_id: str, asset_id: str):
         context = await runtime.context_for(request, project_id, "generation.view")

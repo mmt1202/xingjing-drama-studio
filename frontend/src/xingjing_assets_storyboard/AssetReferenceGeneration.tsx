@@ -1,4 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { ZoomIn } from "lucide-react";
+import { ArtworkViewer } from "./ArtworkViewer";
+import { useTurnaroundTranslation } from "./turnaround-i18n";
 import type { AssetItem, GenerationCreditBalance, TaskReceipt } from "./contracts";
 import { useAssetGenerationTranslation } from "./asset-generation-i18n";
 import { button, ConfirmDialog, panel, primaryButton } from "./ui";
@@ -28,13 +31,21 @@ export function AssetImageSubmitButton({ asset, task, disabled, onGenerate, clas
   </>;
 }
 
-export function ReferencePreview({ source, alt, workspaceId, projectId, className }: { source: string; alt: string; workspaceId: string; projectId: string; className?: string }) {
+export function ReferencePreview({ source, alt, workspaceId, projectId, className, compact }: { source: string; alt: string; workspaceId: string; projectId: string; className?: string; compact?: boolean }) {
   const { t } = useAssetGenerationTranslation();
+  const { t: art } = useTurnaroundTranslation();
   const media = useAuthenticatedMedia({ source, workspaceId, projectId });
+  const [openedUrl, setOpenedUrl] = useState<string>();
   if (media.error) return <div className="mt-3 text-sm text-amber-200" role="status">
     {t("previewFailed")} <button type="button" className={button} onClick={media.retry}>{t("retryImage")}</button>
   </div>;
-  return media.url ? <img src={media.url} alt={alt} onError={media.decodeFailed} className={className ?? "mt-3 max-h-64 w-full rounded-xl object-contain"} /> :
+  return media.url ? <>
+    <button type="button" className="xj-art-open" aria-label={art("enlarge", { name: alt })} onClick={() => setOpenedUrl(media.url)}>
+      <img src={media.url} alt={alt} onError={media.decodeFailed} className={className ?? "mt-3 max-h-64 w-full rounded-xl object-contain"} />
+      <span aria-hidden="true"><ZoomIn size={15} />{!compact && art("viewOriginal")}</span>
+    </button>
+    {openedUrl === media.url && <ArtworkViewer url={media.url} mime={media.mimeType} title={alt} onClose={() => setOpenedUrl(undefined)} />}
+  </> :
     <p role="status" className="mt-2 text-xs text-slate-400">{t("loadingImage")}</p>;
 }
 

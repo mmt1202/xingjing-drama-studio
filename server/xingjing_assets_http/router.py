@@ -48,7 +48,14 @@ from server.xingjing_generation_runtime import GenerationRuntimeUnavailable
 from server.xingjing_identity_context import TrustedWorkspaceContext
 from server.xingjing_storyboard.ports import StoryboardScope
 
-from .profile_draft import PROFILE_TYPES, generate_profile, reference_image_prompt, script_excerpt, turnaround_prompt
+from .profile_draft import (
+    PROFILE_TYPES,
+    TurnaroundPlan,
+    generate_profile,
+    reference_image_prompt,
+    script_excerpt,
+    turnaround_prompt,
+)
 
 if TYPE_CHECKING:
     from server.xingjing_assets_runtime.runtime import AssetRuntime
@@ -358,15 +365,26 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
         target_id = _optional_text(body.get("targetId"))
         repository = _repository(runtime)
         scope = AssetScope(context.tenant_id, context.workspace_id)
-        if action == "draftAssetProfile":
+        if action in {"draftAssetProfile", "draftTurnaroundPlan"}:
             asset = _owned_asset(repository, scope, project_id, _required_target(target_id))
             if asset.revision != _if_match(request):
                 raise AssetHttpError("ASSET_VERSION_CONFLICT", 409)
+            turnaround = action == "draftTurnaroundPlan"
+            if turnaround and asset.kind is not AssetKind.CHARACTER:
+                raise AssetHttpError("CHARACTER_ASSET_REQUIRED")
             return _success(
                 context,
                 {
-                    "profileDraft": await _draft_profile(
-                        runtime, repository, context, scope, asset, payload, key, get_locale(request)
+                    ("turnaroundPlan" if turnaround else "profileDraft"): await _draft_profile(
+                        runtime,
+                        repository,
+                        context,
+                        scope,
+                        asset,
+                        payload,
+                        key,
+                        get_locale(request),
+                        turnaround=turnaround,
                     )
                 },
             )
@@ -880,6 +898,7 @@ async def _submit_character_derivative(
     items = _text_list(payload.get("items"), "DERIVATIVE_ITEMS_REQUIRED")
     capability = "character_turnaround" if action == "generateTurnaround" else "character_expressions"
     prompt = f"为角色 {asset.name} 生成表情集：{', '.join(items)}"
+    direction = ""
     if action == "generateTurnaround":
         direction = payload.get("direction", "")
         if not isinstance(direction, str) or len(direction) > 1000:
@@ -895,7 +914,7 @@ async def _submit_character_derivative(
             "asset_id": asset.asset_id,
             "source_version_id": source_version_id,
             "items": list(items),
-            **({"aspect_ratio": "3:2"} if action == "generateTurnaround" else {}),
+            **({"aspect_ratio": "3:2", "direction": direction.strip()} if action == "generateTurnaround" else {}),
         },
         input_asset_ids=(asset.asset_id,),
         input_asset_references=(
@@ -935,8 +954,20 @@ async def _draft_profile(
     payload: Mapping[str, object],
     key: str,
     locale: str,
+    *,
+    turnaround: bool = False,
 ) -> dict[str, object]:
-    schema = PROFILE_TYPES[asset.kind]
+    schema = TurnaroundPlan if turnaround else PROFILE_TYPES[asset.kind]
+    views: tuple[str, ...] | None = None
+    if turnaround:
+        raw_views = payload.get("views", [])
+        if (
+            not isinstance(raw_views, list)
+            or len(raw_views) > 12
+            or any(not isinstance(view, str) or not view.strip() or len(view) > 120 for view in raw_views)
+        ):
+            raise AssetHttpError("ASSET_PROFILE_INPUT_INVALID")
+        views = tuple(cast(list[str], raw_views))
     fields = _mapping(payload.get("fields"), "ASSET_PROFILE_INPUT_INVALID")
     direction = payload.get("direction", "")
     if (
@@ -947,7 +978,7 @@ async def _draft_profile(
     ):
         raise AssetHttpError("ASSET_PROFILE_INPUT_INVALID")
     current = {field: value.strip() for field, value in cast(Mapping[str, str], fields).items()}
-    operation = "asset.profile"
+    operation = "asset.turnaround_plan" if turnaround else "asset.profile"
     claim_key = hashlib.sha256(key.encode()).hexdigest()
     fingerprint = _digest(
         {
@@ -958,6 +989,7 @@ async def _draft_profile(
             "fields": current,
             "direction": direction,
             "locale": locale,
+            **({"views": views} if turnaround else {}),
         }
     )
     claim = repository.claim_operation(
@@ -975,7 +1007,10 @@ async def _draft_profile(
     try:
         source = runtime.asset_source_text(context, asset.owner_project_id, asset.frozen_snapshot)
         excerpt = script_excerpt(source, asset)
-        suggestions = await generate_profile(asset, current, direction, excerpt, locale)
+        if views is None:
+            suggestions = await generate_profile(asset, current, direction, excerpt, locale)
+        else:
+            suggestions = await generate_profile(asset, current, direction, excerpt, locale, selected_views=views)
         result: dict[str, object] = {"fields": suggestions, "usedScript": bool(excerpt), "assetVersion": asset.revision}
     except Exception as error:
         repository.fail_operation(

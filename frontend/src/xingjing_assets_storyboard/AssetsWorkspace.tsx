@@ -799,7 +799,7 @@ function AssetWorkspaceSession({ scope, view = "library", assetId, projectName, 
       onAction={(action, payload, version) => void run(action, payload, currentAsset, version)}
       onRights={(seed) => setPermission({ asset: currentAsset, seed })} onDerivative={(next) => navigate(next, currentAsset.id)} />
       : <StatePanel title={generationText("detailFailed")} actionLabel={libraryText("returnLibrary")} onAction={() => navigate("library")} /> : null}
-    {activeView === "turnaround" ? currentAsset?.type === "character" ? <div className="xj-turn-wrap"><CharacterTurnaroundStudio key={currentAsset.id} asset={currentAsset} initialStage={initialDrawing}
+    {activeView === "turnaround" ? currentAsset?.type === "character" ? <div className="xj-turn-wrap"><CharacterTurnaroundStudio key={JSON.stringify([context.user.id, scope.workspaceId, currentAsset.id])} api={api} asset={currentAsset} initialStage={initialDrawing}
       scope={{ actorId: context.user.id, workspaceId: scope.workspaceId, projectId: projectId ?? null }} generation={generation} task={taskOwnerId === currentAsset.id ? task : undefined}
       historyState={!fetchCharacterHistory ? "ready" : characterHistory?.key === historyKey ? characterHistory.state : "checking"} reloadHistory={() => setHistoryReload((value) => value + 1)}
       canEdit={canManage && (!scope.projectId || currentAsset.projectId === scope.projectId)} busy={busy} dirty={draftBlocked} reset={draftReset} conflict={Boolean(conflict)}

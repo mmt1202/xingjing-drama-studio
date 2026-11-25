@@ -1,0 +1,22 @@
+.xj-art-open { position: relative; display: grid; width: 100%; place-items: center; cursor: zoom-in; }
+.xj-art-open > span { position: absolute; right: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid #ffffff32; border-radius: 7px; background: #141621e8; color: #f4efff; padding: 5px 9px; font-size: 12px; }
+.xj-art-open:focus-visible, .xj-art-viewer :focus-visible { outline: 2px solid #d3bdff; outline-offset: -3px; }
+.xj-art-viewer[open] { position: fixed; inset: 0; display: flex; flex-direction: column; margin: auto; width: min(96vw, 1800px); max-width: 100vw; height: 93dvh; max-height: 100dvh; padding: 0; overflow: hidden; border-radius: 14px; border: 1px solid #424557; background: #10121b; color: #f2f1f7; box-shadow: 0 12px 64px #0008; }
+.xj-art-viewer::backdrop { background: #060810df; }
+.xj-art-viewer header, .xj-art-tools, .xj-art-tools > div, .xj-art-tools :is(button, a) { display: flex; align-items: center; gap: 7px; }
+.xj-art-viewer header { justify-content: space-between; flex-wrap: wrap; padding: 11px 16px; border-bottom: 1px solid #343747; }
+.xj-art-viewer header strong { font-size: 15px; }
+.xj-art-viewer header span { display: block; color: #b8b6c7; font-size: 12px; font-variant-numeric: tabular-nums; }
+.xj-art-tools { flex-wrap: wrap; }
+.xj-art-tools > div { gap: 1px; padding: 2px; border: 1px solid #3e4151; border-radius: 8px; }
+.xj-art-tools :is(button, a) { min-height: 33px; padding: 4px 9px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+.xj-art-tools [aria-pressed=true], .xj-art-tools :is(button, a):hover { background: #373044; color: #f4eaff; }
+.xj-art-viewport { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; background: #0b0d13; }
+.xj-art-viewport[data-fit=false] { cursor: grab; }
+.xj-art-viewport[data-fit=false]:active { cursor: grabbing; }
+.xj-art-plane { display: grid; width: max-content; min-width: 100%; min-height: 100%; place-items: center; }
+.xj-art-viewport[data-fit=true] .xj-art-plane { width: 100%; height: 100%; }
+.xj-art-plane img { display: block; max-width: none; max-height: none; user-select: none; }
+.xj-art-viewport[data-fit=true] img { width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.xj-art-viewer footer { padding: 6px 16px; font-size: 12px; color: #b8b6c7; }
+@media (max-width: 600px) { .xj-art-viewer[open] { width: 100vw; height: 100dvh; border-radius: 0; } }

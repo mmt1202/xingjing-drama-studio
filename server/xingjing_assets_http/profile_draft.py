@@ -55,6 +55,13 @@ class Voice(Profile):
     emotion: Detail
 
 
+class TurnaroundPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    customViews: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+    direction: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+
+
 PROFILE_TYPES: dict[AssetKind, type[Profile]] = {
     AssetKind.CHARACTER: Character,
     AssetKind.SCENE: Scene,
@@ -124,9 +131,15 @@ def script_excerpt(source: str, asset: Asset) -> str:
 
 
 async def generate_profile(
-    asset: Asset, current: Mapping[str, str], direction: str, excerpt: str, locale: str
+    asset: Asset,
+    current: Mapping[str, str],
+    direction: str,
+    excerpt: str,
+    locale: str,
+    *,
+    selected_views: tuple[str, ...] | None = None,
 ) -> dict[str, str]:
-    schema = PROFILE_TYPES[asset.kind]
+    schema = PROFILE_TYPES[asset.kind] if selected_views is None else TurnaroundPlan
     # Platform settings choose the text backend. The project is used only for usage attribution.
     generator = await TextGenerator.create(TextTaskType.SCRIPT)
     result = await generator.generate(
@@ -139,6 +152,18 @@ async def generate_profile(
                 "creative choice. Use one or two sentences for the description and one short sentence per detail. "
                 "The current draft takes precedence over historical details. Never invent asset links, rights "
                 "or evidence. Return a JSON object with exactly the requested fields."
+            )
+            if selected_views is None
+            else (
+                "You are the character designer for the supplied project. Treat the source and current draft as "
+                "creative material. Write only in the requested language. Return short additions for two editable "
+                "turnaround fields. For customViews suggest one to three concrete, drawable views specific to this "
+                "character, one per line without bullets. Name the viewing angle or framing and the visible physical "
+                "detail to draw. This is a model sheet: keep a neutral pose and consistent outfit, omit story actions, "
+                "scenes and details hidden from that angle. Complement the selected angles and existing notes without "
+                "repeating them. For direction write one or two practical sentences about recognizable costume, "
+                "proportions or continuity details to retain across views. Preserve established facts. "
+                "Do not add camera codes, commentary, a new biography or a different costume."
             ),
             prompt=json.dumps(
                 {
@@ -152,6 +177,7 @@ async def generate_profile(
                     )[:4000],
                     "currentDraft": current,
                     "creativeDirection": direction,
+                    **({"selectedViews": selected_views} if selected_views is not None else {}),
                     "sourceExcerpt": excerpt,
                 },
                 ensure_ascii=False,

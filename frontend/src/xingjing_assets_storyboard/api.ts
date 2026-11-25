@@ -8,6 +8,7 @@ import type {
   AssetItem,
   AssetListQuery,
   AssetsStoryboardPort,
+  CharacterArtworkPage,
   ExtractionHistory,
   FrozenScriptSources,
   PageResult,
@@ -662,6 +663,11 @@ export function createAssetsStoryboardApi(
     async getLatestCharacterImage(scope, assetId, signal) {
       const path = `/projects/${requireProject(scope)}/assets/${encodeURIComponent(assetId)}/latest-character-image`;
       return (await request<{ task: TaskReceipt | null }>(scope, path, { cache: "no-store" }, signal)).data.task;
+    },
+    async getCharacterArtworks(scope, assetId, offset, limit, signal) {
+      const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+      const path = `/projects/${requireProject(scope)}/assets/${encodeURIComponent(assetId)}/character-artworks?${query}`;
+      return (await request<CharacterArtworkPage>(scope, path, { cache: "no-store" }, signal)).data;
     },
     async getGenerationTask(scope, task, signal) {
       const projectId = encodeURIComponent(
