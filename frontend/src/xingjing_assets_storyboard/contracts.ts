@@ -121,6 +121,7 @@ export interface RightsRecord {
   readonly id?: string;
   readonly holder?: string;
   readonly licenseScope?: string;
+  readonly allowedProjectIds?: readonly string[];
   readonly proofUploadId?: string;
   readonly validFrom?: string;
   readonly validTo?: string;

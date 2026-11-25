@@ -116,6 +116,7 @@ MESSAGES = {
     "generation_input_asset_version_not_found": "Phiên bản tài sản không tồn tại hoặc ngoài phạm vi được phép. Hãy chọn lại.",
     "generation_input_asset_content_mismatch": "Phiên bản tài sản không khớp dấu kiểm đã lưu. Kiểm tra trước khi tạo.",
     "rights_evidence_not_found": "Không tìm thấy minh chứng. Hãy liên hệ người quản lý tài sản của dự án sở hữu.",
+    "holder_required": "Hãy nhập tên cá nhân hoặc tổ chức nắm quyền.",
     "rights_expiry_invalid": "Hãy nhập ngày kết thúc hợp lệ.",
     "rights_evidence_expired": "Quyền này đã hết hạn. Hãy đăng ký minh chứng gia hạn.",
     "rights_evidence_not_verified": "Không thể kiểm tra minh chứng đã tải lên. Hãy chọn lại tệp gốc và gửi lại.",

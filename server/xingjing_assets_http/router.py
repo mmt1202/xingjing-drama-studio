@@ -319,7 +319,7 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
             _repository(runtime), AssetScope(context.tenant_id, context.workspace_id), project_id, asset_id
         )
         record = next((record for record in asset.rights if record.rights_id == rights_id), None)
-        if record is None:
+        if record is None or record.evidence_object_key is None or record.evidence_sha256 is None:
             raise AssetHttpError("RIGHTS_EVIDENCE_NOT_FOUND", 404)
         content = runtime.read_rights_evidence(context, project_id, record.evidence_object_key, record.evidence_sha256)
         if content is None:
@@ -437,8 +437,8 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 latest = current.rights[-1] if current.rights else None
                 if not latest or latest.rights_id != _text(payload, "rightsRecordId"):
                     raise VersionConflict("VERSION_CONFLICT")
-                if not runtime.verify_rights_evidence(
-                    context, project_id, latest.evidence_object_key, latest.evidence_sha256
+                if not _rights_attachment_valid(
+                    runtime, context, project_id, latest.evidence_object_key, latest.evidence_sha256
                 ):
                     raise AssetHttpError("RIGHTS_EVIDENCE_NOT_VERIFIED", 409)
                 service.confirm_rights(
@@ -452,15 +452,19 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                         )
                     },
                 )
+            raw_end = payload.get("validTo")
+            if raw_end is not None and not isinstance(raw_end, str):
+                raise AssetHttpError("RIGHTS_EXPIRY_INVALID")
+            valid_to = _optional_text(raw_end)
             try:
-                expires = rights_expiry(_optional_text(payload.get("validTo")))
+                expires = rights_expiry(valid_to)
             except (ValueError, OverflowError) as error:
                 raise AssetHttpError("RIGHTS_EXPIRY_INVALID") from error
             if expires is not None and expires <= datetime.now(UTC):
                 raise AssetHttpError("RIGHTS_EVIDENCE_EXPIRED")
-            object_key = _text(payload, "proofObjectKey")
-            evidence_sha256 = _text(payload, "proofSha256")
-            if not runtime.verify_rights_evidence(context, project_id, object_key, evidence_sha256):
+            object_key = _text(payload, "proofObjectKey") if payload.get("proofObjectKey") is not None else None
+            evidence_sha256 = _text(payload, "proofSha256") if payload.get("proofSha256") is not None else None
+            if not _rights_attachment_valid(runtime, context, project_id, object_key, evidence_sha256):
                 raise AssetHttpError("RIGHTS_EVIDENCE_NOT_VERIFIED", 409)
             scope_value = _optional_text(payload.get("licenseScope")) or ReuseScope.OWNER_PROJECT_ONLY.value
             try:
@@ -483,8 +487,8 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                 allowed_project_ids=allowed_project_ids,
                 evidence_object_key=object_key,
                 evidence_sha256=evidence_sha256,
-                holder=_optional_text(payload.get("holder")),
-                valid_until=_optional_text(payload.get("validTo")),
+                holder=_text(payload, "holder") if object_key is None else _optional_text(payload.get("holder")),
+                valid_until=valid_to,
             )
             service.record_rights(
                 workspace_id=context.workspace_id,
@@ -633,8 +637,8 @@ def create_asset_router(runtime: AssetRuntime) -> APIRouter:
                         raise ValueError("RIGHTS_SELECTION_CHANGED")
                     if current.rights and current.rights[-1].effective_status is RightsStatus.PENDING:
                         latest = current.rights[-1]
-                        if not runtime.verify_rights_evidence(
-                            context, project_id, latest.evidence_object_key, latest.evidence_sha256
+                        if not _rights_attachment_valid(
+                            runtime, context, project_id, latest.evidence_object_key, latest.evidence_sha256
                         ):
                             raise ValueError("RIGHTS_EVIDENCE_NOT_VERIFIED")
                     item_service.confirm_rights(
@@ -834,12 +838,21 @@ def _asset_item(
             "id": rights.rights_id,
             "holder": rights.holder,
             "licenseScope": rights.reuse_scope.value,
-            "proofUploadId": rights.evidence_object_key,
+            **({"allowedProjectIds": list(rights.allowed_project_ids)} if rights.allowed_project_ids else {}),
+            **({"proofUploadId": rights.evidence_object_key} if rights.evidence_object_key else {}),
             "validTo": rights.valid_until,
             "status": rights_status,
         },
         "affectedShotIds": list(impacted),
     }
+
+
+def _rights_attachment_valid(
+    runtime: AssetRuntime, context: TrustedWorkspaceContext, project_id: str, key: str | None, digest: str | None
+) -> bool:
+    if key is None or digest is None:
+        return key is None and digest is None
+    return runtime.verify_rights_evidence(context, project_id, key, digest)
 
 
 def _rights_status(asset: Asset) -> str:
@@ -1349,6 +1362,7 @@ def _error(request: Request, code: str, status_code: int, details: Mapping[str, 
         "ASSET_PROFILE_UNAVAILABLE",
         "ASSET_NOT_FOUND",
         "RIGHTS_EVIDENCE_NOT_FOUND",
+        "HOLDER_REQUIRED",
         "RIGHTS_EXPIRY_INVALID",
         "RIGHTS_EVIDENCE_EXPIRED",
         "RIGHTS_EVIDENCE_NOT_VERIFIED",

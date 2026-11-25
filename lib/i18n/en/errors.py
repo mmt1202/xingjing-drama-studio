@@ -116,6 +116,7 @@ MESSAGES = {
     "generation_input_asset_version_not_found": "The selected asset version is missing or outside the authorized scope. Select it again.",
     "generation_input_asset_content_mismatch": "The asset version does not match its saved digest. Verify it before generation.",
     "rights_evidence_not_found": "The permission document could not be found. Contact an asset manager in the owning project.",
+    "holder_required": "Enter the name of the rights holder.",
     "rights_expiry_invalid": "Enter a valid end date.",
     "rights_evidence_expired": "This permission has expired. Register renewed evidence.",
     "rights_evidence_not_verified": "The uploaded evidence could not be verified. Attach the original file and submit again.",

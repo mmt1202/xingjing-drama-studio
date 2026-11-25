@@ -116,6 +116,7 @@ MESSAGES = {
     "generation_input_asset_version_not_found": "所选资产版本不存在或不在当前授权范围，请重新选择。",
     "generation_input_asset_content_mismatch": "资产版本记录与保存的摘要不一致，请核对后再生成。",
     "rights_evidence_not_found": "找不到这份使用许可证明。请联系资产所属项目的管理成员。",
+    "holder_required": "请填写权利人的姓名或机构名称。",
     "rights_expiry_invalid": "请输入有效的截止日期。",
     "rights_evidence_expired": "这份许可已过期。请登记续期证明。",
     "rights_evidence_not_verified": "无法核对已上传的证明。请重新选择原文件并提交。",

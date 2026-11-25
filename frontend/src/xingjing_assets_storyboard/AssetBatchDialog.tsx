@@ -5,6 +5,7 @@ import { useAssetImageModels } from "./asset-image-models";
 import { batchEligible, batchError, submitAssetImage, type AssetBatchMode } from "./asset-batch";
 import type { AssetItem, AssetsStoryboardPort, RightsEvidenceUpload, WorkspaceProjectScope } from "./contracts";
 import { useDraftProtection } from "./useDraftProtection";
+import { LicenseProofField, LicenseTermField, type LicenseEnd } from "./LicenseFields";
 
 type RowResult = { label: string; failed?: boolean; asset?: AssetItem; taskId?: string };
 type Props = {
@@ -24,7 +25,7 @@ export function AssetBatchDialog({ mode, assets, scope, api, actorId, onClose }:
   const [busy, setBusy] = useState(false);
   const [holder, setHolder] = useState("");
   const [licenseScope, setLicenseScope] = useState("owner_project_only");
-  const [validTo, setValidTo] = useState("");
+  const [validTo, setValidTo] = useState<LicenseEnd>(() => items.some((asset) => asset.rightsStatus === "expired") ? "" : null);
   const [file, setFile] = useState<File>();
   const [attested, setAttested] = useState(false);
   const [notice, setNotice] = useState("");
@@ -39,7 +40,7 @@ export function AssetBatchDialog({ mode, assets, scope, api, actorId, onClose }:
   const targets = items.filter((item) => !rows[item.id] || rows[item.id].failed);
   const started = Object.keys(rows).length > 0;
   const maySubmit = !busy && targets.length > 0 && (isImage ? offer?.available : attested)
-    && (!isRegistration || Boolean(holder.trim() && file));
+    && (!isRegistration || Boolean(holder.trim()));
   const Icon = isImage ? Images : isRegistration ? ShieldCheck : CheckCheck;
   useDraftProtection(busy);
   useEffect(() => {
@@ -53,11 +54,10 @@ export function AssetBatchDialog({ mode, assets, scope, api, actorId, onClose }:
   function setRow(asset: AssetItem, result: RowResult) {
     setRows((current) => ({ ...current, [asset.id]: result }));
   }
-  function proofFor(asset: AssetItem, projectId: string) {
+  function proofFor(asset: AssetItem, projectId: string, attachment: File) {
     const existing = proofs.current.get(projectId);
     if (existing) return existing;
-    if (!file) throw new Error("missing evidence");
-    const upload = api.uploadRightsEvidence({ ...scope, projectId }, asset, file);
+    const upload = api.uploadRightsEvidence({ ...scope, projectId }, asset, attachment);
     proofs.current.set(projectId, upload);
     return upload;
   }
@@ -79,13 +79,13 @@ export function AssetBatchDialog({ mode, assets, scope, api, actorId, onClose }:
           } else {
             const projectId = scope.projectId ?? asset.projectId;
             if (!projectId) throw new Error("missing owner project");
-            const proof = isRegistration ? await proofFor(asset, projectId) : undefined;
+            const proof = isRegistration && file ? await proofFor(asset, projectId, file) : undefined;
             const result = await api.assetAction({ ...scope, projectId }, {
               action: isRegistration ? "saveRights" : "confirmRights",
               targetId: asset.id, version: asset.version, idempotencyKey: keys.get(asset.id),
-              payload: proof
+              payload: isRegistration
                 ? { ownerProjectId: projectId, holder: holder.trim(), licenseScope, validTo: validTo || undefined,
-                    proofObjectKey: proof.objectKey, proofSha256: proof.sha256 }
+                    ...(proof ? { proofObjectKey: proof.objectKey, proofSha256: proof.sha256 } : {}) }
                 : { ownerProjectId: projectId, rightsRecordId: asset.rights?.id },
             });
             if (!result.asset) throw new Error("missing record");
@@ -106,7 +106,7 @@ export function AssetBatchDialog({ mode, assets, scope, api, actorId, onClose }:
     }
   }
   async function download(asset: AssetItem) {
-    if (!api.downloadRightsEvidence || !asset.rights?.id) return;
+    if (!api.downloadRightsEvidence || !asset.rights?.id || !asset.rights.proofUploadId) return;
     try {
       const blob = await api.downloadRightsEvidence({ ...scope, projectId: scope.projectId ?? asset.projectId }, asset, asset.rights.id);
       const url = URL.createObjectURL(blob);
@@ -137,23 +137,22 @@ export function AssetBatchDialog({ mode, assets, scope, api, actorId, onClose }:
             <li key={asset.id}><div><strong>{asset.name}</strong>
               <small>{t(asset.type)} · {t(asset.rightsStatus)}{mode === "reviewMany" && asset.rights ? " · " + [asset.rights.holder,
                 t(asset.rights.licenseScope === "workspace" ? "workspaceScope" : asset.rights.licenseScope === "project_allowlist" ? "allowlist" : "projectScope"),
-                asset.rights.validTo?.slice(0,10)].filter(Boolean).join(" · ") : ""}</small></div>
+                asset.rights.validTo?.slice(0,10) || t("unspecified")].filter(Boolean).join(" · ") : ""}</small></div>
               {rows[asset.id] ? <div><span className={rows[asset.id].failed ? "xj-batch-error" : ""}>{t(rows[asset.id].label)}</span>
                 {!busy && scope.projectId && rows[asset.id].taskId && <a className="xj-lib-textbtn" href={progressLink(scope.projectId, rows[asset.id].taskId)} aria-label={t("imageProgress", { name: asset.name })}>{t("seeProgress")}</a>}</div>
-                : mode === "reviewMany" && api.downloadRightsEvidence && <button type="button" className="xj-lib-textbtn" onClick={() => void download(asset)}>{t("download")}</button>}
+                : mode === "reviewMany" && (asset.rights?.proofUploadId
+                  ? api.downloadRightsEvidence && <button type="button" className="xj-lib-textbtn" onClick={() => void download(asset)}>{t("download")}</button>
+                  : <small>{t("noProof")}</small>)}
             </li>
           ))}</ul>
           {isRegistration && <fieldset disabled={busy || started}>
-            <label>{t("holder")}<input required maxLength={256} value={holder} onChange={(e) => setHolder(e.target.value)} placeholder={t("holderHint")} /></label>
-            <div className="xj-lib-fieldpair"><label>{t("scope")}<select value={licenseScope} onChange={(e) => setLicenseScope(e.target.value)}>
+            <div className="xj-lib-fieldpair">
+              <label>{t("holder")}<input required maxLength={256} value={holder} onChange={(e) => setHolder(e.target.value)} placeholder={t("holderHint")} /></label>
+              <label>{t("scope")}<select value={licenseScope} onChange={(e) => setLicenseScope(e.target.value)}>
               <option value="owner_project_only">{t("projectScope")}</option><option value="workspace">{t("workspaceScope")}</option></select></label>
-              <label>{t("until")}<input type="date" min={new Date().toISOString().slice(0,10)} value={validTo} onChange={(e) => setValidTo(e.target.value)} /></label></div>
-            <label className="xj-proof-upload">{t("proof")}<small>{t("proofHint")}</small>
-              <input type="file" required accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => {
-                const selected = e.target.files?.[0];
-                const valid = selected && selected.size > 0 && selected.size <= 25 * 1024 * 1024 && ["application/pdf","image/jpeg","image/png","image/webp"].includes(selected.type);
-                setFile(valid ? selected : undefined); setNotice(selected && !valid ? "fileError" : "");
-              }} /></label>
+            </div>
+            <LicenseTermField value={validTo} onChange={setValidTo} />
+            <LicenseProofField file={file} onChange={setFile} />
           </fieldset>}
           {!isImage && <label className="xj-attest"><input type="checkbox" checked={attested} disabled={busy || started} onChange={(e) => setAttested(e.target.checked)} />
             {t(isRegistration ? "batchProofCovers" : "attest")}</label>}

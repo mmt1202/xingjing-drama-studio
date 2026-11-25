@@ -95,7 +95,7 @@
 .xj-lib-textbtn,
 .xj-permission-dialog header,
 .xj-lib-success,
-.xj-proof-upload > span,
+.xj-proof-upload label span,
 .xj-discard {
   display: flex;
   align-items: center;
@@ -156,7 +156,7 @@
   outline-offset: 1px;
 }
 .xj-lib-filters select,
-.xj-permission-body input:not([type="checkbox"]),
+.xj-permission-body input:not([type="checkbox"]):not([type="radio"]),
 .xj-permission-body select {
   min-height: 38px;
   background: #0c0e16;
@@ -426,7 +426,7 @@
   padding: 18px;
 }
 .xj-lib-summary h2,
-.xj-proof-upload > span {
+.xj-proof-upload label span {
   gap: 8px;
 }
 .xj-lib-summary .xj-lib-state,
@@ -504,14 +504,93 @@
 }
 .xj-lib-fieldpair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   align-items: start;
 }
+.xj-permission-body .xj-license-term {
+  display: block;
+  min-inline-size: 0;
+}
+.xj-license-term legend {
+  padding-bottom: 6px;
+  font-size: 0.84rem;
+}
+.xj-license-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.xj-permission-body .xj-license-modes label {
+  position: relative;
+  cursor: pointer;
+}
+.xj-license-modes input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.xj-license-modes span {
+  display: block;
+  padding: 8px 14px;
+  border: 1px solid var(--lib-line);
+  border-radius: 8px;
+}
+.xj-license-modes input:checked + span,
+.xj-license-shortcuts [aria-pressed="true"] {
+  color: #e3d5ff;
+  border-color: #967cc5;
+  background: #30273f;
+}
+.xj-license-modes input:focus-visible + span {
+  outline: 2px solid #bda3ff;
+  outline-offset: 2px;
+}
+.xj-license-modes input:disabled + span {
+  cursor: default;
+}
+.xj-license-date,
+.xj-license-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.xj-license-date {
+  margin-top: 12px;
+}
+.xj-license-date input {
+  color-scheme: dark;
+}
+.xj-license-date input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  padding: 5px;
+}
+.xj-license-shortcuts .xj-lib-btn {
+  font-size: 0.78rem;
+  padding-inline: 9px;
+  min-height: 36px;
+}
 .xj-proof-upload {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
   padding: 12px;
   border: 1px dashed #686078;
   border-radius: 10px;
+}
+.xj-proof-upload [role="alert"] {
+  color: #ffd3a5;
+}
+.xj-proof-upload input::file-selector-button {
+  color: var(--lib-text);
+  background: #242431;
+  border: 0;
+  border-radius: 4px;
+  padding: 3px 8px;
+  margin-inline-end: 8px;
+  cursor: pointer;
 }
 .xj-permission-record {
   padding: 12px;
@@ -520,12 +599,18 @@
   border-radius: 10px;
   margin: 14px 0;
 }
-.xj-permission-record h3 {
+.xj-permission-record summary {
+  cursor: pointer;
   font-size: 0.88rem;
   font-weight: 600;
-  margin-bottom: 8px;
+}
+.xj-permission-record summary span {
+  margin-inline-start: 10px;
+  color: var(--lib-muted);
+  font-weight: 400;
 }
 .xj-permission-record dl {
+  margin-top: 8px;
   gap: 6px;
   font-size: 0.85rem;
 }

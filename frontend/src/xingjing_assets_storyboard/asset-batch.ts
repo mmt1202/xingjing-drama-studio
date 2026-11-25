@@ -18,7 +18,8 @@ export function batchError(cause: unknown) {
     if (cause.code === "GENERATION_INSUFFICIENT_CREDITS") return "batchCredit";
     if (cause.code === "GENERATION_WORKSPACE_CONCURRENCY_LIMIT") return "batchLimit";
     if (cause.code === "RIGHTS_EVIDENCE_NOT_VERIFIED") return "proofError";
-    if (cause.code === "RIGHTS_EVIDENCE_EXPIRED") return "dateError";
+    if (cause.code === "RIGHTS_EVIDENCE_EXPIRED" || cause.code === "RIGHTS_EXPIRY_INVALID") return "dateError";
+    if (cause.code === "HOLDER_REQUIRED") return "holderNeeded";
     if (cause.status === 403) return "ownerOnly";
     if (cause.status === 409) return "conflict";
   }

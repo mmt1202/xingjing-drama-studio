@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { Download, FileCheck2, ShieldCheck, Upload, X } from "lucide-react";
+import { Download, FileCheck2, ShieldCheck, X } from "lucide-react";
 import { useAssetLibraryTranslation } from "./asset-library-i18n";
 import { AssetsStoryboardApiError } from "./api";
 import type {
@@ -9,13 +9,13 @@ import type {
   WorkspaceProjectScope,
 } from "./contracts";
 import { useDraftProtection } from "./useDraftProtection";
+import { earliestLicenseEnd, LicenseProofField, LicenseTermField, type LicenseEnd } from "./LicenseFields";
 
 const scopeLabels = {
   owner_project_only: "projectScope",
   workspace: "workspaceScope",
   project_allowlist: "allowlist",
 } as const;
-const mimeTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 export interface PermissionDraft {
   holder: string;
   licenseScope: string;
@@ -26,13 +26,10 @@ export interface PermissionDraft {
 function dateField(value?: string) {
   return value?.slice(0, 10) ?? "";
 }
-function stamp() {
-  const today = new Date();
-  return [
-    today.getUTCFullYear(),
-    String(today.getUTCMonth() + 1).padStart(2, "0"),
-    String(today.getUTCDate()).padStart(2, "0"),
-  ].join("-");
+function registrationEnd(asset: AssetItem, savedEnd?: string): LicenseEnd {
+  const end = dateField(savedEnd ?? asset.rights?.validTo);
+  if (end) return end >= earliestLicenseEnd() ? end : "";
+  return asset.rightsStatus === "expired" ? "" : null;
 }
 
 export function AssetPermissionDialog({
@@ -61,9 +58,9 @@ export function AssetPermissionDialog({
   const [holder, setHolder] = useState(seed?.holder ?? initial.rights?.holder ?? "");
   const initialScope = seed?.licenseScope ?? initial.rights?.licenseScope;
   const [licenseScope, setLicenseScope] = useState(
-    initialScope === "workspace" ? "workspace" : "owner_project_only",
+    initialScope ?? "owner_project_only",
   );
-  const [validTo, setValidTo] = useState(dateField(seed?.validTo ?? initial.rights?.validTo));
+  const [validTo, setValidTo] = useState<LicenseEnd>(() => registrationEnd(initial, seed?.validTo));
   const [file, setFile] = useState<File>();
   const [upload, setUpload] = useState<Pick<RightsEvidenceUpload, "sha256" | "objectKey"> | undefined>(
     seed?.proofSha256 && seed.proofObjectKey
@@ -77,7 +74,7 @@ export function AssetPermissionDialog({
   const [discard, setDiscard] = useState(false);
   const [notice, setNotice] = useState<"saved" | "confirmed">();
   const [error, setError] = useState<
-    "fileError" | "dateError" | "failed" | "conflict" | "proofError" | "ownerOnly" | "fileNeeded"
+    "dateError" | "failed" | "conflict" | "proofError" | "ownerOnly" | "holderNeeded"
   >();
   const form = editable && (renew || ["missing", "expired", "blocked"].includes(asset.rightsStatus));
   useDraftProtection(busy || touched);
@@ -98,11 +95,6 @@ export function AssetPermissionDialog({
     setTouched(true);
     setError(undefined);
     setUpload(undefined);
-    if (next && (!next.size || next.size > 25 * 1024 * 1024 || !mimeTypes.includes(next.type))) {
-      setFile(undefined);
-      setError("fileError");
-      return;
-    }
     setFile(next);
   }
   async function perform(
@@ -125,7 +117,7 @@ export function AssetPermissionDialog({
           ? "ownerOnly"
           : apiError?.code === "RIGHTS_EVIDENCE_NOT_VERIFIED"
             ? "proofError"
-            : apiError?.code === "RIGHTS_EVIDENCE_EXPIRED"
+            : apiError?.code === "RIGHTS_EVIDENCE_EXPIRED" || apiError?.code === "RIGHTS_EXPIRY_INVALID"
               ? "dateError"
               : apiError?.status === 409
                 ? "conflict"
@@ -149,17 +141,17 @@ export function AssetPermissionDialog({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!editable || !form) return;
-    if (!holder.trim() || (!file && !upload)) {
-      setError("fileNeeded");
+    if (!holder.trim()) {
+      setError("holderNeeded");
       return;
     }
-    if (validTo && validTo < stamp()) {
+    if (validTo !== null && validTo < earliestLicenseEnd()) {
       setError("dateError");
       return;
     }
     void perform(async (signal) => {
       const proof = upload ?? (file && (await api.uploadRightsEvidence(scope, asset, file, signal)));
-      if (!proof || signal.aborted) return;
+      if (signal.aborted) return;
       setUpload(proof);
       const result = await api.assetAction(
         scope,
@@ -171,9 +163,9 @@ export function AssetPermissionDialog({
             ownerProjectId: asset.projectId,
             holder: holder.trim(),
             licenseScope,
+            ...(licenseScope === "project_allowlist" ? { allowedProjectIds: asset.rights?.allowedProjectIds } : {}),
             validTo: validTo || undefined,
-            proofObjectKey: proof.objectKey,
-            proofSha256: proof.sha256,
+            ...(proof ? { proofObjectKey: proof.objectKey, proofSha256: proof.sha256 } : {}),
           },
         },
         signal,
@@ -201,7 +193,7 @@ export function AssetPermissionDialog({
     });
   }
   function download() {
-    if (!asset.rights?.id || !api.downloadRightsEvidence) return;
+    if (!asset.rights?.id || !asset.rights.proofUploadId || !api.downloadRightsEvidence) return;
     const id = asset.rights.id;
     void perform(async (signal) => {
       const data = await api.downloadRightsEvidence?.(scope, asset, id, signal);
@@ -274,8 +266,13 @@ export function AssetPermissionDialog({
           </div>
         ) : null}
         {asset.rights && (
-          <div className="xj-permission-record">
-            <h3>{t("record")}</h3>
+          <details className="xj-permission-record" open={!form} key={form ? "editing" : "viewing"}>
+            <summary>
+              {t(form ? "previousRegistration" : "record")}
+              {form && <span>{asset.rights.validTo
+                ? t("expirySummary", { date: dateField(asset.rights.validTo) })
+                : t("unspecified")}</span>}
+            </summary>
             <dl>
               <div>
                 <dt>{t("holder")}</dt>
@@ -290,13 +287,13 @@ export function AssetPermissionDialog({
                 <dd>{dateField(asset.rights.validTo) || t("unspecified")}</dd>
               </div>
             </dl>
-            {editable && asset.rights.id && api.downloadRightsEvidence ? (
+            {editable && asset.rights.id && asset.rights.proofUploadId && api.downloadRightsEvidence ? (
               <button type="button" className="xj-lib-textbtn" disabled={busy} onClick={download}>
                 <Download size={15} />
                 {t("download")}
               </button>
-            ) : null}
-          </div>
+            ) : !asset.rights.proofUploadId ? <small>{t("noProof")}</small> : null}
+          </details>
         )}
         {error ? (
           <div role="alert" className="xj-lib-warning">
@@ -317,17 +314,17 @@ export function AssetPermissionDialog({
                 setNotice(undefined);
               }}
             >
-              <label>
-                {t("holder")}
-                <input
-                  required
-                  maxLength={256}
-                  value={holder}
-                  placeholder={t("holderHint")}
-                  onChange={(event) => setHolder(event.target.value)}
-                />
-              </label>
               <div className="xj-lib-fieldpair">
+                <label>
+                  {t("holder")}
+                  <input
+                    required
+                    maxLength={256}
+                    value={holder}
+                    placeholder={t("holderHint")}
+                    onChange={(event) => setHolder(event.target.value)}
+                  />
+                </label>
                 <label>
                   {t("scope")}
                   <select
@@ -337,34 +334,15 @@ export function AssetPermissionDialog({
                   >
                     <option value="owner_project_only">{t("projectScope")}</option>
                     <option value="workspace">{t("workspaceScope")}</option>
+                    {asset.rights?.licenseScope === "project_allowlist" && <option value="project_allowlist">{t("allowlist")}</option>}
                   </select>
                 </label>
-                <label>
-                  {t("until")}
-                  <input
-                    type="date"
-                    aria-label={t("until")}
-                    min={stamp()}
-                    value={validTo}
-                    onChange={(event) => setValidTo(event.target.value)}
-                  />
-                  <small>{t("dateHint")}</small>
-                </label>
               </div>
-              <label className="xj-proof-upload">
-                <span>
-                  <Upload size={17} aria-hidden="true" />
-                  {t("proof")}
-                </span>
-                <small>{t("proofHint")}</small>
-                <input
-                  type="file"
-                  aria-label={t("proof")}
-                  required={!upload}
-                  accept=".pdf,.jpg,.jpeg,.png,.webp"
-                  onChange={(event) => selectFile(event.currentTarget.files?.[0])}
-                />
-              </label>
+              <LicenseTermField value={validTo} onChange={(end) => {
+                setValidTo(end); setTouched(true); setNotice(undefined);
+                if (error === "dateError") setError(undefined);
+              }} />
+              <LicenseProofField file={file} uploaded={Boolean(upload)} onChange={selectFile} />
               <button type="submit" className="xj-lib-primary" disabled={busy || error === "conflict"}>
                 {t(busy ? "sending" : "send")}
               </button>
@@ -398,6 +376,9 @@ export function AssetPermissionDialog({
               className="xj-lib-btn"
               disabled={busy}
               onClick={() => {
+                setHolder(asset.rights?.holder ?? "");
+                setLicenseScope(asset.rights?.licenseScope ?? "owner_project_only");
+                setValidTo(registrationEnd(asset));
                 setRenew(true);
                 setNotice(undefined);
                 setError(undefined);

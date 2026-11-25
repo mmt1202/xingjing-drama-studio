@@ -60,13 +60,19 @@ class RightsEvidence:
     status: RightsStatus
     reuse_scope: ReuseScope
     allowed_project_ids: tuple[str, ...]
-    evidence_object_key: str
-    evidence_sha256: str
+    evidence_object_key: str | None = None
+    evidence_sha256: str | None = None
     holder: str | None = None
     valid_until: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_sha256(self.evidence_sha256)
+        if self.evidence_object_key is None and self.evidence_sha256 is None:
+            if not self.holder or not self.holder.strip():
+                raise ValueError("HOLDER_REQUIRED")
+        elif not self.evidence_object_key or not self.evidence_object_key.strip() or self.evidence_sha256 is None:
+            raise ValueError("RIGHTS_EVIDENCE_NOT_VERIFIED")
+        else:
+            _validate_sha256(self.evidence_sha256)
 
     @property
     def effective_status(self) -> RightsStatus:
@@ -100,8 +106,8 @@ class RightsEvidence:
             status=RightsStatus(value["status"]),
             reuse_scope=ReuseScope(value["reuse_scope"]),
             allowed_project_ids=tuple(value.get("allowed_project_ids", ())),
-            evidence_object_key=value["evidence_object_key"],
-            evidence_sha256=value["evidence_sha256"],
+            evidence_object_key=value.get("evidence_object_key"),
+            evidence_sha256=value.get("evidence_sha256"),
             holder=value.get("holder"),
             valid_until=value.get("valid_until"),
         )
